@@ -1,41 +1,61 @@
-version: "3.8"
+# ThreadWeave — one command to run everything.
+#
+#   docker compose up                  # API only (regex detection)
+#   docker compose --profile llm up     # API + local LLM (Ollama)
 
 services:
-  qdrant:
-    image: qdrant/qdrant:latest
+  # ── ThreadWeave API ──────────────────────────────────────────
+  api:
+    build: .
+    container_name: threadweave-api
     ports:
-      - "6333:6333"
-      - "6334:6334"
+      - "${THREADWEAVE_PORT:-8000}:8000"
     volumes:
-      - qdrant_data:/qdrant/storage
+      # Persist MemPalace data (ChromaDB on disk)
+      - threadweave_palace:/app/palace
+      - threadweave_data:/app/data
+      # Mount keys file if it exists
+      - ${HOME:-~}/.threadweave/keys.json:/home/threadweave/.threadweave/keys.json:ro
     environment:
-      QDRANT__SERVICE__GRPC_PORT: 6334
+      # Auth (optional — leave empty to disable)
+      - THREADWEAVE_REQUIRE_AUTH
+      - THREADWEAVE_API_KEYS
+      # LLM detection (optional — leave empty for regex)
+      - THREADWEAVE_LLM_API_KEY
+      - THREADWEAVE_LLM_BASE_URL
+      - THREADWEAVE_LLM_MODEL
+      - OPENAI_API_KEY
+    env_file:
+      - .env  # optional, ignored if not present
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/v1/health')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
 
-  mempalace-mcp:
-    build:
-      context: .
-      dockerfile: Dockerfile.mempalace
-    volumes:
-      - mempalace_data:/data
-      - ./palace:/palace
-    command: mempalace-mcp --palace /palace
-
-  threadweave-api:
-    build:
-      context: .
-      dockerfile: Dockerfile
+  # ── Ollama (optional — local LLM for detection) ──────────────
+  ollama:
+    image: ollama/ollama:latest
+    container_name: threadweave-ollama
+    profiles: ["llm"]
     ports:
-      - "8000:8000"
+      - "11434:11434"
     volumes:
-      - .:/app
-    environment:
-      MEMPALACE_PALACE_PATH: /palace
-      QDRANT_URL: http://qdrant:6333
-    depends_on:
-      - qdrant
-      - mempalace-mcp
+      - ollama_models:/root/.ollama
+    restart: unless-stopped
+    # Pull a model on first start. Remove or change if you want a different model.
+    # Common choices: llama3.1:8b, mistral:7b, qwen2.5:7b
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        ollama serve &
+        sleep 5
+        ollama pull ${LLM_MODEL:-llama3.1:8b}
+        wait
 
 volumes:
-  qdrant_data:
-  mempalace_data:
-  palace:
+  threadweave_palace:
+  threadweave_data:
+  ollama_models:
