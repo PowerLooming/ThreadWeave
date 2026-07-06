@@ -3,168 +3,257 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>ThreadWeave — Organizational Memory</title>
+<title>ThreadWeave</title>
 <style>
+:root{--bg:#0b1120;--card:#111827;--border:#1e293b;--text:#e2e8f0;--muted:#64748b;--accent:#6366f1;--green:#22c55e;--red:#ef4444;--amber:#f59e0b;--blue:#3b82f6}
 *{margin:0;padding:0;box-sizing:border-box}
-body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:#0f172a;color:#e2e8f0;min-height:100vh}
-.container{max-width:900px;margin:0 auto;padding:2rem}
-header{margin-bottom:2rem;text-align:center}
-h1{font-size:2rem;font-weight:700;background:linear-gradient(135deg,#6366f1,#0ea5e9);-webkit-background-clip:text;-webkit-text-fill-color:transparent}
-.subtitle{color:#94a3b8;margin-top:.5rem}
-.card{background:#1e293b;border-radius:.75rem;padding:1.5rem;margin-bottom:1rem;border:1px solid #334155}
-.card h3{margin-bottom:.75rem;color:#e2e8f0}
-input,textarea,select{width:100%;padding:.75rem;background:#0f172a;border:1px solid #334155;border-radius:.5rem;color:#e2e8f0;font-size:.9rem;margin-bottom:.75rem;font-family:inherit}
-textarea{min-height:120px;resize:vertical}
-button{background:linear-gradient(135deg,#6366f1,#0ea5e9);color:#fff;border:none;padding:.75rem 1.5rem;border-radius:.5rem;cursor:pointer;font-weight:600;font-size:.9rem}
-button:hover{opacity:.9}
-.result{border-left:3px solid #6366f1;padding:.75rem;margin:.5rem 0;background:#1a2332;border-radius:0 .5rem .5rem 0}
-.result .wing{color:#0ea5e9;font-size:.8rem}
-.result .preview{color:#94a3b8;font-size:.85rem;margin-top:.25rem}
-.tag{display:inline-block;padding:.15rem .5rem;border-radius:.25rem;font-size:.75rem;margin:.25rem}
-.tag-team{background:rgba(99,102,241,.2);color:#a5b4fc}
-.tag-scope{background:rgba(14,165,233,.2);color:#67e8f9}
-.tag-type{background:rgba(52,211,153,.2);color:#6ee7b7}
-.status{text-align:center;color:#94a3b8;padding:1rem}
-.error{color:#fb7185;text-align:center;padding:1rem}
-.tabs{display:flex;gap:.5rem;margin-bottom:1rem}
-.tab{padding:.5rem 1rem;border-radius:.5rem;cursor:pointer;background:#1e293b;border:1px solid #334155;color:#94a3b8}
-.tab.active{background:rgba(99,102,241,.2);border-color:#6366f1;color:#e2e8f0}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:var(--bg);color:var(--text);min-height:100vh;display:flex}
+nav{width:220px;background:var(--card);border-right:1px solid var(--border);padding:1.5rem 1rem;display:flex;flex-direction:column;gap:.25rem;position:fixed;height:100vh;left:0;top:0}
+nav .logo{font-size:1.3rem;font-weight:700;background:linear-gradient(135deg,var(--accent),var(--blue));-webkit-background-clip:text;-webkit-text-fill-color:transparent;margin-bottom:1rem;padding:0 .5rem}
+nav a{color:var(--muted);text-decoration:none;padding:.5rem .75rem;border-radius:.4rem;font-size:.9rem;transition:.15s;display:flex;align-items:center;gap:.5rem}
+nav a:hover,nav a.active{background:rgba(99,102,241,.15);color:var(--text)}
+nav a .dot{width:8px;height:8px;border-radius:50%;display:inline-block}
+nav .status-bar{margin-top:auto;padding:.75rem;border-top:1px solid var(--border);font-size:.8rem;color:var(--muted)}
+main{margin-left:220px;flex:1;padding:2rem;max-width:1200px}
+h2{font-size:1.25rem;margin-bottom:1rem;font-weight:600}
+.grid2{display:grid;grid-template-columns:repeat(2,1fr);gap:1rem}
+.grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:1rem}
+.grid4{display:grid;grid-template-columns:repeat(4,1fr);gap:1rem}
+.card{background:var(--card);border:1px solid var(--border);border-radius:.75rem;padding:1.25rem}
+.card-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:.75rem}
+.card-header h3{font-size:.85rem;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;font-weight:500}
+.big-num{font-size:1.8rem;font-weight:700;font-variant-numeric:tabular-nums}
+.stat-row{display:flex;justify-content:space-between;padding:.3rem 0;font-size:.85rem;border-bottom:1px solid var(--border)}
+.stat-row:last-child{border-bottom:none}
+.stat-label{color:var(--muted)}
+.stat-val{font-weight:600;font-variant-numeric:tabular-nums}
+.gauge{height:6px;background:var(--border);border-radius:3px;margin-top:.4rem;overflow:hidden}
+.gauge-fill{height:100%;border-radius:3px;transition:width .5s}
+.badge{display:inline-block;padding:.15rem .5rem;border-radius:.25rem;font-size:.75rem;font-weight:500}
+.badge-green{background:rgba(34,197,94,.15);color:var(--green)}
+.badge-red{background:rgba(239,68,68,.15);color:var(--red)}
+.badge-blue{background:rgba(59,130,246,.15);color:var(--blue)}
+.badge-amber{background:rgba(245,158,11,.15);color:var(--amber)}
+input,textarea,select{width:100%;padding:.6rem .75rem;background:var(--bg);border:1px solid var(--border);border-radius:.4rem;color:var(--text);font-size:.85rem;margin-bottom:.75rem;font-family:inherit}
+textarea{min-height:100px;resize:vertical}
+button{background:var(--accent);color:#fff;border:none;padding:.6rem 1.2rem;border-radius:.4rem;cursor:pointer;font-weight:600;font-size:.85rem;transition:opacity .15s}
+button:hover{opacity:.85}
+button:disabled{opacity:.4;cursor:not-allowed}
+.page{display:none}
+.page.active{display:block}
+.result-item{border-left:3px solid var(--accent);padding:.75rem;margin:.5rem 0;background:rgba(17,24,39,.5);border-radius:0 .5rem .5rem 0;transition:border-color .2s}
+.result-item:hover{border-color:var(--blue)}
+.result-meta{display:flex;gap:.5rem;flex-wrap:wrap;margin-top:.3rem}
+.health-dot{width:10px;height:10px;border-radius:50%;display:inline-block;animation:pulse 2s infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.5}}
+.empty{color:var(--muted);text-align:center;padding:2rem;font-size:.9rem}
+.mb{margin-bottom:1rem}
 </style>
 </head>
 <body>
-<div class="container">
-  <header>
-    <h1>ThreadWeave</h1>
-    <p class="subtitle">Organizational Memory System</p>
-  </header>
 
-  <div class="tabs">
-    <div class="tab active" onclick="switchTab('detect')">Detect</div>
-    <div class="tab" onclick="switchTab('save')">Save</div>
-    <div class="tab" onclick="switchTab('search')">Search</div>
+<nav>
+  <div class="logo">ThreadWeave</div>
+  <a href="#" data-page="dashboard" class="active"><span class="dot" id="health-dot" style="background:var(--green)"></span> Dashboard</a>
+  <a href="#" data-page="search">🔍 Search</a>
+  <a href="#" data-page="save">💾 Save</a>
+  <a href="#" data-page="entries">📋 Entries</a>
+  <div class="status-bar" id="status-bar">Connecting…</div>
+</nav>
+
+<main>
+  <!-- Dashboard -->
+  <div id="page-dashboard" class="page active">
+    <h2>Pipeline Overview</h2>
+    <div class="grid4 mb" id="counter-cards"></div>
+
+    <div class="grid2 mb">
+      <div class="card">
+        <div class="card-header"><h3>Latency (ms)</h3></div>
+        <div id="latency-table"></div>
+      </div>
+      <div class="card">
+        <div class="card-header"><h3>Detection Engine</h3></div>
+        <div id="detection-stats"></div>
+      </div>
+    </div>
+
+    <div class="grid2">
+      <div class="card">
+        <div class="card-header"><h3>Throughput</h3><span class="badge badge-amber" id="throughput-val">—</span></div>
+        <div class="gauge"><div class="gauge-fill" id="throughput-gauge" style="background:var(--amber);width:0%"></div></div>
+      </div>
+      <div class="card">
+        <div class="card-header"><h3>Memory</h3></div>
+        <div id="memory-stats"></div>
+      </div>
+    </div>
   </div>
 
-  <!-- Detect Tab -->
-  <div id="tab-detect" class="card">
-    <h3>Analyze Text</h3>
-    <p style="color:#94a3b8;margin-bottom:.75rem;font-size:.85rem">
-      Paste any text (email, Slack message, PR comment) to check if it should be saved as organizational knowledge.
-    </p>
-    <textarea id="detect-text" placeholder="Paste text here..."></textarea>
-    <button onclick="doDetect()">Analyze</button>
-    <div id="detect-result"></div>
+  <!-- Search -->
+  <div id="page-search" class="page">
+    <h2>Search Memory</h2>
+    <div class="card">
+      <input id="search-query" placeholder="What are you looking for? e.g. database decision, deployment policy…" onkeydown="if(event.key==='Enter')doSearch()">
+      <button onclick="doSearch()">Search</button>
+      <div id="search-results"></div>
+    </div>
   </div>
 
-  <!-- Save Tab -->
-  <div id="tab-save" class="card" style="display:none">
-    <h3>Save Knowledge</h3>
-    <input id="save-wing" placeholder="Team/Department (e.g. engineering)">
-    <input id="save-room" placeholder="Topic (e.g. deployment)" value="general">
-    <textarea id="save-content" placeholder="Knowledge to save..."></textarea>
-    <select id="save-scope">
-      <option value="team">Team only</option>
-      <option value="department">Department</option>
-      <option value="organization">Organization-wide</option>
-    </select>
-    <button onclick="doSave()">Save to Memory</button>
-    <div id="save-result"></div>
+  <!-- Save -->
+  <div id="page-save" class="page">
+    <h2>Save Knowledge</h2>
+    <div class="card">
+      <input id="save-wing" placeholder="Team / Department (e.g. engineering)">
+      <input id="save-room" placeholder="Topic (e.g. database)" value="general">
+      <textarea id="save-content" placeholder="Knowledge to preserve…"></textarea>
+      <select id="save-scope"><option value="team">Team</option><option value="department">Department</option><option value="organization">Organization-wide</option></select>
+      <button onclick="doSave()">Save to Memory</button>
+      <div id="save-result"></div>
+    </div>
   </div>
 
-  <!-- Search Tab -->
-  <div id="tab-search" class="card" style="display:none">
-    <h3>Search Memory</h3>
-    <input id="search-query" placeholder="What do you need to know?">
-    <button onclick="doSearch()">Search</button>
-    <div id="search-result"></div>
+  <!-- Entries -->
+  <div id="page-entries" class="page">
+    <h2>Recent Entries</h2>
+    <div class="card" id="entries-list"></div>
   </div>
-</div>
+</main>
 
 <script>
-const API = 'http://localhost:8000/api/v1';
+const A='http://localhost:8000/api/v1';
+let pollTimer;
 
-function switchTab(tab) {
-  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-  document.querySelectorAll('[id^="tab-"]').forEach(d => d.style.display = 'none');
-  document.querySelector(`.tab:nth-${tab==='detect'?'1':tab==='save'?'2':'3'}-child`).classList.add('active');
-  document.getElementById(`tab-${tab}`).style.display = '';
+// Navigation
+document.querySelectorAll('nav a[data-page]').forEach(a=>{
+  a.onclick=e=>{e.preventDefault();switchPage(a.dataset.page)}
+});
+function switchPage(p){
+  document.querySelectorAll('.page').forEach(d=>d.classList.remove('active'));
+  document.querySelectorAll('nav a').forEach(a=>a.classList.remove('active'));
+  document.getElementById('page-'+p).classList.add('active');
+  document.querySelector(`nav a[data-page="${p}"]`).classList.add('active');
+  if(p==='dashboard') fetchDashboard();
+  if(p==='entries') fetchEntries();
 }
 
-async function doDetect() {
-  const text = document.getElementById('detect-text').value;
-  const res = document.getElementById('detect-result');
-  if (!text) { res.innerHTML = '<p class="error">Please enter text</p>'; return; }
-
-  try {
-    const r = await fetch(`${API}/detect`, {
-      method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({text})
-    });
-    const d = await r.json();
-    const color = d.should_save ? '#34d399' : '#94a3b8';
-    res.innerHTML = `
-      <div class="result">
-        <strong style="color:${color}">${d.should_save ? 'SAVE' : 'SKIP'}</strong>
-        — ${d.content_type} (${(d.confidence*100).toFixed(0)}%)
-        ${d.has_pii ? '<span class="tag tag-scope">PII detected</span>' : ''}
-        ${d.suggested_title ? `<p style="margin-top:.25rem;color:#94a3b8">Title: ${d.suggested_title}</p>` : ''}
-        <p style="font-size:.8rem;color:#64748b;margin-top:.25rem">Scope: ${d.suggested_scope} | Signals: ${d.signals.join(', ') || 'none'}</p>
-        ${d.entities.length ? '<p style="font-size:.8rem;color:#64748b">Entities: ' + d.entities.map(e=>e.value).join(', ') + '</p>' : ''}
-      </div>`;
-  } catch(e) { res.innerHTML = '<p class="error">Server not reachable</p>'; }
+// API helper
+async function api(path,opts={}){
+  const r=await fetch(A+path,{headers:{'Content-Type':'application/json'},...opts});
+  if(!r.ok) throw new Error(r.status);
+  return r.json();
 }
 
-async function doSave() {
-  const content = document.getElementById('save-content').value;
-  const wing = document.getElementById('save-wing').value;
-  const res = document.getElementById('save-result');
-  if (!content || !wing) { res.innerHTML = '<p class="error">Content and team are required</p>'; return; }
+// ── Dashboard ────────────────────────────────────────────
+async function fetchDashboard(){
+  try{
+    const[h,m]=await Promise.all([
+      api('/health'),
+      api('/metrics'),
+    ]);
+    // Health dot
+    document.getElementById('status-bar').textContent=h.status==='healthy'?'API: healthy':'API: down';
+    const dot=document.getElementById('health-dot');
+    dot.style.background=h.status==='healthy'?'var(--green)':'var(--red)';
 
-  try {
-    const r = await fetch(`${API}/entries`, {
-      method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({
-        content, wing,
-        room: document.getElementById('save-room').value || 'general',
-        scope: document.getElementById('save-scope').value,
-        source_type: 'web',
-      })
-    });
-    const d = await r.json();
-    res.innerHTML = `<div class="result" style="border-color:#34d399">
-      Saved! <strong>${d.id}</strong> → ${d.wing}/${d.room}
-      <p style="color:#94a3b8;font-size:.85rem">${d.title || ''}</p>
-    </div>`;
-    document.getElementById('save-content').value = '';
-  } catch(e) { res.innerHTML = '<p class="error">Server not reachable</p>'; }
+    // Counter cards
+    const cc=document.getElementById('counter-cards');
+    cc.innerHTML=[
+      ['Ingested',m.counters.ingest_total,'var(--blue)'],
+      ['Saved',m.counters.ingest_saved,'var(--green)'],
+      ['Skipped',m.counters.ingest_skipped,'var(--muted)'],
+      ['PII Blocked',m.counters.ingest_rejected_pii,'var(--red)'],
+    ].map(([l,v,c])=>`<div class="card" style="text-align:center"><div class="big-num" style="color:${c}">${v}</div><div style="font-size:.8rem;color:var(--muted);margin-top:.25rem">${l}</div></div>`).join('');
+
+    // Latency table
+    const lt=document.getElementById('latency-table');
+    const stages={ingest:'Ingest',detect:'Detect',mempalace:'MemPalace Write',dedup:'Dedup'};
+    lt.innerHTML=Object.entries(stages).map(([k,label])=>{
+      const d=m.latency[k]||{};
+      return `<div class="stat-row"><span class="stat-label">${label}</span><span class="stat-val">avg ${d.avg_ms||0}ms / p95 ${d.p95_ms||0}ms</span></div>`;
+    }).join('');
+
+    // Detection stats
+    const ds=document.getElementById('detection-stats');
+    const llmPct=m.counters.detect_llm_hits+m.counters.detect_llm_misses===0?0:
+      (m.counters.detect_llm_hits/(m.counters.detect_llm_hits+m.counters.detect_llm_misses)*100).toFixed(0);
+    ds.innerHTML=`
+      <div class="stat-row"><span class="stat-label">LLM calls</span><span class="stat-val">${m.counters.detect_llm_hits+m.counters.detect_llm_misses}</span></div>
+      <div class="stat-row"><span class="stat-label">LLM hit rate</span><span class="stat-val">${llmPct}%</span></div>
+      <div class="stat-row"><span class="stat-label">Regex fallback</span><span class="stat-val">${m.counters.detect_regex_fallback}</span></div>
+      <div class="stat-row"><span class="stat-label">Duplicates</span><span class="stat-val">${m.counters.dedup_hits}</span></div>
+    `;
+
+    // Throughput gauge
+    const tp=Math.min(m.throughput_per_minute,100);
+    document.getElementById('throughput-val').textContent=`${m.throughput_per_minute.toFixed(1)}/min`;
+    document.getElementById('throughput-gauge').style.width=tp+'%';
+
+    // Memory
+    document.getElementById('memory-stats').innerHTML=`
+      <div class="stat-row"><span class="stat-label">RSS</span><span class="stat-val">${m.memory.rss_mb.toFixed(1)} MB</span></div>
+      <div class="stat-row"><span class="stat-label">Virtual</span><span class="stat-val">${m.memory.vms_mb.toFixed(1)} MB</span></div>
+      <div class="stat-row"><span class="stat-label">Uptime</span><span class="stat-val">${Math.floor(m.uptime_seconds/60)}m ${Math.floor(m.uptime_seconds%60)}s</span></div>
+    `;
+  }catch(e){
+    document.getElementById('status-bar').textContent='API: unreachable';
+    document.getElementById('health-dot').style.background='var(--red)';
+  }
 }
 
-async function doSearch() {
-  const query = document.getElementById('search-query').value;
-  const res = document.getElementById('search-result');
-  if (!query) { res.innerHTML = '<p class="error">Enter a query</p>'; return; }
-
-  try {
-    const r = await fetch(`${API}/search`, {
-      method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({query, limit: 10})
-    });
-    const d = await r.json();
-    if (!d.results.length) {
-      res.innerHTML = '<p class="status">No results found</p>'; return;
-    }
-    res.innerHTML = `<p style="color:#94a3b8;margin-bottom:.5rem">Found ${d.total} results</p>` +
-      d.results.map(r => `
-        <div class="result">
-          <span class="wing">${r.wing}/${r.room}</span>
-          <span class="tag tag-team">${r.author_team || r.wing}</span>
-          <span class="tag tag-type">${r.content_type || 'unknown'}</span>
-          <div class="preview">${r.title || r.content_preview}</div>
-          <div style="font-size:.75rem;color:#64748b;margin-top:.25rem">
-            Score: ${typeof r.relevance_score === 'number' ? r.relevance_score.toFixed(2) : r.relevance_score} | ${r.created_at ? r.created_at.slice(0,10) : ''}
-          </div>
+// ── Search ───────────────────────────────────────────────
+async function doSearch(){
+  const q=document.getElementById('search-query').value.trim();
+  const res=document.getElementById('search-results');
+  if(!q){res.innerHTML='<div class="empty">Type something to search</div>';return}
+  try{
+    const d=await api('/search',{method:'POST',body:JSON.stringify({query:q,limit:15})});
+    if(!d.results.length){res.innerHTML='<div class="empty">No results</div>';return}
+    res.innerHTML=`<div style="color:var(--muted);margin-bottom:.5rem">${d.total} results</div>`+
+      d.results.map(r=>`
+        <div class="result-item">
+          <strong>${r.title||'Untitled'}</strong>
+          <span class="badge badge-blue" style="margin-left:.5rem">${r.wing}/${r.room}</span>
+          <span class="badge badge-green" style="margin-left:.25rem">${(r.relevance_score*100).toFixed(0)}%</span>
+          <div style="color:var(--muted);font-size:.85rem;margin-top:.25rem">${r.content_preview||''}</div>
+          <div class="result-meta"><span class="badge badge-amber">${r.content_type||'?'}</span></div>
         </div>`).join('');
-  } catch(e) { res.innerHTML = '<p class="error">Server not reachable</p>'; }
+  }catch(e){res.innerHTML='<div class="empty">Search failed — API unreachable</div>'}
 }
+
+// ── Save ─────────────────────────────────────────────────
+async function doSave(){
+  const content=document.getElementById('save-content').value.trim();
+  const wing=document.getElementById('save-wing').value.trim();
+  const room=document.getElementById('save-room').value.trim()||'general';
+  const scope=document.getElementById('save-scope').value;
+  const res=document.getElementById('save-result');
+  if(!content||!wing){res.innerHTML='<div class="empty">Content and team are required</div>';return}
+  try{
+    const d=await api('/entries',{method:'POST',body:JSON.stringify({content,wing,room,scope,source_type:'web'})});
+    res.innerHTML=`<div class="result-item" style="border-color:var(--green)">Saved: <strong>${d.id}</strong> → ${d.wing}/${d.room}</div>`;
+    document.getElementById('save-content').value='';
+  }catch(e){res.innerHTML='<div class="empty">Save failed</div>'}
+}
+
+// ── Entries ──────────────────────────────────────────────
+async function fetchEntries(){
+  const el=document.getElementById('entries-list');
+  try{
+    const wings=await api('/wings');
+    if(!wings.length){el.innerHTML='<div class="empty">No entries yet</div>';return}
+    // Show wings with counts
+    el.innerHTML=wings.map(w=>`
+      <div class="result-item">
+        <strong>${w.name}</strong>
+        <span class="badge badge-blue">${w.entry_count} entries</span>
+      </div>`).join('');
+  }catch(e){el.innerHTML='<div class="empty">Could not load entries</div>'}
+}
+
+// ── Init ─────────────────────────────────────────────────
+fetchDashboard();
+pollTimer=setInterval(fetchDashboard,5000);
 </script>
 </body>
 </html>
