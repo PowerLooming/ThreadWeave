@@ -25,12 +25,16 @@ from threadweave.detector import (
 from threadweave.org_model import OrgModel
 from threadweave.relevance import RelevanceEngine
 from threadweave.profiling import metrics, track_latency
+from threadweave.auth import APIKeyMiddleware, get_tenant_id
 
 app = FastAPI(
     title="ThreadWeave API",
     description="Enterprise organizational memory system with central ingestion pipeline",
     version="0.2.0",
 )
+
+# Auth middleware (no-op unless THREADWEAVE_REQUIRE_AUTH=true)
+app.add_middleware(APIKeyMiddleware)
 
 app.add_middleware(
     CORSMiddleware,
@@ -216,7 +220,7 @@ async def get_metrics_prometheus():
 
 @app.post("/api/v1/ingest", response_model=IngestResponse, status_code=201)
 @track_latency(metrics.ingest_latency)
-async def ingest_content(req: IngestRequest):
+async def ingest_content(req: IngestRequest, request: Request):
     """
     Central ingestion pipeline — called by all connectors.
 
@@ -224,7 +228,14 @@ async def ingest_content(req: IngestRequest):
 
     Accepts content from Teams, SharePoint, Email, or any source.
     Handles deduplication, content detection, and storage in one call.
+
+    When auth is enabled, the tenant_id from the API key overrides
+    any tenant_id in the request body (enforced scoping).
     """
+    # Auth-enforced tenant scoping
+    effective_tenant = get_tenant_id(request)
+    if effective_tenant != "default":
+        req.tenant_id = effective_tenant
     # 1. Dedup — check content hash
     t0 = time.monotonic()
     content_hash = hashlib.sha256(req.content.encode()).hexdigest()
