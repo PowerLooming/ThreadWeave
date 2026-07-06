@@ -1,0 +1,41 @@
+version: "3.8"
+
+services:
+  qdrant:
+    image: qdrant/qdrant:latest
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+    volumes:
+      - qdrant_data:/qdrant/storage
+    environment:
+      QDRANT__SERVICE__GRPC_PORT: 6334
+
+  mempalace-mcp:
+    build:
+      context: .
+      dockerfile: Dockerfile.mempalace
+    volumes:
+      - mempalace_data:/data
+      - ./palace:/palace
+    command: mempalace-mcp --palace /palace
+
+  threadweave-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    volumes:
+      - .:/app
+    environment:
+      MEMPALACE_PALACE_PATH: /palace
+      QDRANT_URL: http://qdrant:6333
+    depends_on:
+      - qdrant
+      - mempalace-mcp
+
+volumes:
+  qdrant_data:
+  mempalace_data:
+  palace:

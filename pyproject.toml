@@ -1,0 +1,53 @@
+[project]
+name = "threadweave"
+version = "0.1.0"
+description = "Enterprise organizational memory system — wraps MemPalace"
+requires-python = ">=3.11"
+dependencies = [
+    "mempalace>=3.5.0",
+    "qdrant-client>=1.9",
+    "fastapi>=0.109",
+    "uvicorn>=0.27",
+    "pydantic>=2.5",
+    "python-multipart>=0.0.6",
+    "httpx>=0.26",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    "httpx>=0.26",
+]
+teams = [
+    "botbuilder-core>=4.15",
+    "botbuilder-integration-aiohttp>=4.15",
+    "aiohttp>=3.9",
+    "msal>=1.28",
+]
+sharepoint = [
+    "msal>=1.28",
+    "httpx>=0.26",
+    "pymupdf>=1.24; platform_system != 'Windows' or python_version >= '3.11'",
+    "python-docx>=1.1",
+]
+email = [
+    "msal>=1.28",
+    "httpx>=0.26",
+]
+all-connectors = [
+    "botbuilder-core>=4.15",
+    "botbuilder-integration-aiohttp>=4.15",
+    "aiohttp>=3.9",
+    "msal>=1.28",
+    "httpx>=0.26",
+    "pymupdf>=1.24",
+    "python-docx>=1.1",
+]
+
+[project.scripts]
+threadweave = "threadweave.cli:main"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
