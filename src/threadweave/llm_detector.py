@@ -168,8 +168,8 @@ class LLMDetector:
 
     @property
     def available(self) -> bool:
-        """LLM is configured (has API key). Actual reachability tested on first call."""
-        return bool(self.config.api_key)
+        """LLM is configured (has API key and/or local base URL)."""
+        return bool(self.config.api_key or self.config.base_url)
 
     async def detect(self, text: str, min_length: int = 50) -> DetectionResult:
         """Classify text. LLM if available and text long enough; regex otherwise."""
@@ -224,12 +224,12 @@ class LLMDetector:
 
     async def _get_client(self) -> httpx.AsyncClient:
         if self._client is None:
+            headers = {"Content-Type": "application/json"}
+            if self.config.api_key:
+                headers["Authorization"] = f"Bearer {self.config.api_key}"
             self._client = httpx.AsyncClient(
                 timeout=httpx.Timeout(self.config.timeout),
-                headers={
-                    "Authorization": f"Bearer {self.config.api_key}",
-                    "Content-Type": "application/json",
-                },
+                headers=headers,
             )
         return self._client
 
@@ -253,8 +253,11 @@ class LLMDetector:
             ],
             "max_tokens": self.config.max_tokens,
             "temperature": self.config.temperature,
-            "response_format": {"type": "json_object"},
         }
+        # response_format is OpenAI-specific; Ollama/vLLM may not support it.
+        # The prompt already mandates JSON-only output, so this is optional.
+        if self.config.provider not in ("ollama",):
+            payload["response_format"] = {"type": "json_object"}
 
         client = await self._get_client()
 
@@ -350,7 +353,7 @@ def get_llm_detector() -> Optional[LLMDetector]:
     global _detector
     if _detector is None:
         config = LLMConfig.from_env()
-        if config.api_key:
+        if config.api_key or config.base_url:
             _detector = LLMDetector(config)
     return _detector
 
