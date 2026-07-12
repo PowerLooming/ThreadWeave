@@ -296,7 +296,7 @@ class TestMetricsEndpoint:
         client = TestClient(app)
 
         client.post("/api/v1/ingest", json={
-            "content": "Contact john.doe@gmail.com for access to the system.",
+            "content": "SSN: 123-45-6789 Phone: 555-123-4567 — do not share.",
             "source": "email",
         })
 
