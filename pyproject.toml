@@ -2,6 +2,7 @@
 name = "threadweave"
 version = "0.1.0"
 description = "Enterprise organizational memory system — wraps MemPalace"
+license = {text = "AGPL-3.0-or-later"}
 requires-python = ">=3.11"
 dependencies = [
     "mempalace>=3.5.0",

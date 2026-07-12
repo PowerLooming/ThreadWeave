@@ -32,4 +32,4 @@ Thumbs.db
 .env.production
 
 # Hermes
-~.hermes*/
+.hermes/

@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 ThreadWeave contributors
 """
 Relevance engine — joins semantic search with org proximity and temporal validity.
 
@@ -64,19 +66,25 @@ class RelevanceEngine:
         self,
         search_results: list[dict],
         requester_context: Optional[dict] = None,
+        semantic_scores: Optional[dict[str, float]] = None,
     ) -> list[RankedResult]:
         """Re-rank search results based on org context.
 
         Args:
-            search_results: Raw results from MemPalace semantic search
+            search_results: Raw results from MemPalace semantic search.
+                Each dict should have: id, wing, room, content, created_at,
+                and optionally: distance, similarity, bm25_score.
             requester_context: {"team": "...", "role": "...", "person_id": "..."}
+            semantic_scores: Optional pre-computed semantic scores keyed by
+                drawer ID. When provided (from MemPalace hybrid search),
+                these override the distance-based computation.
 
         Returns:
             Ranked results with full relevance breakdown.
         """
         ranked = []
         for result in search_results:
-            score = self._score_result(result, requester_context)
+            score = self._score_result(result, requester_context, semantic_scores)
             ranked.append(RankedResult(
                 drawer_id=result.get("id", ""),
                 wing=result.get("wing", ""),
@@ -92,13 +100,20 @@ class RelevanceEngine:
         return ranked
 
     def _score_result(
-        self, result: dict, requester: Optional[dict]
+        self, result: dict, requester: Optional[dict],
+        semantic_scores: Optional[dict[str, float]] = None,
     ) -> RelevanceScore:
         """Compute full relevance breakdown for one result."""
         score = RelevanceScore()
 
-        # 1. Semantic similarity (from MemPalace)
-        score.semantic = self._normalize_semantic(result.get("distance", 0.5))
+        # 1. Semantic similarity — prefer pre-computed MemPalace hybrid score
+        drawer_id = result.get("id", "")
+        if semantic_scores and drawer_id in semantic_scores:
+            score.semantic = semantic_scores[drawer_id]
+        elif "similarity" in result:
+            score.semantic = float(result["similarity"])
+        else:
+            score.semantic = self._normalize_semantic(result.get("distance", 0.5))
 
         # 2. Org proximity
         score.org_proximity = self._compute_org_proximity(result, requester)

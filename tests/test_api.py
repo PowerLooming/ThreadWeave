@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 ThreadWeave contributors
 """
 Tests for ThreadWeave API.
 """
@@ -298,3 +300,83 @@ class TestIngestPipeline:
         data = resp.json()
         assert data["should_save"] is True
         assert data["content_type"] == "decision"
+
+
+class TestMemPalaceSearch:
+    """Tests for hybrid search (MemPalace semantic + keyword fallback)."""
+
+    @pytest.fixture(autouse=True)
+    def setup_entries(self):
+        """Seed the in-memory store with test entries (also pushes to MemPalace if available)."""
+        entries = [
+            {
+                "content": "We use Postgres because of JSONB support and full-text search.",
+                "wing": "engineering",
+                "room": "database",
+                "scope": "team",
+                "source_type": "email",
+                "author_id": "alice",
+            },
+            {
+                "content": "The billing service needs to handle 10K TPS. We chose event sourcing.",
+                "wing": "billing",
+                "room": "architecture",
+                "scope": "team",
+                "source_type": "slack",
+                "author_id": "bob",
+            },
+            {
+                "content": "Deployments always happen Tuesdays at 10am. Never on Fridays.",
+                "wing": "engineering",
+                "room": "deployment",
+                "scope": "department",
+                "source_type": "manual",
+                "author_id": "charlie",
+            },
+        ]
+        for entry in entries:
+            client.post("/api/v1/entries", json=entry)
+
+    def test_search_returns_source_field(self):
+        """Search results should include a 'source' field (mempalace or in_memory)."""
+        response = client.post("/api/v1/search", json={
+            "query": "Postgres",
+        })
+        assert response.status_code == 200
+        data = response.json()
+        assert data["total"] >= 1
+        for r in data["results"]:
+            assert "source" in r, f"Result missing 'source' field: {r}"
+            assert r["source"] in ("mempalace", "in_memory")
+
+    def test_search_semantic_match(self):
+        """Search works with keyword fallback when MemPalace is unavailable."""
+        response = client.post("/api/v1/search", json={
+            "query": "Postgres JSONB",
+        })
+        assert response.status_code == 200
+        data = response.json()
+        # Keyword fallback finds "Postgres" in the content
+        assert data["total"] >= 1
+
+    def test_search_hybrid_results_have_bm25_when_mempalace(self):
+        """MemPalace results should include bm25_score."""
+        response = client.post("/api/v1/search", json={
+            "query": "Postgres",
+        })
+        assert response.status_code == 200
+        data = response.json()
+        for r in data["results"]:
+            if r["source"] == "mempalace":
+                assert "bm25_score" in r
+
+    def test_search_deduplicates_across_sources(self):
+        """Same entry should not appear twice (from MemPalace + in-memory)."""
+        response = client.post("/api/v1/search", json={
+            "query": "Postgres",
+        })
+        assert response.status_code == 200
+        data = response.json()
+        ids = [r["id"] for r in data["results"]]
+        assert len(ids) == len(set(ids)), f"Duplicate IDs in results: {ids}"
+
