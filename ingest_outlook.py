@@ -33,7 +33,40 @@ def get_outlook_mapi():
         print("  pip install pywin32")
         sys.exit(1)
 
-    outlook = win32com.client.Dispatch("Outlook.Application")
+    outlook = None
+    errors = []
+
+    # Try 1: Dispatch (requires classic Outlook running)
+    try:
+        outlook = win32com.client.Dispatch("Outlook.Application")
+    except Exception as e:
+        errors.append(f"Dispatch: {e}")
+
+    # Try 2: Get active instance
+    if outlook is None:
+        try:
+            outlook = win32com.client.GetActiveObject("Outlook.Application")
+        except Exception as e:
+            errors.append(f"GetActiveObject: {e}")
+
+    if outlook is None:
+        print("Cannot connect to Outlook.")
+        print()
+        print("This usually means one of:")
+        print("  1. You're using 'new Outlook' (One Outlook / Monarch) which")
+        print("     doesn't support COM. Switch to classic Outlook.")
+        print("  2. Classic Outlook isn't running — open it and retry.")
+        print("  3. Outlook isn't installed at all.")
+        print()
+        print("Alternative: use ingest_emails.py with exported .eml files:")
+        print("  In classic Outlook: select emails → File → Save As → folder")
+        print("  Then: python ingest_emails.py <folder>")
+        print()
+        print("Errors:")
+        for e in errors:
+            print(f"  {e}")
+        sys.exit(1)
+
     return outlook.GetNamespace("MAPI")
 
 
