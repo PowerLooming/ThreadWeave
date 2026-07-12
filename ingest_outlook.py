@@ -8,6 +8,7 @@ Usage:
     python ingest_outlook.py --dry-run                # Preview only, don't submit
 """
 import argparse
+import re
 import sys
 
 import httpx
@@ -154,6 +155,12 @@ def iter_emails(folder_name="Inbox", max_results=50, unread_only=False):
 
             body = strip_reply_headers(body)
             if len(body) < 50:
+                continue
+
+            # Skip auto-replies and out-of-office
+            if subject.lower().startswith("automatic reply"):
+                continue
+            if re.search(r"(out of office|away from|annual leave|on vacation|summer holiday|not in the office|returning on)", body[:200], re.IGNORECASE):
                 continue
 
             if unread_only and not getattr(item, "UnRead", False):

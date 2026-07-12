@@ -74,8 +74,7 @@ REFERENCE_PATTERNS = [
 ]
 
 PII_PATTERNS = [
-    r'\b\d{3}[-.]?\d{2}[-.]?\d{4}\b',        # SSN
-    r'\b(?:\+\d{1,2}\s?)?\(?\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4}\b',  # Phone
+    r'\b\d{3}[-.]?\d{2}[-.]?\d{4}\b',        # SSN — only truly dangerous pattern
 ]
 
 # ── Technologies to detect ───────────────────────────────────────

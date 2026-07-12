@@ -128,9 +128,11 @@ class TestDetectionEngine:
         assert result.has_pii is False
 
     def test_pii_detection_phone(self):
+        # Phone numbers no longer trigger PII — too many false positives
+        # with equipment numbers, part codes, and other numeric identifiers.
         text = "Call me at 555-123-4567 if you need help with the deploy."
         result = detect(text)
-        assert result.has_pii is True
+        assert result.has_pii is False
 
     # ── Scope suggestion ──────────────────────────────────
 
