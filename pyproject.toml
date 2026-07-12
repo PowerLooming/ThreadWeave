@@ -36,6 +36,9 @@ email = [
     "msal>=1.28",
     "httpx>=0.26",
 ]
+outlook = [
+    "pywin32>=306",
+]
 all-connectors = [
     "botbuilder-core>=4.15",
     "botbuilder-integration-aiohttp>=4.15",
