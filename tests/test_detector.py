@@ -119,18 +119,11 @@ class TestDetectionEngine:
 
     # ── PII detection ─────────────────────────────────────
 
-    def test_pii_detection_email(self):
-        # Email addresses in content are no longer flagged as PII —
-        # they're expected in workplace communication and don't
-        # indicate sensitive data on their own.
-        text = "You can reach out to john.doe@company.com for access to the dashboard."
-        result = detect(text)
-        assert result.has_pii is False
-
-    def test_pii_detection_phone(self):
-        # Phone numbers no longer trigger PII — too many false positives
-        # with equipment numbers, part codes, and other numeric identifiers.
-        text = "Call me at 555-123-4567 if you need help with the deploy."
+    def test_pii_detection_disabled(self):
+        # Basic PII patterns are disabled — version numbers, equipment codes
+        # and workplace identifiers cause too many false positives.
+        # Real sensitivity detection is in the confidentiality module.
+        text = "SSN: 123-45-6789. Call 555-123-4567. Email john@company.com."
         result = detect(text)
         assert result.has_pii is False
 

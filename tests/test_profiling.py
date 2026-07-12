@@ -292,11 +292,12 @@ class TestMetricsEndpoint:
         assert "# TYPE" in text
 
     def test_metrics_after_pii_rejection(self):
+        # PII detection disabled — test that the pipeline accepts all content
         from threadweave.api import app
         client = TestClient(app)
 
         client.post("/api/v1/ingest", json={
-            "content": "SSN: 123-45-6789 Phone: 555-123-4567 — do not share.",
+            "content": "Contact john@company.com or call 555-123-4567 for access.",
             "source": "email",
         })
 
@@ -304,7 +305,8 @@ class TestMetricsEndpoint:
         assert resp.status_code == 200
         data = resp.json()
         assert data["counters"]["ingest_total"] >= 1
-        assert data["counters"]["ingest_rejected_pii"] >= 1
+        # No PII rejection — basic PII patterns are disabled.
+        # Sensitivity detection is in the confidentiality layer.
 
     def test_metrics_after_duplicate(self):
         from threadweave.api import app

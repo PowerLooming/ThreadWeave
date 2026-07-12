@@ -73,8 +73,10 @@ REFERENCE_PATTERNS = [
     r"(?:ticket|issue|PR|pull\s+request)\s+(?:#|number\s+)?\d+",
 ]
 
-PII_PATTERNS = [
-    r'\b\d{3}[-.]?\d{2}[-.]?\d{4}\b',        # SSN — only truly dangerous pattern
+PII_PATTERNS: list[str] = [
+    # Basic PII detection disabled — too many false positives on workplace
+    # communication (version numbers, equipment codes, etc.).
+    # Real sensitivity detection lives in the confidentiality module.
 ]
 
 # ── Technologies to detect ───────────────────────────────────────
