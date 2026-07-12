@@ -15,6 +15,24 @@ import httpx
 API = "http://localhost:8000/api/v1/ingest"
 
 
+def strip_reply_headers(text: str) -> str:
+    """Remove forwarded/reply headers from email body."""
+    import re
+    # "From: ... Sent: ... To: ... Subject: ..."
+    text = re.sub(
+        r"(?im)^From:.*?\n(?:Sent:.*?\n)?(?:To:.*?\n)?(?:Cc:.*?\n)?(?:Subject:.*?\n)?",
+        "", text,
+    )
+    # "On ... wrote:"
+    text = re.sub(r"(?im)^On\s+.+wrote:\s*$", "", text)
+    # "-----Original Message-----" blocks
+    text = re.sub(r"(?is)-{2,}\s*Original Message\s*-{2,}.*", "", text)
+    # Quoted lines ("> ...")
+    text = re.sub(r"(?im)^>.*$", "", text)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text.strip()
+
+
 def strip_html(text: str) -> str:
     import re
     text = re.sub(r"<style[^>]*>.*?</style>", "", text, flags=re.DOTALL | re.IGNORECASE)
@@ -132,6 +150,10 @@ def iter_emails(folder_name="Inbox", max_results=50, unread_only=False):
 
             body = item.Body or ""
             if not body:
+                continue
+
+            body = strip_reply_headers(body)
+            if len(body) < 50:
                 continue
 
             if unread_only and not getattr(item, "UnRead", False):

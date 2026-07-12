@@ -74,10 +74,8 @@ REFERENCE_PATTERNS = [
 ]
 
 PII_PATTERNS = [
-    r'\b[A-Z][a-z]+(?:\s+[A-Z][a-z]+)+\b',  # Full names (simple heuristic)
     r'\b\d{3}[-.]?\d{2}[-.]?\d{4}\b',        # SSN
-    r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b',  # Email
-    r'\b(?:\+\d{1,2}\s?)?\(?\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4}\b',  # Phone
+    r'\b(?:\\+\\d{1,2}\\s?)?\\(?\d{3}\\)?[\\s.-]?\d{3}[\\s.-]?\d{4}\b',  # Phone
 ]
 
 # ── Technologies to detect ───────────────────────────────────────
