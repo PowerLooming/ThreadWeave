@@ -469,7 +469,10 @@ class TestFallbackBehavior:
             reset_llm_detector()
             should, result = await is_worth_saving_async(
                 "The deployment process requires three approvals before "
-                "going to production. Never skip this step."
+                "going to production. Never skip this step. We decided this "
+                "after a security incident where an unauthorized deploy caused "
+                "a three-hour outage. The root cause was traced to a missing "
+                "approval check in the CI pipeline."
             )
             assert should is True
             assert result.content_type == ContentType.ANSWER

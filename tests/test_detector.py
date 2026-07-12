@@ -106,7 +106,11 @@ class TestDetectionEngine:
     def test_worth_saving_answer(self):
         text = (
             "The reason we always restart the service after a config change "
-            "is that the config loader caches on startup. There's no hot reload."
+            "is that the config loader caches on startup. There's no hot reload. "
+            "In my experience, you need to wait at least 30 seconds before "
+            "running health checks. Here's how we discovered this: after a "
+            "production outage in Q3 we traced the root cause to a race condition "
+            "in the config loader's file watcher."
         )
         should, result = is_worth_saving(text)
         assert should is True

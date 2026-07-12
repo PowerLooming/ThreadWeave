@@ -266,7 +266,7 @@ def is_worth_saving(text: str) -> tuple[bool, DetectionResult]:
     result = detect(text)
     should_prompt = (
         result.content_type in (ContentType.ANSWER, ContentType.DECISION)
-        and result.confidence >= 0.2
+        and result.confidence >= 0.3
     )
     return should_prompt, result
 
