@@ -9,12 +9,25 @@ echo "========================================"
 echo ""
 
 # ---- Check/install Python ----
-if ! command -v python3 &> /dev/null && ! command -v python &> /dev/null; then
-    echo "❌ Python not found. Install Python 3.11+ and try again."
+PY=""
+for candidate in python3 python python.exe; do
+    if command -v "$candidate" &> /dev/null; then
+        PY="$candidate"
+        break
+    fi
+done
+# WSL fallback: try to find Windows Python from /mnt/c
+if [ -z "$PY" ] && [ -f "/mnt/c/Users/$USER/AppData/Local/Programs/Python/Python313/python.exe" ]; then
+    PY="/mnt/c/Users/$USER/AppData/Local/Programs/Python/Python313/python.exe"
+fi
+if [ -z "$PY" ] && [ -f "/mnt/c/Users/$USER/AppData/Local/Programs/Python/Python311/python.exe" ]; then
+    PY="/mnt/c/Users/$USER/AppData/Local/Programs/Python/Python311/python.exe"
+fi
+if [ -z "$PY" ]; then
+    echo "Python not found. Install Python 3.11+ and try again."
     exit 1
 fi
-PY=$(command -v python3 || command -v python)
-echo "✅ Python: $($PY --version)"
+echo "Python: $($PY --version 2>&1)"
 
 # ---- Check/install uv ----
 if ! command -v uv &> /dev/null; then
