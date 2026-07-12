@@ -8,14 +8,20 @@ echo "  ThreadWeave Setup"
 echo "========================================"
 echo ""
 
-# ---- Check prerequisites ----
-if ! command -v uv &> /dev/null; then
-    echo "❌ uv is not installed."
-    echo "   Install it: https://docs.astral.sh/uv/getting-started/installation/"
-    echo "   Or: pip install uv"
+# ---- Check/install Python ----
+if ! command -v python3 &> /dev/null && ! command -v python &> /dev/null; then
+    echo "❌ Python not found. Install Python 3.11+ and try again."
     exit 1
 fi
-echo "✅ uv found: $(uv --version)"
+PY=$(command -v python3 || command -v python)
+echo "✅ Python: $($PY --version)"
+
+# ---- Check/install uv ----
+if ! command -v uv &> /dev/null; then
+    echo "→ Installing uv..."
+    $PY -m pip install uv
+fi
+echo "✅ uv: $(uv --version)"
 
 # ---- Create venv ----
 echo ""
@@ -35,13 +41,13 @@ echo "→ Verifying installation..."
 python -c "
 from threadweave.detector import detect, is_worth_saving
 should, result = is_worth_saving('We decided to use PostgreSQL for the auth service.')
-print(f'  Detector: ✅ (type={result.content_type.value}, confidence={result.confidence})')
+print(f'  Detector: OK (type={result.content_type.value}, confidence={result.confidence})')
 
 try:
     import mempalace
-    print(f'  MemPalace: ✅ (v{mempalace.__version__})')
+    print(f'  MemPalace: OK (v{mempalace.__version__})')
 except ImportError:
-    print('  MemPalace: ⚠️ not installed (hybrid search disabled, keyword fallback works)')
+    print('  MemPalace: not installed (hybrid search disabled, keyword fallback works)')
 "
 
 # ---- Run tests ----
