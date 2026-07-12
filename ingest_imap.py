@@ -195,15 +195,17 @@ def main():
             else:
                 skipped += 1
 
-            detail = ""
+            reason = ""
             if result.get("deduplicated"):
-                detail = " (duplicate)"
+                reason = "dup"
             elif result.get("has_pii"):
-                detail = " (PII)"
+                reason = "PII"
+            elif not result["should_save"]:
+                reason = f"{result['content_type']} ({result['confidence']:.2f})"
             else:
-                detail = f" ({result['content_type']}, {result['confidence']:.2f})"
+                reason = f"{result['content_type']} ({result['confidence']:.2f})"
 
-            print(f"[{i}/{len(target_ids)}] {status}{detail} | {email_data['subject'][:70]}")
+            print(f"[{i}/{len(target_ids)}] {status:5} {reason:20} | {email_data['subject'][:60]}")
 
         except Exception as e:
             errors += 1
