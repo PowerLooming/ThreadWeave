@@ -44,6 +44,15 @@ DECISION_PATTERNS = [
     r"(?:conclusion|resolution|verdict)",
     r"(?:approved|rejected|accepted|declined)",
     r"(?:architecture\s+decision|ADR)",
+    # Technical action verbs — common in engineering emails
+    r"applied\s+(?:the\s+)?(?:fix|patch|update|change|workaround)",
+    r"(?:released|deployed|shipped?|rolled\s+out)\s+(?:as\s+)?(?:\w+\s+)?(?:v(?:ersion\s+)?)?",
+    r"(?:resolved|implemented|merged|fixed|patched)",
+    r"(?:identified|diagnosed|pinpointed|found)\s+the\s+(?:issue|problem|bug|root\s+cause)",
+    r"(?:confirmed|verified|validated|tested)\s+(?:that\s+)?(?:the\s+)?(?:fix|issue|problem)",
+    r"(?:updated|upgraded|patched|rolled\s+back)\s+(?:to|the)",
+    r"(?:the\s+)?(?:fix|solution|resolution)\s+(?:is|was|involves|requires)",
+    r"(?:completed|finished|done)[,:;]?\s+(?:the\s+)?",
 ]
 
 ANSWER_PATTERNS = [
@@ -57,6 +66,13 @@ ANSWER_PATTERNS = [
     r"(?:the\s+(?:pattern|rule|convention|standard|policy)\s+(?:is|says))",
     r"(?:we\s+use\s+\w+(?:\s+(?:for|to|as|because|since)))",  # Descriptive
     r"(?:this\s+is\s+(?:a|the)\s+.+\s+(?:policy|standard|practice|approach))",  # Policy
+    # Technical explanation patterns
+    r"(?:correctly|properly|accurately)\s+(?:identified|diagnosed|pinpointed|reported)",
+    r"(?:uncovered|discovered|realized|noticed)\s+that",
+    r"(?:the\s+)?root\s+cause\s+(?:is|was|appears|seems|turned\s+out)",
+    r"(?:reproduce[ds]?)\s+(?:the\s+)?(?:issue|bug|problem)\s+by",
+    r"(?:turned\s+out\s+(?:to\s+be|that))",
+    r"(?:as\s+it\s+turns?\s+out)",
 ]
 
 QUESTION_PATTERNS = [
@@ -133,7 +149,7 @@ def detect(text: str, min_length: int = 50) -> DetectionResult:
     for pattern in REFERENCE_PATTERNS:
         matches = re.findall(pattern, text)
         if matches:
-            score["reference"] += len(matches) * 0.20
+            score["reference"] += len(matches) * 0.10
             signals.append("reference")
 
     # ── Structural signals ──────────────────────────────────
@@ -160,6 +176,19 @@ def detect(text: str, min_length: int = 50) -> DetectionResult:
     ]
     scored.sort(key=lambda x: x[1], reverse=True)
     primary_type, primary_score = scored[0]
+
+    # Override: if reference wins but the text contains substantive
+    # decisions or explanations, promote the higher of the two.
+    # This prevents technical emails with incidental URLs/links
+    # from being classified as mere references.
+    best_substantive = max(score["decision"], score["answer"])
+    if primary_type == ContentType.REFERENCE and best_substantive >= 0.2:
+        if score["decision"] >= score["answer"]:
+            primary_type = ContentType.DECISION
+            primary_score = score["decision"]
+        else:
+            primary_type = ContentType.ANSWER
+            primary_score = score["answer"]
 
     confidence = min(primary_score, 1.0)
 
