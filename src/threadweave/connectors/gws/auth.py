@@ -25,10 +25,11 @@ import logging
 import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
-from google.oauth2 import service_account
-from googleapiclient.discovery import build, Resource
+if TYPE_CHECKING:
+    from google.oauth2.service_account import Credentials
+    from googleapiclient.discovery import Resource
 
 logger = logging.getLogger("threadweave.gws.auth")
 
@@ -86,12 +87,14 @@ class GWSAuth:
 
     def __init__(self, credentials: GWSCredentials):
         self._credentials = credentials
-        self._creds: Optional[service_account.Credentials] = None
+        self._creds = None  # type: ignore[assignment]
 
     @property
-    def creds(self) -> service_account.Credentials:
+    def creds(self):
         """Get or build the delegated credentials."""
         if self._creds is None:
+            from google.oauth2 import service_account
+
             self._creds = service_account.Credentials.from_service_account_file(
                 self._credentials.credentials_path,
                 scopes=self._credentials.scopes,
@@ -106,16 +109,19 @@ class GWSAuth:
             )
         return self._creds
 
-    def gmail(self) -> Resource:
+    def gmail(self):
         """Build an authorized Gmail API v1 service."""
+        from googleapiclient.discovery import build
         return build("gmail", "v1", credentials=self.creds)
 
-    def chat(self) -> Resource:
+    def chat(self):
         """Build an authorized Google Chat API v1 service."""
+        from googleapiclient.discovery import build
         return build("chat", "v1", credentials=self.creds)
 
-    def drive(self) -> Resource:
+    def drive(self):
         """Build an authorized Drive API v3 service."""
+        from googleapiclient.discovery import build
         return build("drive", "v3", credentials=self.creds)
 
     def refresh(self) -> None:
