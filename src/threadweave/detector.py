@@ -89,6 +89,28 @@ REFERENCE_PATTERNS = [
     r"(?:ticket|issue|PR|pull\s+request)\s+(?:#|number\s+)?\d+",
 ]
 
+# ── External source detection ────────────────────────────────────
+# Patterns that indicate newsletters, marketing, or external content
+# that should NOT be saved as organizational knowledge — even if
+# it contains answer-like or decision-like language.
+
+EXTERNAL_SOURCE_PATTERNS = [
+    r"(?:unsubscribe|view\s+(?:in\s+(?:browser|your\s+browser)|online)|web\s+version)",
+    r"(?:register\s+now|subscribe\s+(?:now|today|here)|sign\s+up\s+(?:now|today|here))",
+    r"you(?:\s+are|'re)\s+receiving\s+this\s+(?:email|message)\s+because",
+    r"(?:privacy\s+policy|terms\s+(?:of\s+)?(?:service|use))",
+    r"(?:add\s+us\s+to\s+your\s+address\s+book|whitelist\s+us|safe\s+sender\s+list)",
+    r"(?:forward\s+(?:to\s+a\s+)?friend|share\s+(?:this|with))",
+    r"this\s+email\s+was\s+sent\s+to",
+    r"(?:update\s+your\s+(?:preferences|subscription|profile)|manage\s+(?:your\s+)?preferences)",
+    r"©\s*\d{4}",
+    r"all\s+rights\s+reserved",
+    r"view\s+this\s+email\s+(?:in\s+your\s+browser|online)",
+    r"you\s+(?:signed\s+up|subscribed|opted\s+in)",
+    r"(?:weekly|monthly|daily)\s+(?:digest|newsletter|update|roundup|briefing)",
+    r"(?:marketing\s+email|promotional\s+(?:email|offer|message))",
+]
+
 PII_PATTERNS: list[str] = [
     # Basic PII detection disabled — too many false positives on workplace
     # communication (version numbers, equipment codes, etc.).
@@ -165,6 +187,33 @@ def detect(text: str, min_length: int = 50) -> DetectionResult:
     if re.search(r"^\s*(?:\d+[.)]|[-*+])\s", text, re.MULTILINE):
         score["answer"] += 0.10
         signals.append("list_format")
+
+    # ── External source penalty ───────────────────────────────
+    # Newsletters and marketing emails often mimic answer/decision
+    # language. If the email has clear external-source signals,
+    # we override the classification to prevent false saves.
+    external_matches = 0
+    for pattern in EXTERNAL_SOURCE_PATTERNS:
+        if re.search(pattern, text_lower):
+            external_matches += 1
+
+    if external_matches >= 3:
+        # Strong newsletter signal — override to reference, won't save
+        signals.append(f"external_source({external_matches})")
+        return DetectionResult(
+            content_type=ContentType.REFERENCE,
+            confidence=0.90,
+            signals=signals,
+            entities=[],
+            suggested_scope="team",
+            suggested_title="",
+            has_pii=False,
+        )
+    elif external_matches >= 1:
+        # Weak signal — penalize but don't fully override
+        score["answer"] *= 0.5
+        score["decision"] *= 0.5
+        signals.append(f"external_source({external_matches})")
 
     # ── Determine primary type ───────────────────────────────
 

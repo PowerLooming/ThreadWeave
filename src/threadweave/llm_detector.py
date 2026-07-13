@@ -64,7 +64,10 @@ Return ONLY a valid JSON object — no markdown fences, no extra text:
 CLASSIFICATION RULES:
 * ANSWER — explanations, instructions, knowledge sharing, best practices,
   patterns, conventions, architecture explanations, technical deep-dives.
-  WORTH SAVING.
+  WORTH SAVING. BUT: if the text is a newsletter, blog post, marketing
+  email, or external content (signs: "unsubscribe", "view in browser",
+  "register now", "privacy policy", "© 202", "all rights reserved"),
+  classify as REFERENCE instead — even if it contains technical content.
 * DECISION — explicit decisions with rationale, approvals/rejections,
   architecture decisions (ADR), technology/policy choices. WORTH SAVING.
 * QUESTION — a question someone asked. NOT worth saving alone (save with answer).
