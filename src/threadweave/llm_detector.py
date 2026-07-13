@@ -108,7 +108,7 @@ class LLMConfig:
     max_tokens: int = 500
     temperature: float = 0.0
     timeout: float = 60.0
-    max_retries: int = 2
+    max_retries: int = 1
     min_content_length: int = 50  # shorter → regex (cheaper)
 
     @classmethod
