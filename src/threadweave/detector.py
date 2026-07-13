@@ -109,6 +109,13 @@ EXTERNAL_SOURCE_PATTERNS = [
     r"you\s+(?:signed\s+up|subscribed|opted\s+in)",
     r"(?:weekly|monthly|daily)\s+(?:digest|newsletter|update|roundup|briefing)",
     r"(?:marketing\s+email|promotional\s+(?:email|offer|message))",
+    # System-generated notifications (HR platforms, automated digests, etc.)
+    r"\bdigest\b",  # "Your daily digest", "Workday Peakon digest" etc.
+    r"(?:employee|engagement|pulse)\s+(?:survey|voice|feedback|insight)",
+    r"(?:approve?\s+hours?|timesheet|expense\s+report)",
+    r"(?:your\s+)?(?:daily|weekly|monthly)\s+(?:inbox|summary|brief|round-?up)",
+    r"do\s+not\s+reply\s+(?:to\s+this\s+(?:email|message)|directly)",
+    r"(?:automated|automatic)\s+(?:email|notification|message|reminder)",
 ]
 
 PII_PATTERNS: list[str] = [
