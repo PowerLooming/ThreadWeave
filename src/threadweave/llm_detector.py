@@ -107,7 +107,7 @@ class LLMConfig:
     base_url: Optional[str] = None
     max_tokens: int = 500
     temperature: float = 0.0
-    timeout: float = 30.0
+    timeout: float = 60.0
     max_retries: int = 2
     min_content_length: int = 50  # shorter → regex (cheaper)
 
