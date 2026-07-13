@@ -204,8 +204,8 @@ def detect(text: str, min_length: int = 50) -> DetectionResult:
         if re.search(pattern, text_lower):
             external_matches += 1
 
-    if external_matches >= 3:
-        # Strong newsletter signal — override to reference, won't save
+    if external_matches >= 2:
+        # Strong newsletter/external signal — override to reference, won't save
         signals.append(f"external_source({external_matches})")
         return DetectionResult(
             content_type=ContentType.REFERENCE,
@@ -322,7 +322,7 @@ def is_worth_saving(text: str) -> tuple[bool, DetectionResult]:
     result = detect(text)
     should_prompt = (
         result.content_type in (ContentType.ANSWER, ContentType.DECISION)
-        and result.confidence >= 0.35
+        and result.confidence >= 0.40
     )
     return should_prompt, result
 

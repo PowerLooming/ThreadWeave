@@ -210,7 +210,7 @@ class LLMDetector:
         result = await self.detect(text)
         should = (
             result.content_type in (ContentType.ANSWER, ContentType.DECISION)
-            and result.confidence >= 0.35  # match regex threshold
+            and result.confidence >= 0.40  # match regex threshold
         )
         return should, result
 
