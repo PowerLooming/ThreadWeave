@@ -185,7 +185,7 @@ def main():
                     "author_id": email_data["sender"],
                     "email_date": email_data["date"],
                 },
-            }, timeout=30)
+            }, timeout=300)
             resp.raise_for_status()
             result = resp.json()
 
