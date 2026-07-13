@@ -33,7 +33,7 @@ GRAPH_API = "https://graph.microsoft.com/v1.0"
 # for public client apps — works with device code flow without any
 # Azure registration. Used by Microsoft's own tools and SDKs.
 CLIENT_ID = "04b07795-8ddb-461a-bbee-02f9e1bf7b46"  # Azure CLI client
-SCOPES = ["Mail.Read", "offline_access"]
+SCOPES = ["Mail.Read"]
 TOKEN_FILE=Path.home() / ".threadweave" / "graph_token.json"
 
 # Cache folder listing so we only fetch it once
