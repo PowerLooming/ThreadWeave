@@ -24,6 +24,7 @@ from threadweave.detector import (
     detect, is_worth_saving, detect_async, is_worth_saving_async,
     ContentType, DetectionResult,
 )
+from threadweave.llm_detector import get_llm_detector
 from threadweave.mempalace_client import MemPalaceClient
 from threadweave.org_model import OrgModel
 from threadweave.relevance import RelevanceEngine
@@ -87,6 +88,7 @@ class IngestResponse(BaseModel):
     suggested_title: str
     suggested_scope: str
     deduplicated: bool = False
+    detector: str = "regex"  # "llm" or "regex"
 
 
 # Existing models (kept for backward compatibility)
@@ -191,6 +193,7 @@ class HealthResponse(BaseModel):
     dedup_cache_size: int
     tenants_active: int
     uptime_seconds: float
+    detector: str = "regex"  # "llm" or "regex"
 
 
 # ---- Startup ----
@@ -221,6 +224,7 @@ async def health():
         dedup_cache_size=len(_dedup_hashes),
         tenants_active=len(_tenant_stores),
         uptime_seconds=(datetime.now(timezone.utc) - _start_time).total_seconds(),
+        detector="llm" if get_llm_detector() else "regex",
     )
 
 
@@ -261,6 +265,7 @@ async def ingest_content(req: IngestRequest, request: Request):
     effective_tenant = get_tenant_id(request)
     if effective_tenant != "default":
         req.tenant_id = effective_tenant
+    detector_mode = "regex"  # default; updated after detection
     # 1. Dedup — check content hash
     t0 = time.monotonic()
     content_hash = hashlib.sha256(req.content.encode()).hexdigest()
@@ -278,6 +283,7 @@ async def ingest_content(req: IngestRequest, request: Request):
             suggested_title="",
             suggested_scope="team",
             deduplicated=True,
+            detector=detector_mode,
         )
     _dedup_hashes.add(content_hash)
     metrics.dedup_latency.record((time.monotonic() - t0) * 1000)
@@ -291,9 +297,11 @@ async def ingest_content(req: IngestRequest, request: Request):
     signals = result.signals
     if any("llm(" in s for s in signals):
         # LLM was used — check if it was a hit or the LLM itself fell back
+        detector_mode = "llm"
         metrics.record_detect(llm_hit=True)
     else:
         # Regex was used (either no key configured or LLM call failed)
+        detector_mode = "regex"
         metrics.record_detect(regex_fallback=True)
 
     # 3. PII gate — reject if PII detected
@@ -308,6 +316,7 @@ async def ingest_content(req: IngestRequest, request: Request):
             has_pii=True,
             suggested_title=result.suggested_title,
             suggested_scope=result.suggested_scope,
+            detector=detector_mode,
         )
 
     # 4. Check if worth saving
@@ -322,6 +331,7 @@ async def ingest_content(req: IngestRequest, request: Request):
             has_pii=result.has_pii,
             suggested_title=result.suggested_title,
             suggested_scope=result.suggested_scope,
+            detector=detector_mode,
         )
 
     # 5. Store — per-tenant isolation
@@ -384,6 +394,7 @@ async def ingest_content(req: IngestRequest, request: Request):
         has_pii=result.has_pii,
         suggested_title=entry["title"],
         suggested_scope=result.suggested_scope,
+        detector=detector_mode,
     )
 
 
