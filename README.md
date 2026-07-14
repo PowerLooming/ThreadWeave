@@ -4,7 +4,7 @@ AGPL v3 or later. Wraps MemPalace for enterprise organizational knowledge captur
 
 **Every thread, woven into memory.**
 
-## Quick Start (Laptop)
+## Quick Start (Native Python)
 
 ```bash
 # Prerequisites: Python 3.11+ and uv
@@ -22,6 +22,26 @@ uv venv --python 3.11 .venv
 source .venv/Scripts/activate   # Windows
 uv pip install -e ".[dev]"
 ```
+
+## Quick Start (Docker)
+
+```bash
+# Clone the repo
+git clone https://github.com/PowerLooming/ThreadWeave
+cd ThreadWeave
+
+# Start ThreadWeave + MemPalace
+docker compose up
+
+# → API: http://localhost:8000
+# → API docs: http://localhost:8000/docs
+
+# Optional: run with a local LLM for smarter detection
+docker compose --profile llm up
+# Pulls ollama + llama3.1:8b automatically on first start
+```
+
+Data persists in Docker volumes — your knowledge survives restarts.
 
 ## Usage
 
