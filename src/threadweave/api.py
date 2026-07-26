@@ -266,9 +266,13 @@ async def ingest_content(req: IngestRequest, request: Request):
     if effective_tenant != "default":
         req.tenant_id = effective_tenant
     detector_mode = "regex"  # default; updated after detection
-    # 1. Dedup — check content hash
+    # 1. Dedup — hash content + key metadata to avoid false dedup
+    # when two emails share a body (templates) but have different subjects/senders
     t0 = time.monotonic()
-    content_hash = hashlib.sha256(req.content.encode()).hexdigest()
+    title = req.metadata.get("title", "")
+    author = req.metadata.get("author_id", "")
+    dedup_key = f"{req.content}|{title}|{author}"
+    content_hash = hashlib.sha256(dedup_key.encode()).hexdigest()
     if content_hash in _dedup_hashes:
         metrics.dedup_latency.record((time.monotonic() - t0) * 1000)
         metrics.dedup_hits += 1

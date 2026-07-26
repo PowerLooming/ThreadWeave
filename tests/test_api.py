@@ -252,6 +252,33 @@ class TestIngestPipeline:
         assert r2.status_code == 201
         assert r2.json()["deduplicated"] is True
 
+    def test_ingest_same_content_different_metadata_not_duplicate(self):
+        """Same body with different subject/sender should NOT be a duplicate."""
+        content = "Please review the attached document and provide feedback by Friday."
+        # First ingest — email from Alice about Q4 report
+        r1 = client.post("/api/v1/ingest", json={
+            "content": content,
+            "source": "email",
+            "metadata": {
+                "title": "Review: Q4 Budget Report",
+                "author_id": "alice@company.com",
+            },
+        })
+        assert r1.status_code == 201
+        assert r1.json()["deduplicated"] is False
+
+        # Second ingest — same body but from Bob about a different document
+        r2 = client.post("/api/v1/ingest", json={
+            "content": content,
+            "source": "email",
+            "metadata": {
+                "title": "Review: Engineering Roadmap 2026",
+                "author_id": "bob@company.com",
+            },
+        })
+        assert r2.status_code == 201
+        assert r2.json()["deduplicated"] is False  # <-- KEY: NOT a duplicate
+
     def test_ingest_tenant_isolation(self):
         """Different tenants should get separate entries."""
         r1 = client.post("/api/v1/ingest", json={

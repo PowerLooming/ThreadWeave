@@ -1,5 +1,5 @@
 [project]
-name = "threadweave"
+name = "threadweave-memory"
 version = "0.1.0"
 description = "Enterprise organizational memory system — wraps MemPalace"
 license = {text = "AGPL-3.0-or-later"}
