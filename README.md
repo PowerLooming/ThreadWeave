@@ -106,6 +106,11 @@ threadweave search "PostgreSQL"
         └──────────────────────────┘
 ```
 
+## Documentation
+
+- [M365 Connector Setup](docs/m365-connectors.md) — Azure app registration, Email Watcher, SharePoint Watcher, Copilot connector
+- [Technical Specification](docs/technical-spec.md)
+
 ## Configuration
 
 | Env Variable | Description |
