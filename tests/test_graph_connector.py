@@ -439,10 +439,12 @@ class TestFullSyncIntegration:
 # ═══════════════════════════════════════════════════════════════════════
 
 class TestRegisterSchema:
+    @patch("threadweave.connectors.graph.connector.requests.put")
     @patch("threadweave.connectors.graph.connector.requests.patch")
     @patch("threadweave.connectors.graph.connector.requests.post")
-    def test_register_schema_already_exists_triggers_patch(self, mock_post, mock_patch):
-        """409 Conflict should trigger a PATCH update of the existing connection."""
+    def test_register_schema_already_exists_triggers_patch(self, mock_post, mock_patch, mock_put):
+        """409 Conflict should trigger a PATCH update of the existing connection,
+        then PUT the schema."""
         from threadweave.connectors.graph.connector import ThreadWeaveGraphConnector
 
         mock_token = MagicMock()
@@ -454,6 +456,10 @@ class TestRegisterSchema:
         ]
         mock_patch_resp = MagicMock(status_code=200)
         mock_patch.return_value = mock_patch_resp
+
+        # Schema PUT succeeds
+        mock_put_resp = MagicMock(status_code=200)
+        mock_put.return_value = mock_put_resp
 
         connector = ThreadWeaveGraphConnector(
             tenant_id="t", client_id="c", client_secret="s",

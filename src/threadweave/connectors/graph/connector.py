@@ -158,44 +158,186 @@ class ThreadWeaveGraphConnector:
     # ── Connection Management ──────────────────────────────────────
 
     def register_schema(self) -> bool:
-        """Register (or update) the ThreadWeave external connection schema.
+        """Register (or update) the ThreadWeave external connection and its schema.
+
+        Creates the connection (POST /external/connections) if it doesn't exist,
+        then registers the schema (PUT /external/connections/{id}/schema) so items
+        can be upserted. The schema operation is asynchronous — this method polls
+        until it completes or times out.
 
         This is a one-time setup step. Must be called before syncing items.
         Requires ExternalConnection.ReadWrite.OwnedBy permission.
         """
         url = f"{GRAPH_API_BASE}/external/connections"
+        headers = self._headers()
+
+        # ── Step 1: Create or update the connection ──
         payload = {
             "id": CONNECTION_ID,
             "name": CONNECTION_NAME,
             "description": CONNECTION_DESCRIPTION,
         }
 
-        headers = self._headers()
         resp = requests.post(url, json=payload, headers=headers, timeout=30)
 
         if resp.status_code in (201, 200):
             logger.info(
-                "Connection '%s' registered successfully.", CONNECTION_ID,
+                "Connection '%s' created successfully.", CONNECTION_ID,
             )
-            return True
         elif resp.status_code == 409:
             logger.info(
                 "Connection '%s' already exists — updating.", CONNECTION_ID,
             )
-            # PATCH to update the existing connection
             patch_resp = requests.patch(
                 f"{url}/{CONNECTION_ID}",
                 json={"description": CONNECTION_DESCRIPTION},
                 headers=headers,
                 timeout=30,
             )
-            return patch_resp.status_code in (200, 204)
+            if patch_resp.status_code not in (200, 204):
+                logger.error(
+                    "Failed to update connection: %s — %s",
+                    patch_resp.status_code, patch_resp.text,
+                )
+                return False
         else:
             logger.error(
-                "Failed to register connection: %s — %s",
+                "Failed to create connection: %s — %s",
                 resp.status_code, resp.text,
             )
             return False
+
+        # ── Step 2: Register the schema ──
+        return self._register_schema_properties()
+
+    def _register_schema_properties(self) -> bool:
+        """Register the property schema for the external connection.
+
+        PUT /external/connections/{id}/schema — asynchronous operation.
+        Polls until the operation completes or times out.
+        """
+        schema_url = f"{self.connection_endpoint}/schema"
+        schema_payload = {
+            "baseUrl": self.threadweave_url,
+            "properties": [
+                {
+                    "name": "title", "type": "String",
+                    "isSearchable": True, "isQueryable": True,
+                    "isRetrievable": True, "aliases": [],
+                },
+                {
+                    "name": "wing", "type": "String",
+                    "isQueryable": True, "isRetrievable": True,
+                    "isRefinable": True, "aliases": [],
+                },
+                {
+                    "name": "room", "type": "String",
+                    "isQueryable": True, "isRetrievable": True,
+                    "isRefinable": True, "aliases": [],
+                },
+                {
+                    "name": "contentType", "type": "String",
+                    "isQueryable": True, "isRetrievable": True,
+                    "aliases": [],
+                },
+                {
+                    "name": "author", "type": "String",
+                    "isQueryable": True, "isRetrievable": True,
+                    "aliases": [],
+                },
+                {
+                    "name": "authorTeam", "type": "String",
+                    "isQueryable": True, "isRetrievable": True,
+                    "aliases": [],
+                },
+                {
+                    "name": "createdDateTime", "type": "DateTime",
+                    "isQueryable": True, "isRetrievable": True,
+                    "aliases": [],
+                },
+                {
+                    "name": "sourceType", "type": "String",
+                    "isQueryable": True, "isRetrievable": True,
+                    "aliases": [],
+                },
+                {
+                    "name": "scope", "type": "String",
+                    "isQueryable": True, "isRetrievable": True,
+                    "aliases": [],
+                },
+            ],
+        }
+
+        headers = self._headers()
+        resp = requests.put(
+            schema_url, json=schema_payload, headers=headers, timeout=30,
+        )
+
+        if resp.status_code in (200, 201, 204):
+            logger.info("Schema registered successfully for '%s'.", CONNECTION_ID)
+            return True
+
+        if resp.status_code == 202:
+            # Async operation — poll the Location header
+            location = resp.headers.get("Location", "")
+            if not location:
+                logger.warning(
+                    "Schema registration accepted but no Location header; "
+                    "assuming success."
+                )
+                return True
+
+            logger.info(
+                "Schema registration for '%s' accepted (async). Polling...",
+                CONNECTION_ID,
+            )
+            return self._poll_schema_operation(location)
+
+        # 409 = schema already exists, which is fine
+        if resp.status_code == 409:
+            logger.info(
+                "Schema for '%s' already exists.", CONNECTION_ID,
+            )
+            return True
+
+        logger.error(
+            "Failed to register schema for '%s': %s — %s",
+            CONNECTION_ID, resp.status_code, resp.text[:300],
+        )
+        return False
+
+    def _poll_schema_operation(self, location: str, max_wait: int = 60) -> bool:
+        """Poll an async schema operation until it completes."""
+        import time
+        deadline = time.time() + max_wait
+        headers = self._headers()
+        # Don't send Content-Type on GET
+        poll_headers = {"Authorization": headers["Authorization"]}
+
+        while time.time() < deadline:
+            resp = requests.get(location, headers=poll_headers, timeout=15)
+            if resp.status_code == 200:
+                status = resp.json().get("status", "")
+                if status == "completed":
+                    logger.info("Schema operation completed.")
+                    return True
+                if status == "failed":
+                    logger.error(
+                        "Schema operation failed: %s", resp.text[:300],
+                    )
+                    return False
+                logger.debug("Schema operation status: %s (polling...)", status)
+            elif resp.status_code == 404:
+                # Operation result not yet available, keep polling
+                pass
+            else:
+                logger.warning(
+                    "Unexpected status polling schema: %s", resp.status_code,
+                )
+            time.sleep(2)
+
+        logger.error("Timed out waiting for schema operation after %ds.", max_wait)
+        return False
 
     def get_connection_status(self) -> Optional[dict]:
         """Get the current state of the external connection."""
