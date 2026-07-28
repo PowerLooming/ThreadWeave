@@ -4,6 +4,8 @@ AGPL v3 or later. Wraps MemPalace for enterprise organizational knowledge captur
 
 **Every thread, woven into memory.**
 
+🌐 **[threadweave.net](https://threadweave.net)**
+
 ## Quick Start (Native Python)
 
 ```bash
