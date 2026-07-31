@@ -75,7 +75,9 @@ threadweave search "PostgreSQL"
 | `POST /api/v1/entries` | Save knowledge entry |
 | `GET /api/v1/entries/{id}` | Retrieve entry |
 | `GET /api/v1/wings` | List teams/departments |
+| `GET /api/v1/org/graph` | Org graph (nodes + edges for visualization) |
 | `POST /api/v1/org/relationships` | Manage org structure |
+| `GET /api/v1/org/people/{id}/team` | Get person's team at a point in time |
 | `POST /api/v1/detect-sensitivity` | Auto-classify confidentiality |
 | `GET /api/v1/health` | Health check |
 | `GET /api/v1/metrics` | Pipeline metrics (JSON) |
@@ -125,25 +127,25 @@ threadweave search "PostgreSQL"
 ## What's Built
 
 - ✅ **Detection engine** — Regex + LLM two-tier classifier (ANSWER/DECISION/QUESTION/CHAT/REFERENCE)
+- ✅ **PII detection** — International regex patterns (EN/NO/DE/FR/ES/IT) + LLM prompt hardening. Catches SSN, credit cards, IBAN, bank accounts, passport numbers, salary figures, home addresses, and medical data without false-flagging company names or workplace identifiers.
 - ✅ **Ingestion pipeline** — Central dedup → detect → PII gate → store
 - ✅ **MemPalace integration** — Hybrid search (BM25 + vector cosine)
+- ✅ **Org model** — Full MemPalace Knowledge Graph integration with temporal triples. Team membership, reporting chains, relevant-people search, HRIS bulk sync. Dual-mode: with or without KG.
+- ✅ **Hallway/Tunnel graph navigation** — D3.js force-directed graph visualization in the web dashboard. Click-to-highlight, drag-to-rearrange, wing filter, hallway (within-wing) vs tunnel (cross-wing) edge coloring.
+- ✅ **Web dashboard** — Single-file SPA with pipeline overview, search, save, entries, and graph tabs.
 - ✅ **API server** — FastAPI with auto-generated docs
 - ✅ **CLI** — `detect`, `search`, `save`, `serve`
 - ✅ **Confidentiality** — 7 sensitivity levels with access enforcement + audit
-- ✅ **Org model** — Temporal knowledge graph for team/role/person relationships
 - ✅ **Google Workspace connector** — Gmail, Chat, Drive ingestion + offboarding harvester
 - ✅ **Microsoft Graph connector** — Copilot integration via external connection
 - ✅ **Profiling** — Latency percentiles, throughput, Prometheus export
 - ✅ **Auth** — Opt-in API key middleware with tenant scoping
 - ✅ **Docker** — Multi-stage build with optional Ollama profile
-- ✅ **232 tests** (4 pre-existing threshold mismatches)
+- ✅ **288 tests** (4 pre-existing threshold mismatches)
 
 ## What's Next
 
-- [ ] PII regex tuning (company names trigger false positives)
-- [ ] Full MemPalace Knowledge Graph integration for org model
-- [ ] Hallway/Tunnel graph navigation
-- [ ] Web dashboard (static/index.html is a stub)
 - [ ] Multi-user / RBAC
-- [ ] SharePoint file watcher
-- [ ] Teams bot connector
+- [ ] SharePoint file watcher (code written, needs live tenant testing)
+- [ ] Teams bot connector (code written, needs Bot Framework registration + public endpoint)
+- [ ] Knowledge entry nodes in the graph (entries linked to org entities)
