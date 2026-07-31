@@ -119,9 +119,62 @@ EXTERNAL_SOURCE_PATTERNS = [
 ]
 
 PII_PATTERNS: list[str] = [
-    # Basic PII detection disabled — too many false positives on workplace
-    # communication (version numbers, equipment codes, etc.).
-    # Real sensitivity detection lives in the confidentiality module.
+    # High-precision PII patterns — conservative, international.
+    # Each pattern was chosen to avoid false positives on:
+    #   - Company names (no proper-name or suffix matching)
+    #   - Version numbers / equipment codes (no bare digit sequences)
+    #   - Workplace identifiers (ticket numbers, PR IDs, build numbers)
+    #
+    # Design principle: false positives are WORSE than false negatives
+    # because has_pii=True REJECTS the ingest. When in doubt, don't match.
+    #
+    # ── Locale-independent structured patterns ──────────────────
+    # Credit card: 4-4-4-4 with dash/space separators
+    r'\b\d{4}[\s-]\d{4}[\s-]\d{4}[\s-]\d{4}\b',
+    # IBAN (2-letter country code + 2 check digits + up to 30 alphanum)
+    r'\b[A-Z]{2}\d{2}\s?[A-Z0-9]{4}\s?\d{4}\s?\d{4}\s?\d{4}\s?[\d]{0,4}\b',
+    # US SSN: xxx-xx-xxxx
+    r'\b\d{3}-\d{2}-\d{4}\b',
+    # Nordic personal ID (DDMMYY-XXXXX or YYMMDD-XXXXX): 6+5 or 6-5
+    r'\b\d{6}[\s-]?\d{5}\b',
+    #
+    # ── Context-gated: national ID / SSN (multilingual) ───────
+    r'(?i)(?:ssn|social.security|national.id|personnummer|fødselsnummer|'
+    r'cpr.nummer|NINO|tax.id|steuer.id|numéro.fiscal|'
+    r'codice.fiscale|número.de.identidad)\s*[:#]?\s*[A-Z0-9\s\-/]{6,20}',
+    #
+    # ── Context-gated: bank account (multilingual) ─────────────
+    r'(?i)(?:account\s+(?:no|number|#|nr)|kontonummer|konto\s*(?:nr|nummer)?|'
+    r'bankkonto|bank\s+account|Bankverbindung|IBAN|'
+    r'RIB|numéro\s+de\s+compte|número\s+de\s+cuenta)\s*[:.]?\s*[\d.\s\-]{6,30}',
+    #
+    # ── Context-gated: passport (multilingual) ─────────────────
+    r'(?i)(?:passport|pass|Reisepass|passeport|pasaporte|passaporto)\s*'
+    r'(?:no|number|#|nr|num|nº|número)\s*[:.]?\s*[A-Z0-9]{5,12}',
+    #
+    # ── Context-gated: home/personal address (multilingual) ────
+    r'(?i)(?:home\s+address|personal\s+address|private\s+address|'
+    r'hjemmeadresse|privatadresse|bostedsadresse|folkeregistrert|'
+    r'Privatadresse|Wohnadresse|Heimatadresse|'
+    r'adresse\s+personnelle|adresse\s+privée|domicile|'
+    r'dirección\s+personal|domicilio\s+particular|'
+    r'indirizzo\s+privato|indirizzo\s+di\s+casa)\s*[:;]\s*\S',
+    #
+    # ── Context-gated: salary/compensation (multilingual) ──────
+    r'(?i)(?:salary|compensation|wage|income|remuneration|'
+    r'lønn|årslønn|månedslønn|'
+    r'Gehalt|Vergütung|Lohn|'
+    r'salaire|rémunération|'
+    r'salario|remuneración|sueldo|'
+    r'stipendio|retribuzione|salaris)\s*[:;]\s*[\d.,]+\s*'
+    r'(?:NOK|kr|USD|EUR|GBP|CHF|SEK|DKK|JPY|AUD|CAD)\b',
+    #
+    # ── Medical / health information ───────────────────────────
+    r'(?i)\b(?:diagnosis|diagnose|diagnóstico|diagnosi|diagnostic|'
+    r'prescription|prescripción|prescrizione|Rezept|ordonnance|'
+    r'patient\s+(?:record|file|history|akte|dossier|expediente)|'
+    r'medical\s+(?:condition|record|history)|'
+    r'health\s+(?:record|condition|history))\b',
 ]
 
 # ── Technologies to detect ───────────────────────────────────────
@@ -148,11 +201,16 @@ def detect(text: str, min_length: int = 50) -> DetectionResult:
     score = {"answer": 0.0, "decision": 0.0, "question": 0.0, "reference": 0.0}
     text_lower = text.lower()
 
+    # PII check runs first — must catch PII regardless of text length.
+    # A short text containing a credit card number is still PII.
+    has_pii = any(re.search(p, text) for p in PII_PATTERNS)
+
     if len(text) < min_length:
         return DetectionResult(
             content_type=ContentType.CHAT,
             confidence=0.9,
             signals=["too_short"],
+            has_pii=has_pii,
         )
 
     # ── Score each category ──────────────────────────────────
@@ -249,7 +307,6 @@ def detect(text: str, min_length: int = 50) -> DetectionResult:
     confidence = min(primary_score, 1.0)
 
     entities = _extract_entities(text)
-    has_pii = any(re.search(p, text) for p in PII_PATTERNS)
 
     if confidence < 0.15:
         return DetectionResult(

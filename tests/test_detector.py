@@ -123,13 +123,170 @@ class TestDetectionEngine:
 
     # ── PII detection ─────────────────────────────────────
 
-    def test_pii_detection_disabled(self):
-        # Basic PII patterns are disabled — version numbers, equipment codes
-        # and workplace identifiers cause too many false positives.
-        # Real sensitivity detection is in the confidentiality module.
-        text = "SSN: 123-45-6789. Call 555-123-4567. Email john@company.com."
+    def test_pii_nordic_personal_id(self):
+        """Nordic personal ID (11 digits: DDMMYY-XXXXX) should be detected."""
+        text = "Employee record: 01019012345 — please update the system."
         result = detect(text)
-        assert result.has_pii is False
+        assert result.has_pii is True
+
+    def test_pii_us_ssn(self):
+        """US SSN (xxx-xx-xxxx) should be detected as PII."""
+        text = "HR paperwork needs the new hire's 123-45-6789 for the W-2 form to be processed correctly."
+        result = detect(text)
+        assert result.has_pii is True
+
+    def test_pii_credit_card_format(self):
+        """Credit card format (4-4-4-4) should be detected as PII."""
+        text = "Payment details: 4532-7189-3412-5678 for the invoice."
+        result = detect(text)
+        assert result.has_pii is True
+
+    def test_pii_bank_account_labeled(self):
+        """Bank account with label should be detected as PII."""
+        text = "Refund to account no: 1234.56.78901 for travel expenses."
+        result = detect(text)
+        assert result.has_pii is True
+
+    def test_pii_german_bank_account(self):
+        """German bank account (Bankverbindung) should be detected."""
+        text = (
+            "Bitte überweisen Sie das Geld an folgende Bankverbindung: "
+            "DE89 3704 0044 0532 0130 00 für die Rechnung vom März."
+        )
+        result = detect(text)
+        assert result.has_pii is True
+
+    def test_pii_iban(self):
+        """IBAN should be detected as PII."""
+        text = "International wire to IBAN: GB29 NWBK 6016 1331 9268 19 for the supplier."
+        result = detect(text)
+        assert result.has_pii is True
+
+    def test_pii_salary_norwegian(self):
+        """Norwegian salary discussion should be detected as PII."""
+        text = (
+            "For the new senior engineer position in the platform team, "
+            "Lønn: 850000 NOK per year plus standard benefits package."
+        )
+        result = detect(text)
+        assert result.has_pii is True
+
+    def test_pii_salary_german(self):
+        """German salary (Gehalt) should be detected as PII."""
+        text = (
+            "Das Angebot für die Senior-Stelle im Engineering-Team: "
+            "Gehalt: 95000 EUR jährlich plus Bonus und Aktienoptionen."
+        )
+        result = detect(text)
+        assert result.has_pii is True
+
+    def test_pii_salary_french(self):
+        """French salary (salaire) should be detected as PII."""
+        text = (
+            "Pour le poste d'ingénieur senior dans l'équipe plateforme, "
+            "salaire: 75000 EUR par an avec avantages standards."
+        )
+        result = detect(text)
+        assert result.has_pii is True
+
+    def test_pii_passport_number(self):
+        """Passport number with label should be detected as PII."""
+        text = "Travel docs: passport no: AB1234567 — expires 2028."
+        result = detect(text)
+        assert result.has_pii is True
+
+    def test_pii_passport_spanish(self):
+        """Spanish passport (pasaporte) should be detected."""
+        text = (
+            "Documentos de viaje: pasaporte nº: XA9876543 caduca en 2030, "
+            "por favor actualizar en el sistema de RRHH."
+        )
+        result = detect(text)
+        assert result.has_pii is True
+
+    def test_pii_national_id_labeled(self):
+        """National ID with explicit label should be detected."""
+        text = (
+            "Background check requires National ID: AB123456C for the "
+            "contractor onboarding process to proceed."
+        )
+        result = detect(text)
+        assert result.has_pii is True
+
+    def test_pii_address_norwegian(self):
+        """Norwegian home address label should trigger PII."""
+        text = (
+            "Send the equipment to his hjemmeadresse: Storgata 15, 0152 Oslo "
+            "since he's working remotely this quarter."
+        )
+        result = detect(text)
+        assert result.has_pii is True
+
+    def test_pii_address_german(self):
+        """German private address label should trigger PII."""
+        text = (
+            "Die Unterlagen bitte an die Privatadresse: Musterstraße 42, "
+            "10115 Berlin schicken, nicht ins Büro."
+        )
+        result = detect(text)
+        assert result.has_pii is True
+
+    def test_pii_french_tax_id(self):
+        """French tax ID (numéro fiscal) should be detected."""
+        text = (
+            "Pour la déclaration, veuillez fournir votre numéro fiscal: "
+            "1234567890123 avant la fin du mois."
+        )
+        result = detect(text)
+        assert result.has_pii is True
+
+    # ── Negative tests: must NOT trigger PII ──────────────
+
+    def test_pii_company_name_not_flagged(self):
+        """Company names must NOT trigger PII detection."""
+        text = (
+            "We're partnering with Kongsberg Maritime AS on the new "
+            "propulsion system. Equinor ASA is also involved. "
+            "The contract with Aker Solutions was signed last week."
+        )
+        result = detect(text)
+        assert result.has_pii is False, (
+            f"Company names should not trigger PII, got: {result.has_pii}"
+        )
+
+    def test_pii_workplace_communication_not_flagged(self):
+        """Normal workplace communication should not trigger PII."""
+        text = (
+            "Please review the build 3.14.2 for the v2.5.1 release. "
+            "The ticket PR #355960 was merged. Contact the team at "
+            "engineering@company.com for questions. Office phone: 555-0100."
+        )
+        result = detect(text)
+        assert result.has_pii is False, (
+            f"Workplace communication should not trigger PII, got: {result.has_pii}"
+        )
+
+    def test_pii_org_number_not_flagged(self):
+        """Norwegian org numbers (organisasjonsnummer) are public — not PII."""
+        text = (
+            "Vendor registration: Kongsberg Maritime AS, org.nr. 974 760 223. "
+            "Equinor ASA, org.nr. 923 609 016."
+        )
+        result = detect(text)
+        assert result.has_pii is False, (
+            f"Org numbers are public record, should not trigger PII, got: {result.has_pii}"
+        )
+
+    def test_pii_bare_account_number_not_flagged(self):
+        """Bare account number without label should not trigger PII."""
+        text = (
+            "The build number 1234.56.78901 was deployed to production "
+            "yesterday after passing all integration tests."
+        )
+        result = detect(text)
+        assert result.has_pii is False, (
+            f"Bare numbers without context should not trigger PII, got: {result.has_pii}"
+        )
 
     # ── Scope suggestion ──────────────────────────────────
 

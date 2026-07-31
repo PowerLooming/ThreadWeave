@@ -82,9 +82,19 @@ SCOPE:
 * "organization" — company-wide policies, standards, or knowledge.
 
 PII RULES (professional context):
-* TRUE: email, phone, SSN, credit-card, passport, personal address.
-* FALSE: generic roles ("the CEO said"), public professional names, company
-  emails in a work context (alice@company.com is not PII in internal chat).
+* TRUE: personal phone numbers, SSN/fødselsnummer, credit-card numbers,
+  passport numbers (not passport mentions in travel context), personal
+  home addresses, salary/compensation figures for individuals.
+* FALSE — these are NOT PII:
+  - Organization names, company names, brand names (e.g. "Kongsberg
+    Maritime", "Equinor", "Microsoft" — these are public entities)
+  - Generic roles ("the CEO said", "our CTO decided")
+  - Work email addresses in an internal context (alice@company.com
+    written in a team channel is normal workplace communication)
+  - Office addresses, office phone numbers
+  - Customer/partner company names in B2B communication
+  - Public professional names and titles
+  - Norwegian org numbers (organisasjonsnummer — 9 digits, public record)
 
 CONFIDENCE GUIDELINES:
 * 0.9+  = crystal-clear signal, no ambiguity.
