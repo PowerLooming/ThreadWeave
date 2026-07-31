@@ -58,6 +58,7 @@ button:disabled{opacity:.4;cursor:not-allowed}
   <a href="#" data-page="search">🔍 Search</a>
   <a href="#" data-page="save">💾 Save</a>
   <a href="#" data-page="entries">📋 Entries</a>
+  <a href="#" data-page="graph">🔗 Graph</a>
   <div class="status-bar" id="status-bar">Connecting…</div>
 </nav>
 
@@ -118,7 +119,29 @@ button:disabled{opacity:.4;cursor:not-allowed}
     <h2>Recent Entries</h2>
     <div class="card" id="entries-list"></div>
   </div>
+
+  <!-- Graph -->
+  <div id="page-graph" class="page">
+    <div class="card-header" style="margin-bottom:.75rem">
+      <h3 style="font-size:.85rem;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;font-weight:500">Organization Graph</h3>
+      <div style="display:flex;gap:.5rem;align-items:center">
+        <select id="graph-wing" style="width:auto;margin-bottom:0;padding:.4rem .6rem;font-size:.8rem" onchange="fetchGraph()">
+          <option value="">All Wings</option>
+        </select>
+        <span id="graph-stats" style="font-size:.75rem;color:var(--muted)"></span>
+      </div>
+    </div>
+    <div class="card" style="padding:.5rem;height:70vh;overflow:hidden">
+      <svg id="graph-svg" style="width:100%;height:100%"></svg>
+    </div>
+    <div style="display:flex;gap:1rem;margin-top:.5rem;font-size:.75rem;color:var(--muted)">
+      <span>🟦 Person</span><span>🟩 Team</span><span>🟨 Domain</span>
+      <span style="margin-left:1rem">── Hallway</span><span>╌╌ Tunnel</span>
+    </div>
+  </div>
 </main>
+
+<script src="https://d3js.org/d3.v7.min.js"></script>
 
 <script>
 const A='http://localhost:8000/api/v1';
@@ -135,6 +158,7 @@ function switchPage(p){
   document.querySelector(`nav a[data-page="${p}"]`).classList.add('active');
   if(p==='dashboard') fetchDashboard();
   if(p==='entries') fetchEntries();
+  if(p==='graph') fetchGraph();
 }
 
 // API helper
@@ -249,6 +273,100 @@ async function fetchEntries(){
         <span class="badge badge-blue">${w.entry_count} entries</span>
       </div>`).join('');
   }catch(e){el.innerHTML='<div class="empty">Could not load entries</div>'}
+
+// ── Graph ─────────────────────────────────────────────────
+
+// Populate wing dropdown from /api/v1/wings
+async function populateGraphWings(){
+  try{
+    const wings=await api('/wings');
+    const sel=document.getElementById('graph-wing');
+    wings.forEach(w=>{
+      const opt=document.createElement('option');
+      opt.value=w.name;opt.textContent=`${w.name} (${w.entry_count})`;
+      sel.appendChild(opt);
+    });
+  }catch(e){}
+}
+
+async function fetchGraph(){
+  await populateGraphWings();
+  const wing=document.getElementById('graph-wing').value;
+  const url=wing?`/org/graph?wing=${encodeURIComponent(wing)}&depth=2`:'/org/graph';
+  try{
+    const d=await api(url);
+    document.getElementById('graph-stats').textContent=`${d.nodes.length} nodes · ${d.edges.length} edges`;
+    renderGraph(d);
+  }catch(e){
+    document.getElementById('graph-stats').textContent='Graph API unreachable';
+    renderGraph({nodes:[],edges:[]});
+  }
+}
+
+function renderGraph(data){
+  const svg=d3.select('#graph-svg');
+  svg.selectAll('*').remove();
+  if(!data.nodes.length){svg.append('text').attr('x','50%').attr('y','50%').attr('text-anchor','middle').attr('fill','var(--muted)').text('No org data — add entities and relationships via API');return}
+
+  const box=svg.node().getBoundingClientRect();
+  const W=box.width,H=box.height;
+
+  // Color scale
+  const nodeColor=d=>{switch(d.type){case'person':return'#3b82f6';case'team':return'#22c55e';case'domain':return'#f59e0b';default:return'#64748b'}};
+  const edgeColor=d=>d.type==='tunnel'?'#f59e0b':'#0ea5e9';
+  const edgeDash=d=>d.type==='tunnel'?'6,3':null;
+
+  // Force simulation
+  const sim=d3.forceSimulation(data.nodes)
+    .force('link',d3.forceLink(data.edges).id(d=>d.id).distance(120))
+    .force('charge',d3.forceManyBody().strength(-300))
+    .force('center',d3.forceCenter(W/2,H/2))
+    .force('collision',d3.forceCollide().radius(40));
+
+  // Edges
+  const link=svg.append('g').selectAll('line').data(data.edges).join('line')
+    .attr('stroke',edgeColor).attr('stroke-width',1.5).attr('stroke-dasharray',edgeDash).attr('opacity',0.6);
+
+  // Node groups
+  const node=svg.append('g').selectAll('g').data(data.nodes).join('g')
+    .call(d3.drag().on('start',(e,d)=>{if(!e.active)sim.alphaTarget(0.3).restart();d.fx=d.x;d.fy=d.y})
+                     .on('drag',(e,d)=>{d.fx=e.x;d.fy=e.y})
+                     .on('end',(e,d)=>{if(!e.active)sim.alphaTarget(0);d.fx=null;d.fy=null}));
+
+  // Circles
+  node.append('circle').attr('r',d=>d.type==='team'?12:d.type==='person'?8:10)
+    .attr('fill',nodeColor).attr('stroke','var(--bg)').attr('stroke-width',2);
+
+  // Labels
+  node.append('text').text(d=>d.label.length>18?d.label.slice(0,16)+'…':d.label)
+    .attr('dy',d=>d.type==='team'?-18:-14).attr('text-anchor','middle')
+    .attr('fill','var(--text)').attr('font-size','10px').attr('font-family','inherit');
+
+  // Click to highlight
+  node.on('click',(e,d)=>{
+    // Dim all
+    node.selectAll('circle').attr('opacity',0.2);
+    link.attr('opacity',0.1);
+    // Highlight this node
+    d3.select(e.currentTarget).select('circle').attr('opacity',1).attr('stroke','#fff').attr('stroke-width',3);
+    // Highlight connected nodes and edges
+    link.each(function(l){
+      if(l.source.id===d.id||l.target.id===d.id){d3.select(this).attr('opacity',1).attr('stroke-width',3)}
+    });
+    node.each(function(n){
+      data.edges.forEach(l=>{
+        if((l.source.id===d.id&&l.target.id===n.id)||(l.target.id===d.id&&l.source.id===n.id)){
+          d3.select(this).select('circle').attr('opacity',1)
+        }
+      });
+    });
+  });
+
+  // Double-click to reset
+  svg.on('dblclick',()=>{node.selectAll('circle').attr('opacity',1).attr('stroke','var(--bg)').attr('stroke-width',2);link.attr('opacity',0.6).attr('stroke-width',1.5)});
+
+  sim.on('tick',()=>{link.attr('x1',d=>d.source.x).attr('y1',d=>d.source.y).attr('x2',d=>d.target.x).attr('y2',d=>d.target.y);node.attr('transform',d=>`translate(${d.x},${d.y})`)});
+}
 }
 
 // ── Init ─────────────────────────────────────────────────

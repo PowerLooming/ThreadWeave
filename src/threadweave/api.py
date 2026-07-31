@@ -683,6 +683,143 @@ async def get_person_team(
         as_of=as_of or datetime.now(timezone.utc).date().isoformat(),
     )
 
+
+class GraphResponse(BaseModel):
+    nodes: list[dict]
+    edges: list[dict]
+
+
+@app.get("/api/v1/org/graph", response_model=GraphResponse)
+async def get_org_graph(
+    wing: Optional[str] = Query(None),
+    depth: int = Query(default=2, ge=1, le=5),
+):
+    """Return the org graph as nodes + edges for visualization.
+
+    Nodes: people, teams, domains with their types and wing membership.
+    Edges: member_of, reports_to, owns, collaborates_with, subteam_of.
+    Each edge is classified as 'hallway' (within-wing) or 'tunnel' (cross-wing).
+
+    Args:
+        wing: Filter to a specific wing/team. If None, returns the full graph.
+        depth: How many hops to traverse from the root wing (default 2).
+    """
+    nodes: dict[str, dict] = {}
+    edges: list[dict] = []
+
+    # Collect relationships from the org model
+    relationships = _org_model._relationships
+
+    # If a wing is specified, build a subgraph centered on that wing
+    if wing:
+        # Start with the wing itself
+        if wing in _org_model._entities:
+            entity = _org_model._entities[wing]
+            nodes[wing] = {
+                "id": wing, "label": entity.name or wing, "type": entity.entity_type,
+                "wing": wing,
+            }
+
+        # BFS to collect connected nodes up to `depth` hops
+        frontier = {wing}
+        seen = {wing}
+        seen_edges: set[tuple] = set()
+        for hop in range(depth):
+            next_frontier: set[str] = set()
+            for rel in relationships:
+                src_in = rel.source in frontier
+                tgt_in = rel.target in frontier
+                if not (src_in or tgt_in):
+                    continue
+
+                # Add both nodes
+                for node_id in (rel.source, rel.target):
+                    if node_id not in nodes:
+                        label = node_id
+                        ntype = "unknown"
+                        node_wing = ""
+                        if node_id in _org_model._entities:
+                            e = _org_model._entities[node_id]
+                            label = e.name or node_id
+                            ntype = e.entity_type
+                        # Determine wing:
+                        # - Teams ARE wings (their wing is themselves)
+                        # - People find their wing via member_of
+                        if ntype == "team":
+                            node_wing = node_id
+                        else:
+                            for r2 in relationships:
+                                if r2.source == node_id and r2.relation == "member_of":
+                                    node_wing = r2.target
+                                    break
+                        nodes[node_id] = {
+                            "id": node_id, "label": label, "type": ntype,
+                            "wing": node_wing,
+                        }
+
+                edge_key = (rel.source, rel.target, rel.relation)
+                if edge_key in seen_edges:
+                    continue
+                seen_edges.add(edge_key)
+
+                # Classify edge
+                # Determine which wings the source and target belong to
+                src_wing = nodes.get(rel.source, {}).get("wing", "")
+                tgt_wing = nodes.get(rel.target, {}).get("wing", "")
+                is_cross_wing = (
+                    src_wing and tgt_wing and src_wing != tgt_wing
+                    and rel.relation not in ("member_of", "reports_to", "subteam_of")
+                )
+                edge_type = "tunnel" if is_cross_wing else "hallway"
+
+                edges.append({
+                    "source": rel.source,
+                    "target": rel.target,
+                    "relation": rel.relation,
+                    "type": edge_type,
+                })
+
+                if src_in and rel.target not in seen:
+                    next_frontier.add(rel.target)
+                    seen.add(rel.target)
+                if tgt_in and rel.source not in seen:
+                    next_frontier.add(rel.source)
+                    seen.add(rel.source)
+
+            frontier = next_frontier
+            if not frontier:
+                break
+    else:
+        # Full graph — include all entities and relationships
+        for entity_id, entity in _org_model._entities.items():
+            # Teams are their own wing; people find wing via member_of
+            wing_id = entity_id if entity.entity_type == "team" else ""
+            if entity.entity_type != "team":
+                for rel in relationships:
+                    if rel.source == entity_id and rel.relation == "member_of":
+                        wing_id = rel.target
+                        break
+            nodes[entity_id] = {
+                "id": entity_id, "label": entity.name or entity_id,
+                "type": entity.entity_type, "wing": wing_id,
+            }
+
+        for rel in relationships:
+            src_wing = nodes.get(rel.source, {}).get("wing", "")
+            tgt_wing = nodes.get(rel.target, {}).get("wing", "")
+            is_cross_wing = (
+                src_wing and tgt_wing and src_wing != tgt_wing
+                and rel.relation not in ("member_of", "reports_to", "subteam_of")
+            )
+            edges.append({
+                "source": rel.source,
+                "target": rel.target,
+                "relation": rel.relation,
+                "type": "tunnel" if is_cross_wing else "hallway",
+            })
+
+    return GraphResponse(nodes=list(nodes.values()), edges=edges)
+
 # ---- Audit Log ----
 
 
