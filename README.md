@@ -136,7 +136,7 @@ threadweave search "PostgreSQL"
 - ✅ **Profiling** — Latency percentiles, throughput, Prometheus export
 - ✅ **Auth** — Opt-in API key middleware with tenant scoping
 - ✅ **Docker** — Multi-stage build with optional Ollama profile
-- ✅ **274 tests, 0 failures**
+- ✅ **232 tests** (4 pre-existing threshold mismatches)
 
 ## What's Next
 

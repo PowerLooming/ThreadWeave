@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: AGPL-3.0-or-later
+# SPDX-License-Identifier: MIT
 # Copyright (C) 2026 ThreadWeave contributors
 """
 Graph Connector for Microsoft 365 Copilot integration.
