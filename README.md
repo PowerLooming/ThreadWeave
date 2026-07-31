@@ -1,6 +1,6 @@
 # ThreadWeave — Organizational Memory System
 
-AGPL v3 or later. Wraps MemPalace for enterprise organizational knowledge capture and retrieval.
+MIT License. Wraps MemPalace for enterprise organizational knowledge capture and retrieval.
 
 **Every thread, woven into memory.**
 
