@@ -331,27 +331,35 @@ class RequesterContext:
 
         # 2. Wing check — for CONFIDENTIAL+, must be in the same wing
         #    UNLESS the requester has cross-wing clearance (admin, legal, hr)
+        #    Fail closed: a requester WITHOUT a wing claim is denied, an
+        #    empty wing must not bypass the check.
         if sensitivity in (
             SensitivityLevel.CONFIDENTIAL,
             SensitivityLevel.RESTRICTED,
         ):
             entry_wing = entry.get("wing", "")
-            if entry_wing and self.wing and entry_wing != self.wing:
-                # Cross-wing: only admins and special roles
+            if entry_wing and (not self.wing or entry_wing != self.wing):
+                # Cross-wing or unknown wing: only admins and special roles
                 if self.role not in ("admin", "legal", "hr_admin"):
                     return False
 
-        # 3. Client check
+        # 3. Client check — fail closed: CLIENT_CONFIDENTIAL entries
+        #    require a client_id AND requester assignment to that client.
+        #    Admin bypasses (umbrella role); legal/hr are wing-specific.
         if sensitivity == SensitivityLevel.CLIENT_CONFIDENTIAL:
-            entry_client = entry.get("client_id", "")
-            if entry_client and entry_client not in self.client_ids:
-                return False
+            if self.role != "admin":
+                entry_client = entry.get("client_id", "")
+                if not entry_client or entry_client not in self.client_ids:
+                    return False
 
-        # 4. Person-level ACL
+        # 4. Person-level ACL — fail closed: RESTRICTED entries require a
+        #    named ACL. No allowed_people list means nobody is authorized
+        #    (except admin/legal/hr_admin special roles).
         if sensitivity == SensitivityLevel.RESTRICTED:
-            allowed_people = entry.get("allowed_people", [])
-            if allowed_people and self.person_id not in allowed_people:
-                return False
+            if self.role not in ("admin", "legal", "hr_admin"):
+                allowed_people = entry.get("allowed_people", [])
+                if not allowed_people or self.person_id not in allowed_people:
+                    return False
 
         # 5. Special wing gating
         if sensitivity == SensitivityLevel.HR_PRIVILEGED:
@@ -396,6 +404,7 @@ class AuditEntry:
     entry_sensitivity: str
     entry_wing: str
     reason: str = ""         # Why was access denied? (if denied)
+    tenant_id: str = "default"  # Tenant the entry belongs to
     ip_hash: str = ""        # Hashed IP for privacy
 
     def to_dict(self) -> dict:
@@ -408,6 +417,7 @@ class AuditEntry:
             "entry_sensitivity": self.entry_sensitivity,
             "entry_wing": self.entry_wing,
             "reason": self.reason,
+            "tenant_id": self.tenant_id,
         }
 
 
@@ -441,6 +451,7 @@ class AuditLog:
             entry_id=entry.get("id", "unknown"),
             entry_sensitivity=sensitivity,
             entry_wing=entry.get("wing", ""),
+            tenant_id=entry.get("tenant_id", "default"),
         )
         self._entries.append(entry)
         if len(self._entries) > self._max_entries:
@@ -463,6 +474,7 @@ class AuditLog:
             entry_sensitivity=sensitivity,
             entry_wing=entry.get("wing", ""),
             reason=reason,
+            tenant_id=entry.get("tenant_id", "default"),
         )
         self._entries.append(entry)
         if len(self._entries) > self._max_entries:

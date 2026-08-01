@@ -11,13 +11,28 @@ Key loading (priority order):
 2. ~/.threadweave/keys.json                          (config file)
 
 Key format:
-    X-API-Key: sk-...
-    Authorization: Bearer sk-...
+    X-API-Key: <key>
+    Authorization: Bearer <key>
 
 Tenant isolation:
     Each key maps to a tenant_id. Protected endpoints use
     request.state.tenant_id to scope operations. An admin key
     (tenant_id="*") bypasses tenant scoping.
+
+Requester identity (for confidentiality ACLs):
+    keys.json entries may carry "wing" and "person_id" so the API key
+    is the trusted source of requester identity when auth is enabled.
+    Body/query identity claims are only honored when auth is off
+    (development mode).
+
+Example keys.json:
+    {
+      "keys": [
+        {"key": "sk-alice", "tenant_id": "acme", "role": "readwrite",
+         "wing": "engineering", "person_id": "alice"},
+        {"key": "sk-admin", "tenant_id": "*", "role": "admin"}
+      ]
+    }
 
 Endpoints exempt from auth (always open):
     GET /api/v1/health
@@ -54,6 +69,8 @@ class KeyInfo:
     tenant_id: str
     role: str
     label: str = ""
+    wing: str = ""
+    person_id: str = ""
 
 class KeyStore:
     def __init__(self):
@@ -104,7 +121,11 @@ class KeyStore:
             role = entry.get("role", "readwrite")
             label = entry.get("label", f"file:{tenant}")
             if key:
-                self._keys[key] = KeyInfo(tenant_id=tenant, role=role, label=label)
+                self._keys[key] = KeyInfo(
+                    tenant_id=tenant, role=role, label=label,
+                    wing=entry.get("wing", ""),
+                    person_id=entry.get("person_id", ""),
+                )
 
 # -- Middleware --
 
@@ -136,6 +157,8 @@ class APIKeyMiddleware(BaseHTTPMiddleware):
         request.state.tenant_id = info.tenant_id
         request.state.auth_role = info.role
         request.state.auth_label = info.label
+        request.state.auth_wing = info.wing
+        request.state.auth_person = info.person_id
         return await call_next(request)
 
 # -- Module instances --

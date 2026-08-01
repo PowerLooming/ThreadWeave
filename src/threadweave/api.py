@@ -66,6 +66,59 @@ _mempalace = MemPalaceClient()   # MemPalace hybrid search + storage client
 _tenant_stores: dict[str, dict] = {}
 
 
+# ---- Read-path scoping helpers ----
+
+def _scoped_tenant(request: Request) -> Optional[str]:
+    """Tenant to scope a read to, or None for unscoped access.
+
+    Unscoped when auth is off (development) or the key is an admin key
+    (tenant_id="*"). Otherwise returns the key's tenant, so a tenant key
+    can never read another tenant's data regardless of body/path claims.
+    """
+    tid = getattr(request.state, "tenant_id", None)
+    if tid is None or tid == "*":
+        return None
+    return tid
+
+
+def _clearance_for_role(role: str) -> SensitivityLevel:
+    """Map an API key role to the confidentiality clearance it grants."""
+    return {
+        "admin": SensitivityLevel.LEGAL_PRIVILEGED,
+        "legal": SensitivityLevel.LEGAL_PRIVILEGED,
+        "hr_admin": SensitivityLevel.HR_PRIVILEGED,
+    }.get(role, SensitivityLevel.INTERNAL)
+
+
+def _requester_from_request(
+    request: Request,
+    wing: str = "",
+    person_id: str = "",
+    role: str = "readwrite",
+) -> RequesterContext:
+    """Build the requester context from TRUSTED key claims when present.
+
+    ``request.state.auth_role`` is only set by the API key middleware for
+    requests authenticated with a valid key. When it is set, identity
+    comes from the key and unauthenticated body/query claims are ignored.
+    When it is absent (auth disabled), body/query claims are honored for
+    development use.
+    """
+    key_role = getattr(request.state, "auth_role", None)
+    if key_role is not None:
+        return RequesterContext(
+            person_id=getattr(request.state, "auth_person", ""),
+            wing=getattr(request.state, "auth_wing", ""),
+            role=key_role,
+            clearance=_clearance_for_role(key_role),
+        )
+    return RequesterContext(
+        person_id=person_id,
+        wing=wing,
+        role=role,
+    )
+
+
 # ---- Ingest — CENTRAL INGESTION PIPELINE ----
 
 
@@ -406,8 +459,15 @@ async def ingest_content(req: IngestRequest, request: Request):
 
 
 @app.get("/api/v1/tenants/{tenant_id}/entries")
-async def list_tenant_entries(tenant_id: str):
-    """List all entries for a specific tenant."""
+async def list_tenant_entries(tenant_id: str, request: Request):
+    """List all entries for a specific tenant.
+
+    With auth enabled, a tenant key may only list its own tenant;
+    anything else returns 404 (no existence leak).
+    """
+    scoped = _scoped_tenant(request)
+    if scoped and scoped != tenant_id:
+        raise HTTPException(status_code=404, detail="Tenant not found")
     store = _tenant_stores.get(tenant_id, {})
     return [{"id": eid, "title": e.get("title", ""), "created_at": e.get("created_at", "")}
             for eid, e in store.items()]
@@ -431,7 +491,12 @@ async def detect_content(req: DetectRequest):
 # ---- Save (also calls ingestion pipeline internally) ----
 
 @app.post("/api/v1/entries", response_model=SaveResponse, status_code=201)
-async def save_entry(req: SaveRequest):
+async def save_entry(req: SaveRequest, request: Request):
+    # Auth-enforced tenant scoping (mirrors ingest)
+    scoped = _scoped_tenant(request)
+    if scoped:
+        req.tenant_id = scoped
+
     entry_id = str(uuid.uuid4())[:8]
     now = datetime.now(timezone.utc).isoformat()
     det_result = detect(req.content)
@@ -498,13 +563,30 @@ async def save_entry(req: SaveRequest):
 # ---- Get Entry ----
 
 @app.get("/api/v1/entries/{entry_id}", response_model=EntryResponse)
-async def get_entry(entry_id: str, request: Request):
+async def get_entry(
+    entry_id: str,
+    request: Request,
+    person_id: Optional[str] = Query(None),
+    wing: Optional[str] = Query(None),
+    role: str = Query("readwrite"),
+):
     entry = _memory_store.get(entry_id)
     if not entry:
         raise HTTPException(status_code=404, detail="Entry not found")
 
-    # Confidentiality enforcement
-    requester = RequesterContext()  # Default: internal clearance
+    # Tenant scoping: a tenant key must not see other tenants' entries
+    scoped = _scoped_tenant(request)
+    if scoped and entry.get("tenant_id", "default") != scoped:
+        raise HTTPException(status_code=404, detail="Entry not found")
+
+    # Confidentiality enforcement — identity from key claims when auth is
+    # on, from query params when auth is off (development)
+    requester = _requester_from_request(
+        request,
+        wing=wing or "",
+        person_id=person_id or "",
+        role=role,
+    )
     if not requester.can_see(entry):
         audit = get_audit_log()
         audit.log_denied(requester, entry, "Insufficient clearance for direct access")
@@ -534,14 +616,23 @@ async def search(req: SearchRequest, request: Request):
     Wing/room filters narrow results to a specific team/topic.
     Confidentiality: Results are filtered based on requester clearance.
     """
+    # Auth-enforced tenant scoping: a tenant key can only search its own
+    # tenant, regardless of the tenant_id in the body. Admin keys (and
+    # auth-off development) keep the body tenant_id.
+    scoped = _scoped_tenant(request)
+    if scoped:
+        req.tenant_id = scoped
+
     query_lower = req.query.lower()
     results = []
     seen_ids: set[str] = set()
 
-    # Build requester context for access enforcement
-    requester = RequesterContext(
-        person_id=req.requester_team or "",  # Use requester_team as person_id for now
+    # Build requester context — trusted key claims when auth is on,
+    # body claims otherwise (see _requester_from_request)
+    requester = _requester_from_request(
+        request,
         wing=req.requester_team or "",
+        person_id=req.requester_team or "",  # requester_team doubles as person_id
         role=req.requester_role or "readwrite",
     )
 
@@ -642,9 +733,12 @@ async def search(req: SearchRequest, request: Request):
 # ---- Wings (Teams) ----
 
 @app.get("/api/v1/wings")
-async def list_wings():
+async def list_wings(request: Request):
+    scoped = _scoped_tenant(request)
     wings = {}
     for entry in _memory_store.values():
+        if scoped and entry.get("tenant_id", "default") != scoped:
+            continue
         wing = entry["wing"]
         if wing not in wings:
             wings[wing] = 0
@@ -656,9 +750,12 @@ async def list_wings():
 # ---- Rooms (Topics) ----
 
 @app.get("/api/v1/wings/{wing}/rooms")
-async def list_rooms(wing: str):
+async def list_rooms(wing: str, request: Request):
+    scoped = _scoped_tenant(request)
     rooms = {}
     for entry in _memory_store.values():
+        if scoped and entry.get("tenant_id", "default") != scoped:
+            continue
         if entry["wing"] == wing:
             room = entry["room"]
             if room not in rooms:
@@ -834,32 +931,51 @@ async def get_org_graph(
 
 
 @app.get("/api/v1/audit/recent")
-async def get_audit_recent(limit: int = Query(default=50, ge=1, le=500)):
-    """Get recent audit log entries for sensitive content access."""
+async def get_audit_recent(
+    limit: int = Query(default=50, ge=1, le=500),
+    request: Request = None,
+):
+    """Get recent audit log entries for sensitive content access.
+
+    With auth enabled, a tenant key only sees audit entries for its own
+    tenant. Admin keys and auth-off development see everything.
+    """
     audit = get_audit_log()
+    scoped = _scoped_tenant(request)
+    entries = audit.get_recent(limit)
+    if scoped:
+        entries = [e for e in entries if e.get("tenant_id", "default") == scoped]
     return {
-        "entries": audit.get_recent(limit),
-        "total": audit.count,
+        "entries": entries,
+        "total": len(entries),
     }
 
 
 @app.get("/api/v1/audit/entry/{entry_id}")
-async def get_audit_for_entry(entry_id: str):
+async def get_audit_for_entry(entry_id: str, request: Request):
     """Get audit log for a specific knowledge entry."""
     audit = get_audit_log()
+    scoped = _scoped_tenant(request)
+    entries = audit.get_for_entry(entry_id)
+    if scoped:
+        entries = [e for e in entries if e.get("tenant_id", "default") == scoped]
     return {
         "entry_id": entry_id,
-        "entries": audit.get_for_entry(entry_id),
+        "entries": entries,
     }
 
 
 @app.get("/api/v1/audit/requester/{requester_id}")
-async def get_audit_for_requester(requester_id: str):
+async def get_audit_for_requester(requester_id: str, request: Request):
     """Get audit log for a specific requester (who accessed what)."""
     audit = get_audit_log()
+    scoped = _scoped_tenant(request)
+    entries = audit.get_for_requester(requester_id)
+    if scoped:
+        entries = [e for e in entries if e.get("tenant_id", "default") == scoped]
     return {
         "requester_id": requester_id,
-        "entries": audit.get_for_requester(requester_id),
+        "entries": entries,
     }
 
 

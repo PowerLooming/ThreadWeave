@@ -194,6 +194,23 @@ class TestRequesterContext:
         entry = {"wing": "engineering", "sensitivity": "confidential"}
         assert not ctx.can_see(entry)
 
+    def test_empty_wing_cannot_see_confidential(self):
+        """Fail closed: a requester without a wing claim is denied."""
+        ctx = RequesterContext(
+            clearance=SensitivityLevel.CONFIDENTIAL,
+        )
+        entry = {"wing": "engineering", "sensitivity": "confidential"}
+        assert not ctx.can_see(entry)
+
+    def test_admin_without_wing_can_see_confidential(self):
+        """Admin role crosses wings even without a wing claim."""
+        ctx = RequesterContext(
+            role="admin",
+            clearance=SensitivityLevel.CONFIDENTIAL,
+        )
+        entry = {"wing": "engineering", "sensitivity": "confidential"}
+        assert ctx.can_see(entry)
+
     def test_admin_crosses_wings(self):
         """Admin can see confidential entries in any wing."""
         ctx = RequesterContext(
@@ -249,6 +266,31 @@ class TestRequesterContext:
         }
         assert not ctx.can_see(entry)
 
+    def test_client_confidential_without_client_id_denied(self):
+        """Fail closed: CLIENT_CONFIDENTIAL entry without client_id is denied."""
+        ctx = RequesterContext(
+            wing="consulting",
+            client_ids=["acme-corp"],
+            clearance=SensitivityLevel.CLIENT_CONFIDENTIAL,
+        )
+        entry = {
+            "wing": "consulting",
+            "sensitivity": "client_confidential",
+        }
+        assert not ctx.can_see(entry)
+
+    def test_admin_can_see_client_confidential_without_client_id(self):
+        """Admin role bypasses the client assignment check."""
+        ctx = RequesterContext(
+            role="admin",
+            clearance=SensitivityLevel.CLIENT_CONFIDENTIAL,
+        )
+        entry = {
+            "wing": "consulting",
+            "sensitivity": "client_confidential",
+        }
+        assert ctx.can_see(entry)
+
     def test_restricted_person_level(self):
         """Only named people can see RESTRICTED entries."""
         ctx = RequesterContext(
@@ -275,6 +317,32 @@ class TestRequesterContext:
             "allowed_people": ["alice", "bob"],
         }
         assert not ctx.can_see(entry)
+
+    def test_restricted_without_acl_denied(self):
+        """Fail closed: RESTRICTED entry with no ACL is visible to nobody."""
+        ctx = RequesterContext(
+            person_id="alice",
+            wing="engineering",
+            clearance=SensitivityLevel.RESTRICTED,
+        )
+        entry = {
+            "wing": "engineering",
+            "sensitivity": "restricted",
+        }
+        assert not ctx.can_see(entry)
+
+    def test_admin_can_see_restricted_without_acl(self):
+        """Admin role bypasses the person-level ACL."""
+        ctx = RequesterContext(
+            person_id="",
+            role="admin",
+            clearance=SensitivityLevel.RESTRICTED,
+        )
+        entry = {
+            "wing": "engineering",
+            "sensitivity": "restricted",
+        }
+        assert ctx.can_see(entry)
 
     def test_legal_privileged_blocked_for_non_legal(self):
         ctx = RequesterContext(
