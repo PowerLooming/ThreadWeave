@@ -8,9 +8,11 @@ Multi-tenant aware. Content deduplication. PII filtering.
 """
 
 import hashlib
+import logging
 import os
 import time
 import uuid
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -18,7 +20,6 @@ from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
-import os
 
 from threadweave.detector import (
     detect, is_worth_saving, detect_async, is_worth_saving_async,
@@ -37,6 +38,8 @@ from threadweave.confidentiality import (
     get_audit_log,
 )
 
+logger = logging.getLogger("threadweave.api")
+
 app = FastAPI(
     title="ThreadWeave API",
     description="Enterprise organizational memory system with central ingestion pipeline",
@@ -46,9 +49,16 @@ app = FastAPI(
 # Auth middleware (no-op unless THREADWEAVE_REQUIRE_AUTH=true)
 app.add_middleware(APIKeyMiddleware)
 
+# CORS — restrict origins with THREADWEAVE_CORS_ORIGINS="https://a,https://b"
+# when the API is exposed beyond local development (default: open, matching
+# the opt-in auth model).
+_cors_origins = [
+    o.strip() for o in os.environ.get("THREADWEAVE_CORS_ORIGINS", "*").split(",")
+    if o.strip()
+]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_cors_origins,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -88,6 +98,14 @@ def _clearance_for_role(role: str) -> SensitivityLevel:
         "legal": SensitivityLevel.LEGAL_PRIVILEGED,
         "hr_admin": SensitivityLevel.HR_PRIVILEGED,
     }.get(role, SensitivityLevel.INTERNAL)
+
+
+def _request_ip_hash(request: Request) -> str:
+    """Short sha256 of the client IP for the audit trail (no raw IPs)."""
+    host = getattr(request.client, "host", "")
+    if not host:
+        return ""
+    return hashlib.sha256(host.encode()).hexdigest()[:16]
 
 
 def _requester_from_request(
@@ -254,15 +272,24 @@ class HealthResponse(BaseModel):
 _start_time = datetime.now(timezone.utc)
 
 
-@app.on_event("startup")
-async def startup():
+# ---- Startup (lifespan) ----
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Startup/shutdown: detect MemPalace availability once."""
     global _mempalace_available
     _mempalace_available = _mempalace.available
     if _mempalace_available:
-        import logging
-        logging.getLogger("threadweave.api").info(
+        logger.info(
             "MemPalace hybrid search available at %s", _mempalace.palace_path
         )
+    yield
+
+
+# FastAPI accepts lifespan only at construction; the router attribute is
+# the same hook and can be set after the app object exists (the stores it
+# references are defined above).
+app.router.lifespan_context = lifespan
 
 
 # ---- Health ----
@@ -320,11 +347,12 @@ async def ingest_content(req: IngestRequest, request: Request):
         req.tenant_id = effective_tenant
     detector_mode = "regex"  # default; updated after detection
     # 1. Dedup — hash content + key metadata to avoid false dedup
-    # when two emails share a body (templates) but have different subjects/senders
+    # when two emails share a body (templates) but have different subjects/senders.
+    # Tenant is part of the key: each tenant has its own memory.
     t0 = time.monotonic()
     title = req.metadata.get("title", "")
     author = req.metadata.get("author_id", "")
-    dedup_key = f"{req.content}|{title}|{author}"
+    dedup_key = f"{req.tenant_id}|{req.content}|{title}|{author}"
     content_hash = hashlib.sha256(dedup_key.encode()).hexdigest()
     if content_hash in _dedup_hashes:
         metrics.dedup_latency.record((time.monotonic() - t0) * 1000)
@@ -342,7 +370,9 @@ async def ingest_content(req: IngestRequest, request: Request):
             deduplicated=True,
             detector=detector_mode,
         )
-    _dedup_hashes.add(content_hash)
+    # NOTE: the hash is added to _dedup_hashes only when the entry is
+    # actually saved (step 5 below). Rejected (PII) or skipped content
+    # must stay retryable within the same server run.
     metrics.dedup_latency.record((time.monotonic() - t0) * 1000)
 
     # 2. Detect — classify content (async, tries LLM first, regex fallback)
@@ -393,7 +423,7 @@ async def ingest_content(req: IngestRequest, request: Request):
 
     # 5. Store — per-tenant isolation
     t0 = time.monotonic()
-    entry_id = str(uuid.uuid4())[:8]
+    entry_id = uuid.uuid4().hex
     now = datetime.now(timezone.utc).isoformat()
 
     # Sensitivity detection
@@ -419,6 +449,9 @@ async def ingest_content(req: IngestRequest, request: Request):
         "allowed_people": req.metadata.get("allowed_people", []),
     }
 
+    # Mark as seen only after the entry is actually stored
+    _dedup_hashes.add(content_hash)
+
     # Store in tenant-isolated store
     tenant_store = _tenant_stores.setdefault(req.tenant_id, {})
     tenant_store[entry_id] = entry
@@ -440,8 +473,8 @@ async def ingest_content(req: IngestRequest, request: Request):
                 tenant_id=req.tenant_id,
                 sensitivity=entry["sensitivity"],
             )
-        except Exception:
-            pass  # In-memory fallback is sufficient
+        except Exception as exc:
+            logger.warning("MemPalace write failed for ingest %s: %s", entry_id, exc)
     metrics.mempalace_write_latency.record((time.monotonic() - t0) * 1000)
 
     metrics.record_ingest(saved=True)
@@ -497,7 +530,7 @@ async def save_entry(req: SaveRequest, request: Request):
     if scoped:
         req.tenant_id = scoped
 
-    entry_id = str(uuid.uuid4())[:8]
+    entry_id = uuid.uuid4().hex
     now = datetime.now(timezone.utc).isoformat()
     det_result = detect(req.content)
 
@@ -551,8 +584,8 @@ async def save_entry(req: SaveRequest, request: Request):
                 tenant_id=req.tenant_id,
                 sensitivity=sensitivity,
             )
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning("MemPalace write failed for entry %s: %s", entry_id, exc)
 
     return SaveResponse(
         id=entry_id, wing=req.wing, room=req.room,
@@ -589,12 +622,15 @@ async def get_entry(
     )
     if not requester.can_see(entry):
         audit = get_audit_log()
-        audit.log_denied(requester, entry, "Insufficient clearance for direct access")
+        audit.log_denied(
+            requester, entry, "Insufficient clearance for direct access",
+            ip_hash=_request_ip_hash(request),
+        )
         raise HTTPException(status_code=403, detail="Access denied")
 
     # Audit: log access to sensitive entries
     audit = get_audit_log()
-    audit.log_access(requester, entry, action="view")
+    audit.log_access(requester, entry, action="view", ip_hash=_request_ip_hash(request))
 
     return EntryResponse(
         id=entry["id"], content=entry["content"], wing=entry["wing"],
@@ -667,7 +703,6 @@ async def search(req: SearchRequest, request: Request):
                     "sensitivity": mr.sensitivity or "internal",
                 })
         except Exception as exc:
-            logger = __import__("logging").getLogger("threadweave.api")
             logger.warning(
                 "MemPalace search failed, falling back to keyword: %s", exc
             )
@@ -717,9 +752,10 @@ async def search(req: SearchRequest, request: Request):
     # Audit log: record denied access attempts
     audit = get_audit_log()
     denied_ids = {r["id"] for r in results} - {r["id"] for r in visible}
+    ip_hash = _request_ip_hash(request)
     for entry_id in denied_ids:
         entry = _memory_store.get(entry_id, {})
-        audit.log_denied(requester, entry, "Insufficient clearance")
+        audit.log_denied(requester, entry, "Insufficient clearance", ip_hash=ip_hash)
 
     # Sort by relevance
     visible.sort(key=lambda r: r["relevance_score"], reverse=True)
@@ -815,13 +851,13 @@ async def get_org_graph(
     edges: list[dict] = []
 
     # Collect relationships from the org model
-    relationships = _org_model._relationships
+    relationships = _org_model.relationships
 
     # If a wing is specified, build a subgraph centered on that wing
     if wing:
         # Start with the wing itself
-        if wing in _org_model._entities:
-            entity = _org_model._entities[wing]
+        if wing in _org_model.entities:
+            entity = _org_model.entities[wing]
             nodes[wing] = {
                 "id": wing, "label": entity.name or wing, "type": entity.entity_type,
                 "wing": wing,
@@ -845,8 +881,8 @@ async def get_org_graph(
                         label = node_id
                         ntype = "unknown"
                         node_wing = ""
-                        if node_id in _org_model._entities:
-                            e = _org_model._entities[node_id]
+                        if node_id in _org_model.entities:
+                            e = _org_model.entities[node_id]
                             label = e.name or node_id
                             ntype = e.entity_type
                         # Determine wing:
@@ -898,7 +934,7 @@ async def get_org_graph(
                 break
     else:
         # Full graph — include all entities and relationships
-        for entity_id, entity in _org_model._entities.items():
+        for entity_id, entity in _org_model.entities.items():
             # Teams are their own wing; people find wing via member_of
             wing_id = entity_id if entity.entity_type == "team" else ""
             if entity.entity_type != "team":

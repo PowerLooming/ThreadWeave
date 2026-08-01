@@ -101,6 +101,16 @@ class OrgModel:
         if kg_path:
             self._init_kg(kg_path)
 
+    @property
+    def entities(self) -> dict[str, OrgEntity]:
+        """All entities (people, teams, domains) keyed by id."""
+        return self._entities
+
+    @property
+    def relationships(self) -> list[OrgRelationship]:
+        """All relationships (temporal triples)."""
+        return self._relationships
+
     def _init_kg(self, kg_path: str) -> None:
         """Lazily initialize the MemPalace KnowledgeGraph connection."""
         try:

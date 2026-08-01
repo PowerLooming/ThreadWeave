@@ -325,7 +325,7 @@ class MemPalaceClient:
             if col is None:
                 return None
 
-            drawer_id = drawer_id or str(uuid.uuid4())[:8]
+            drawer_id = drawer_id or uuid.uuid4().hex
             metadata = {
                 "wing": wing,
                 "room": room,

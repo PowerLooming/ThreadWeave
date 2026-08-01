@@ -259,8 +259,9 @@ class TestMetricsEndpoint:
         # First, run an ingest to populate metrics
         client.post("/api/v1/ingest", json={
             "content": (
-                "The reason we use Postgres over MySQL is because we need "
-                "JSONB support and full-text search."
+                "After evaluating three databases, we chose PostgreSQL for "
+                "the new platform because JSONB and full-text search are "
+                "critical for our workload, and the decision is documented."
             ),
             "source": "teams",
         })
@@ -312,7 +313,11 @@ class TestMetricsEndpoint:
         from threadweave.api import app
         client = TestClient(app)
 
-        content = "We must always run integration tests before deploying."
+        content = (
+            "We have decided to standardize on Terraform for "
+            "infrastructure because it gives us state management and "
+            "plan reviews, and the rollout schedule is approved."
+        )
         client.post("/api/v1/ingest", json={"content": content, "source": "teams"})
         client.post("/api/v1/ingest", json={"content": content, "source": "teams"})
 

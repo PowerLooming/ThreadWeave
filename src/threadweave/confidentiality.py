@@ -437,6 +437,7 @@ class AuditLog:
         requester: RequesterContext,
         entry: dict,
         action: str = "view",
+        ip_hash: str = "",
     ) -> None:
         """Log that a requester accessed a sensitive entry."""
         sensitivity = entry.get("sensitivity", "internal")
@@ -452,6 +453,7 @@ class AuditLog:
             entry_sensitivity=sensitivity,
             entry_wing=entry.get("wing", ""),
             tenant_id=entry.get("tenant_id", "default"),
+            ip_hash=ip_hash,
         )
         self._entries.append(entry)
         if len(self._entries) > self._max_entries:
@@ -462,6 +464,7 @@ class AuditLog:
         requester: RequesterContext,
         entry: dict,
         reason: str,
+        ip_hash: str = "",
     ) -> None:
         """Log a denied access attempt."""
         sensitivity = entry.get("sensitivity", "internal")
@@ -475,6 +478,7 @@ class AuditLog:
             entry_wing=entry.get("wing", ""),
             reason=reason,
             tenant_id=entry.get("tenant_id", "default"),
+            ip_hash=ip_hash,
         )
         self._entries.append(entry)
         if len(self._entries) > self._max_entries:

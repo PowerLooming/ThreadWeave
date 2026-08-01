@@ -22,17 +22,18 @@ class TestHealth:
 
 
 class TestDetection:
-    def test_detect_answer(self):
+    def test_detect_strong_decision_saved(self):
         response = client.post("/api/v1/detect", json={
             "text": (
-                "The reason we use Postgres over MySQL is because we need "
-                "JSONB support and full-text search. We evaluated both in 2022."
+                "After evaluating three databases, we chose PostgreSQL for "
+                "the new platform because JSONB and full-text search are "
+                "critical for our workload, and the decision is documented."
             ),
         })
         assert response.status_code == 200
         data = response.json()
-        assert data["content_type"] == "answer"
-        assert data["confidence"] >= 0.15
+        assert data["content_type"] == "decision"
+        assert data["confidence"] >= 0.40
         assert data["should_save"] is True
 
     def test_detect_chat(self):
@@ -205,12 +206,13 @@ class TestOrgModel:
 class TestIngestPipeline:
     """Tests for the central ingestion endpoint POST /api/v1/ingest."""
 
-    def test_ingest_answer_saved(self):
-        """Ingesting an answer should save and return should_save=True."""
+    def test_ingest_decision_saved(self):
+        """Ingesting a clear decision should save and return should_save=True."""
         resp = client.post("/api/v1/ingest", json={
             "content": (
-                "The reason we use Postgres over MySQL is because we need "
-                "JSONB support and full-text search. We evaluated both in 2022."
+                "After evaluating three databases, we chose PostgreSQL for "
+                "the new platform because JSONB and full-text search are "
+                "critical for our workload, and the decision is documented."
             ),
             "source": "teams",
             "tenant_id": "acme-corp",
@@ -218,7 +220,7 @@ class TestIngestPipeline:
         assert resp.status_code == 201
         data = resp.json()
         assert data["should_save"] is True
-        assert data["content_type"] == "answer"
+        assert data["content_type"] == "decision"
         assert data["deduplicated"] is False
         assert len(data["id"]) > 0
 
@@ -234,8 +236,12 @@ class TestIngestPipeline:
         assert data["content_type"] == "chat"
 
     def test_ingest_duplicate_detected(self):
-        """Same content twice should be flagged as duplicate."""
-        content = "We must always run integration tests before deploying to production."
+        """Same content + metadata ingested twice → duplicate."""
+        content = (
+            "We have decided to standardize on Terraform for "
+            "infrastructure because it gives us state management and "
+            "plan reviews, and the rollout schedule is approved."
+        )
         # First ingest
         r1 = client.post("/api/v1/ingest", json={
             "content": content,
@@ -282,12 +288,20 @@ class TestIngestPipeline:
     def test_ingest_tenant_isolation(self):
         """Different tenants should get separate entries."""
         r1 = client.post("/api/v1/ingest", json={
-            "content": "The reason we use Postgres for tenant A is because of JSONB support and full-text search capabilities that are critical for our workload.",
+            "content": (
+                "After evaluating three databases, we chose PostgreSQL for "
+                "the new platform because JSONB and full-text search are "
+                "critical for our workload, and the decision is documented."
+            ),
             "source": "manual",
             "tenant_id": "tenant-a",
         })
         r2 = client.post("/api/v1/ingest", json={
-            "content": "The reason we migrated to MySQL for tenant B is because we needed better replication and clustering support for our distributed architecture.",
+            "content": (
+                "We have decided to standardize on Terraform for "
+                "infrastructure because it gives us state management and "
+                "plan reviews, and the rollout schedule is approved."
+            ),
             "source": "manual",
             "tenant_id": "tenant-b",
         })
@@ -300,6 +314,30 @@ class TestIngestPipeline:
         list_a = client.get("/api/v1/tenants/tenant-a/entries")
         assert list_a.status_code == 200
         assert len(list_a.json()) >= 1
+
+    def test_ingest_skipped_content_retryable(self):
+        """Content that is not worth saving must NOT be deduped, so it can
+        be re-ingested (e.g. after the detector configuration changes)."""
+        content = (
+            "The reason we use Postgres over MySQL is because we need "
+            "JSONB support and full-text search. We evaluated both in 2022."
+        )
+        r1 = client.post("/api/v1/ingest", json={
+            "content": content,
+            "source": "teams",
+        })
+        assert r1.status_code == 201
+        assert r1.json()["should_save"] is False
+        assert r1.json()["deduplicated"] is False
+
+        # Second ingest must be re-evaluated, not short-circuited as dup
+        r2 = client.post("/api/v1/ingest", json={
+            "content": content,
+            "source": "teams",
+        })
+        assert r2.status_code == 201
+        assert r2.json()["deduplicated"] is False
+        assert r2.json()["id"] != "duplicate"
 
     def test_ingest_empty_content_rejected(self):
         """Empty content should return validation error."""

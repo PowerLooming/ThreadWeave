@@ -54,8 +54,8 @@ threadweave serve
 # → API docs: http://localhost:8000/docs
 
 # Analyze text for knowledge potential
-threadweave detect "We decided to use PostgreSQL for the auth service"
-# → {"should_save": true, "content_type": "decision", "confidence": 0.25, ...}
+threadweave detect "After evaluating three databases, we chose PostgreSQL for the new platform because JSONB and full-text search are critical for our workload, and the decision is documented."
+# → {"should_save": true, "content_type": "decision", "confidence": 0.50, ...}
 
 # Save knowledge manually
 threadweave save --wing engineering --room postgres --content "Always use connection pooling with at least 20 connections"
@@ -64,6 +64,19 @@ threadweave save --wing engineering --room postgres --content "Always use connec
 threadweave search "PostgreSQL"
 # → 1. [engineering/postgres] Always use connection pooling...
 ```
+
+## Ingesting Emails
+
+Feed existing mailboxes into ThreadWeave without touching the API:
+
+| Script | Source | Auth |
+|---|---|---|
+| `python ingest_imap.py --provider outlook --user you@company.com --max 100` | Any IMAP provider (Outlook, Gmail, custom) | Password or app password |
+| `python ingest_graph_mail.py --max 100` | New Outlook / M365 via Graph API | Device-code sign-in, MFA supported, no Azure app |
+| `python ingest_emails.py ~/Desktop/exported-emails/ --wing legal` | Exported `.eml` files | None |
+| `python ingest_outlook.py --max 100 --wing work` | Classic Outlook via COM | None (Windows only) |
+
+Gmail requires an app password. If your org disabled app passwords, use `ingest_graph_mail.py` instead. All scripts support `--dry-run` to preview before ingesting.
 
 ## API Endpoints
 
@@ -122,7 +135,10 @@ threadweave search "PostgreSQL"
 | `THREADWEAVE_LLM_BASE_URL` | Custom LLM endpoint (Ollama, vLLM, etc.) |
 | `THREADWEAVE_LLM_MODEL` | Model name (default: gpt-4o-mini) |
 | `THREADWEAVE_REQUIRE_AUTH` | Set to `1` to enable API key auth |
-| `THREADWEAVE_API_KEYS` | `tenant:key,tenant:key` format |
+| `THREADWEAVE_API_KEYS` | `tenant:key,tenant:key` format. For roles/identity (admin, hr_admin, legal, wing, person_id) use `~/.threadweave/keys.json` instead |
+| `THREADWEAVE_CORS_ORIGINS` | Comma-separated allowed origins (default: `*`). Restrict when exposed beyond local dev |
+
+**Connector extras:** `pip install -e ".[gws]"` (Google Workspace), `".[graph]"` (Microsoft Graph connector), `".[teams]"`, `".[sharepoint]"`, `".[email]"`, `".[outlook]"`, or `".[all-connectors]"` for everything.
 
 ## What's Built
 
@@ -141,11 +157,11 @@ threadweave search "PostgreSQL"
 - ✅ **Profiling** — Latency percentiles, throughput, Prometheus export
 - ✅ **Auth** — Opt-in API key middleware with tenant scoping
 - ✅ **Docker** — Multi-stage build with optional Ollama profile
-- ✅ **288 tests** (4 pre-existing threshold mismatches)
+- ✅ **312 tests** — full suite green
 
 ## What's Next
 
 - [ ] Multi-user / RBAC
-- [ ] SharePoint file watcher (code written, needs live tenant testing)
 - [ ] Teams bot connector (code written, needs Bot Framework registration + public endpoint)
 - [ ] Knowledge entry nodes in the graph (entries linked to org entities)
+- [ ] Durable audit log (currently in-memory, cleared on restart)
