@@ -383,6 +383,9 @@ async def ingest_content(req: IngestRequest, request: Request):
                 created_at=now,
                 author_id=req.metadata.get("author_id", ""),
                 content_type=result.content_type.value,
+                drawer_id=entry_id,
+                tenant_id=req.tenant_id,
+                sensitivity=entry["sensitivity"],
             )
         except Exception:
             pass  # In-memory fallback is sufficient
@@ -479,6 +482,9 @@ async def save_entry(req: SaveRequest):
                 created_at=now,
                 author_id=req.author_id,
                 content_type=det_result.content_type.value,
+                drawer_id=entry_id,
+                tenant_id=req.tenant_id,
+                sensitivity=sensitivity,
             )
         except Exception:
             pass
@@ -551,6 +557,10 @@ async def search(req: SearchRequest, request: Request):
             for mr in mp_results:
                 if mr.drawer_id in seen_ids:
                     continue
+                # Tenant scoping: skip results from other tenants. Entries
+                # without a tenant_id predate the field and stay visible.
+                if tenants and (mr.tenant_id or "default") not in tenants:
+                    continue
                 seen_ids.add(mr.drawer_id)
                 results.append({
                     "id": mr.drawer_id,
@@ -563,7 +573,7 @@ async def search(req: SearchRequest, request: Request):
                     "relevance_score": round(mr.similarity, 3),
                     "bm25_score": mr.bm25_score,
                     "source": "mempalace",
-                    "sensitivity": "internal",  # MemPalace doesn't store sensitivity
+                    "sensitivity": mr.sensitivity or "internal",
                 })
         except Exception as exc:
             logger = __import__("logging").getLogger("threadweave.api")

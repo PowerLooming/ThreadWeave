@@ -407,3 +407,78 @@ class TestMemPalaceSearch:
         ids = [r["id"] for r in data["results"]]
         assert len(ids) == len(set(ids)), f"Duplicate IDs in results: {ids}"
 
+
+class TestSearchMempalaceMetadata:
+    """Search must respect sensitivity + tenant stored in MemPalace metadata,
+    and deduplicate across sources via shared entry ids."""
+
+    @staticmethod
+    def _use_temp_palace(monkeypatch, tmp_path):
+        from threadweave import api as api_module
+        from threadweave.mempalace_client import MemPalaceClient
+        mp = MemPalaceClient(palace_path=str(tmp_path / "palace"))
+        assert mp.available, "MemPalace must be importable for these tests"
+        monkeypatch.setattr(api_module, "_mempalace", mp)
+        monkeypatch.setattr(api_module, "_mempalace_available", True)
+
+    def test_result_carries_sensitivity_and_dedups(self, monkeypatch, tmp_path):
+        self._use_temp_palace(monkeypatch, tmp_path)
+        resp = client.post("/api/v1/entries", json={
+            "content": (
+                "The Acme renewal includes a bespoke penalty clause "
+                "negotiated under NDA for our tenant A operations."
+            ),
+            "wing": "engineering",
+            "room": "contracts",
+            "tenant_id": "tenant-a",
+            "sensitivity": "internal",
+        })
+        assert resp.status_code == 201
+        entry_id = resp.json()["id"]
+
+        r = client.post("/api/v1/search", json={
+            "query": "Acme penalty clause", "tenant_id": "tenant-a",
+        })
+        assert r.status_code == 200
+        results = r.json()["results"]
+        hit = next((x for x in results if x["id"] == entry_id), None)
+        assert hit is not None, f"entry {entry_id} missing: {results}"
+        assert hit["sensitivity"] == "internal"
+
+        # Same entry must appear once, not once per search source
+        ids = [x["id"] for x in results]
+        assert len(ids) == len(set(ids)), f"Duplicate IDs in results: {ids}"
+
+    def test_tenant_scoping_applies_to_mempalace_results(self, monkeypatch, tmp_path):
+        self._use_temp_palace(monkeypatch, tmp_path)
+        resp = client.post("/api/v1/entries", json={
+            "content": (
+                "Kongsberg radar calibration schedule for tenant B "
+                "operations is finalized."
+            ),
+            "wing": "engineering",
+            "room": "calibration",
+            "tenant_id": "tenant-b",
+            "sensitivity": "internal",
+        })
+        assert resp.status_code == 201
+        entry_id = resp.json()["id"]
+
+        # tenant-a search must not surface tenant-b entries
+        r = client.post("/api/v1/search", json={
+            "query": "radar calibration", "tenant_id": "tenant-a",
+        })
+        assert r.status_code == 200
+        results = r.json()["results"]
+        assert all(
+            x["id"] != entry_id for x in results
+        ), f"tenant-b entry leaked into tenant-a search: {results}"
+
+        # tenant-b search still finds it
+        r = client.post("/api/v1/search", json={
+            "query": "radar calibration", "tenant_id": "tenant-b",
+        })
+        assert r.status_code == 200
+        results = r.json()["results"]
+        assert any(x["id"] == entry_id for x in results)
+

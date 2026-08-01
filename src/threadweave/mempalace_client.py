@@ -34,6 +34,8 @@ class SearchResult:
     bm25_score: float = 0.0  # BM25 lexical score
     source_file: str = ""
     created_at: str = ""
+    tenant_id: str = ""
+    sensitivity: str = ""
 
 
 class MemPalaceClient:
@@ -159,15 +161,22 @@ class MemPalaceClient:
                 bm25_score=0.0,  # Not available from raw Chroma query
                 source_file=meta.get("source_file", ""),
                 created_at=meta.get("created_at", ""),
+                tenant_id=meta.get("tenant_id", ""),
+                sensitivity=meta.get("sensitivity", ""),
             ))
 
         # Apply BM25 re-ranking (mirrors MemPalace's _hybrid_rank)
         from mempalace.searcher import _bm25_scores, _hybrid_rank
 
+        # NOTE: _hybrid_rank only adds bm25_score — it does NOT copy extra
+        # fields. The drawer id and metadata MUST be embedded in each hit's
+        # metadata dict or they are lost after re-ranking.
         hits = [
             {"text": r.content, "distance": r.distance, "metadata": {
+                "id": r.drawer_id,
                 "wing": r.wing, "room": r.room, "source_file": r.source_file,
                 "created_at": r.created_at,
+                "tenant_id": r.tenant_id, "sensitivity": r.sensitivity,
             }}
             for r in results
         ]
@@ -187,6 +196,8 @@ class MemPalaceClient:
                 bm25_score=round(hit.get("bm25_score", 0), 3),
                 source_file=hit.get("metadata", {}).get("source_file", ""),
                 created_at=hit.get("metadata", {}).get("created_at", ""),
+                tenant_id=hit.get("metadata", {}).get("tenant_id", ""),
+                sensitivity=hit.get("metadata", {}).get("sensitivity", ""),
             ))
         return ranked
 
@@ -290,10 +301,18 @@ class MemPalaceClient:
         created_at: str = "",
         author_id: str = "",
         content_type: str = "",
+        drawer_id: Optional[str] = None,
+        tenant_id: str = "",
+        sensitivity: str = "",
     ) -> Optional[str]:
         """Add a verbatim drawer to the MemPalace collection.
 
-        Returns the ChromaDB document ID on success, None on failure.
+        Pass ``drawer_id`` to keep the MemPalace document id in sync with
+        the ThreadWeave entry id (enables cross-source dedup in search).
+        ``tenant_id`` and ``sensitivity`` are stored as metadata so search
+        results can be tenant-scoped and confidentiality-filtered.
+
+        Returns the drawer ID on success, None on failure.
         """
         if not self.available:
             return None
@@ -306,7 +325,7 @@ class MemPalaceClient:
             if col is None:
                 return None
 
-            drawer_id = str(uuid.uuid4())[:8]
+            drawer_id = drawer_id or str(uuid.uuid4())[:8]
             metadata = {
                 "wing": wing,
                 "room": room,
@@ -315,6 +334,8 @@ class MemPalaceClient:
                 "created_at": created_at,
                 "author_id": author_id,
                 "content_type": content_type,
+                "tenant_id": tenant_id,
+                "sensitivity": sensitivity,
             }
             # Remove empty values so ChromaDB doesn't choke
             metadata = {k: v for k, v in metadata.items() if v}
