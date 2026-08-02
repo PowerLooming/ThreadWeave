@@ -1,6 +1,6 @@
 # ThreadWeave Technical Specification
 
-> **Version:** 0.2.0 — Implementation
+> **Version:** 0.3.0 — Implementation
 > **Status:** Active (updated 2026-08-01)
 
 ## 1. System Overview
