@@ -460,6 +460,58 @@ class TestAuditLog:
         assert len(bob_logs) == 1
 
 
+class TestAuditLogDurable:
+    """Audit entries must survive a restart (SQLite-backed)."""
+
+    def test_entries_survive_restart(self, tmp_path):
+        path = str(tmp_path / "audit.sqlite3")
+        log1 = AuditLog(db_path=path)
+        ctx = RequesterContext(person_id="alice", wing="engineering")
+        entry = {
+            "id": "e1", "sensitivity": "confidential",
+            "wing": "engineering", "tenant_id": "acme",
+        }
+        log1.log_access(ctx, entry, action="view", ip_hash="abc123")
+        log1.log_denied(ctx, entry, "no reason", ip_hash="abc123")
+
+        # "Restart": a brand-new AuditLog on the same database
+        log2 = AuditLog(db_path=path)
+        assert log2.count == 2
+        recent = log2.get_recent(10)
+        assert len(recent) == 2
+        assert all(r["tenant_id"] == "acme" for r in recent)
+        assert all(r["ip_hash"] == "abc123" for r in recent)
+        assert len(log2.get_for_entry("e1")) == 2
+        assert len(log2.get_for_requester("alice")) == 2
+
+    def test_clear_empties_shared_database(self, tmp_path):
+        path = str(tmp_path / "audit.sqlite3")
+        log1 = AuditLog(db_path=path)
+        ctx = RequesterContext(person_id="bob")
+        log1.log_access(ctx, {"id": "e9", "sensitivity": "confidential"}, "view")
+
+        log2 = AuditLog(db_path=path)
+        assert log2.count == 1
+        log2.clear()
+        assert log1.count == 0  # same table, both instances see the delete
+
+    def test_memory_fallback_when_db_unavailable(self, tmp_path):
+        # Block the db path with a regular file so SQLite cannot open it
+        blocker = tmp_path / "blocker"
+        blocker.write_text("not a directory")
+        log = AuditLog(db_path=str(blocker / "audit.sqlite3"))
+        assert log._db is None
+
+        ctx = RequesterContext(person_id="carol")
+        log.log_access(ctx, {"id": "e5", "sensitivity": "confidential"}, "view")
+        assert log.count == 1
+        recent = log.get_recent(5)
+        assert len(recent) == 1
+        assert recent[0]["entry_id"] == "e5"
+        log.clear()
+        assert log.count == 0
+
+
 # ═══════════════════════════════════════════════════════════════════════
 # API Integration Tests
 # ═══════════════════════════════════════════════════════════════════════

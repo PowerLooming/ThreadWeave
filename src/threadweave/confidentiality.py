@@ -33,10 +33,14 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import os
 import re
+import sqlite3
+import threading
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
+from pathlib import Path
 from typing import Optional
 
 logger = logging.getLogger("threadweave.confidentiality")
@@ -418,19 +422,89 @@ class AuditEntry:
             "entry_wing": self.entry_wing,
             "reason": self.reason,
             "tenant_id": self.tenant_id,
+            "ip_hash": self.ip_hash,
         }
+
+
+_AUDIT_SCHEMA = """
+CREATE TABLE IF NOT EXISTS audit_entries (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    timestamp TEXT NOT NULL,
+    requester_id TEXT NOT NULL,
+    requester_wing TEXT NOT NULL,
+    action TEXT NOT NULL,
+    entry_id TEXT NOT NULL,
+    entry_sensitivity TEXT NOT NULL,
+    entry_wing TEXT NOT NULL,
+    reason TEXT NOT NULL DEFAULT '',
+    tenant_id TEXT NOT NULL DEFAULT 'default',
+    ip_hash TEXT NOT NULL DEFAULT ''
+)
+"""
+
+_AUDIT_COLUMNS = (
+    "timestamp, requester_id, requester_wing, action, entry_id, "
+    "entry_sensitivity, entry_wing, reason, tenant_id, ip_hash"
+)
 
 
 class AuditLog:
     """Append-only audit log for sensitive content access.
 
-    In production, this would write to a separate audit database
-    or append-only log file. Currently in-memory for development.
+    Durable by default: backed by SQLite at ~/.threadweave/audit.sqlite3
+    (override with THREADWEAVE_AUDIT_DB or the ``db_path`` argument), so
+    the trail survives restarts. Falls back to an in-memory ring buffer
+    only if the database cannot be opened.
     """
 
-    def __init__(self, max_entries: int = 10_000):
-        self._entries: list[AuditEntry] = []
+    def __init__(self, max_entries: int = 10_000, db_path: Optional[str] = None):
         self._max_entries = max_entries
+        self._entries: list[AuditEntry] = []  # in-memory fallback
+        self._db: Optional[sqlite3.Connection] = None
+        self._lock = threading.Lock()
+        path = db_path or os.environ.get(
+            "THREADWEAVE_AUDIT_DB",
+            str(Path.home() / ".threadweave" / "audit.sqlite3"),
+        )
+        try:
+            self._init_db(path)
+        except Exception as exc:
+            logger.warning(
+                "Audit DB unavailable at %s (%s) — using in-memory audit log",
+                path, exc,
+            )
+
+    def _init_db(self, path: str) -> None:
+        Path(path).parent.mkdir(parents=True, exist_ok=True)
+        conn = sqlite3.connect(path, check_same_thread=False)
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute(_AUDIT_SCHEMA)
+        conn.commit()
+        self._db = conn
+
+    # ── writes ──────────────────────────────────────────────────
+
+    def _append(self, entry: AuditEntry) -> None:
+        if self._db is not None:
+            try:
+                with self._lock:
+                    self._db.execute(
+                        f"INSERT INTO audit_entries ({_AUDIT_COLUMNS}) "
+                        "VALUES (?,?,?,?,?,?,?,?,?,?)",
+                        (entry.timestamp, entry.requester_id,
+                         entry.requester_wing, entry.action, entry.entry_id,
+                         entry.entry_sensitivity, entry.entry_wing,
+                         entry.reason, entry.tenant_id, entry.ip_hash),
+                    )
+                    self._db.commit()
+                return
+            except Exception as exc:
+                logger.warning("Audit DB append failed: %s", exc)
+        # In-memory fallback
+        self._entries.append(entry)
+        if len(self._entries) > self._max_entries:
+            self._entries = self._entries[-self._max_entries:]
 
     def log_access(
         self,
@@ -455,9 +529,7 @@ class AuditLog:
             tenant_id=entry.get("tenant_id", "default"),
             ip_hash=ip_hash,
         )
-        self._entries.append(entry)
-        if len(self._entries) > self._max_entries:
-            self._entries = self._entries[-self._max_entries:]
+        self._append(entry)
 
     def log_denied(
         self,
@@ -480,16 +552,41 @@ class AuditLog:
             tenant_id=entry.get("tenant_id", "default"),
             ip_hash=ip_hash,
         )
-        self._entries.append(entry)
-        if len(self._entries) > self._max_entries:
-            self._entries = self._entries[-self._max_entries:]
+        self._append(entry)
+
+    # ── reads ───────────────────────────────────────────────────
+
+    def _query(self, sql: str, params: tuple) -> Optional[list[dict]]:
+        """Run a SELECT; None means the DB is unavailable (use fallback)."""
+        if self._db is None:
+            return None
+        try:
+            with self._lock:
+                rows = self._db.execute(sql, params).fetchall()
+            return [dict(r) for r in rows]
+        except Exception as exc:
+            logger.warning("Audit DB query failed: %s", exc)
+            return None
 
     def get_recent(self, limit: int = 50) -> list[dict]:
         """Get the most recent audit entries."""
+        rows = self._query(
+            f"SELECT {_AUDIT_COLUMNS} FROM audit_entries ORDER BY id DESC LIMIT ?",
+            (limit,),
+        )
+        if rows is not None:
+            return rows
         return [e.to_dict() for e in self._entries[-limit:]]
 
     def get_for_entry(self, entry_id: str) -> list[dict]:
         """Get all audit entries for a specific knowledge entry."""
+        rows = self._query(
+            f"SELECT {_AUDIT_COLUMNS} FROM audit_entries WHERE entry_id = ? "
+            "ORDER BY id",
+            (entry_id,),
+        )
+        if rows is not None:
+            return rows
         return [
             e.to_dict()
             for e in self._entries
@@ -498,6 +595,13 @@ class AuditLog:
 
     def get_for_requester(self, requester_id: str) -> list[dict]:
         """Get all audit entries for a specific requester."""
+        rows = self._query(
+            f"SELECT {_AUDIT_COLUMNS} FROM audit_entries WHERE requester_id = ? "
+            "ORDER BY id",
+            (requester_id,),
+        )
+        if rows is not None:
+            return rows
         return [
             e.to_dict()
             for e in self._entries
@@ -506,10 +610,20 @@ class AuditLog:
 
     def clear(self) -> None:
         """Clear all audit entries."""
+        if self._db is not None:
+            try:
+                with self._lock:
+                    self._db.execute("DELETE FROM audit_entries")
+                    self._db.commit()
+            except Exception as exc:
+                logger.warning("Audit DB clear failed: %s", exc)
         self._entries.clear()
 
     @property
     def count(self) -> int:
+        rows = self._query("SELECT COUNT(*) AS n FROM audit_entries", ())
+        if rows is not None:
+            return rows[0]["n"]
         return len(self._entries)
 
 

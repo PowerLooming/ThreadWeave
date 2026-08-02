@@ -11,6 +11,11 @@ from unittest.mock import MagicMock
 
 import pytest
 
+# Isolate the durable audit log from the real ~/.threadweave directory.
+# Must be set before threadweave.confidentiality is imported.
+_audit_tmp = tempfile.mkdtemp(prefix="threadweave-audit-test-")
+os.environ["THREADWEAVE_AUDIT_DB"] = os.path.join(_audit_tmp, "audit.sqlite3")
+
 
 @pytest.fixture
 def sample_threadweave_entry():

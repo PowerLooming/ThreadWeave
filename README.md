@@ -137,6 +137,7 @@ Gmail requires an app password. If your org disabled app passwords, use `ingest_
 | `THREADWEAVE_REQUIRE_AUTH` | Set to `1` to enable API key auth |
 | `THREADWEAVE_API_KEYS` | `tenant:key,tenant:key` format. For roles/identity (admin, hr_admin, legal, wing, person_id) use `~/.threadweave/keys.json` instead |
 | `THREADWEAVE_CORS_ORIGINS` | Comma-separated allowed origins (default: `*`). Restrict when exposed beyond local dev |
+| `THREADWEAVE_AUDIT_DB` | Audit log database path (default: `~/.threadweave/audit.sqlite3`). Falls back to in-memory if the DB can't be opened |
 
 **Connector extras:** `pip install -e ".[gws]"` (Google Workspace), `".[graph]"` (Microsoft Graph connector), `".[teams]"`, `".[sharepoint]"`, `".[email]"`, `".[outlook]"`, or `".[all-connectors]"` for everything.
 
