@@ -186,11 +186,13 @@ def map_threadweave_to_graph(
             value=wing_to_group[wing],
         ))
     else:
-        # Default: visible to everyone in the tenant
+        # Default: visible to everyone in the tenant.
+        # Graph requires the literal value "Everyone" for the everyone
+        # ACL type (empty value → 400 "The Value field is required").
         acl_entries.append(GraphAclEntry(
             accessType="grant",
             type="everyone",
-            value="",
+            value="Everyone",
         ))
 
     return GraphExternalItem(

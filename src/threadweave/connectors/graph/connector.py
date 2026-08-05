@@ -218,6 +218,7 @@ class ThreadWeaveGraphConnector:
         """
         schema_url = f"{self.connection_endpoint}/schema"
         schema_payload = {
+            "baseType": "externalItem",
             "baseUrl": self.threadweave_url,
             "properties": [
                 {
@@ -306,8 +307,13 @@ class ThreadWeaveGraphConnector:
         )
         return False
 
-    def _poll_schema_operation(self, location: str, max_wait: int = 60) -> bool:
-        """Poll an async schema operation until it completes."""
+    def _poll_schema_operation(self, location: str, max_wait: int = 300) -> bool:
+        """Poll an async schema operation until it completes.
+
+        Microsoft's schema operations routinely take 1-3 minutes; the
+        previous 60s window timed out on every live registration
+        (verified 2026-08-05 against a full M365 sandbox).
+        """
         import time
         deadline = time.time() + max_wait
         headers = self._headers()
@@ -510,31 +516,27 @@ class ThreadWeaveGraphConnector:
     def _fetch_all_entries(self) -> list[dict]:
         """Fetch all entries from the ThreadWeave API.
 
-        Currently fetches wings → rooms → entries.
-        In production, this should use a paginated list endpoint.
+        Uses the per-tenant list endpoint (GET /api/v1/tenants/{tenant}/entries)
+        then fetches full content for each entry. The old implementation
+        searched with an empty query, which the API rejects (query must be
+        at least 1 char) — fixed 2026-08-05 during live testing.
         """
         try:
-            # Get all entries via the search endpoint with a wildcard
-            # (ThreadWeave doesn't have a list-all endpoint yet, so we use search)
-            resp = requests.post(
-                f"{self.threadweave_url}/api/v1/search",
-                json={"query": "", "limit": 500},
-                timeout=30,
-            )
+            list_url = f"{self.threadweave_url}/api/v1/tenants/default/entries"
+            resp = requests.get(list_url, timeout=30)
             if resp.status_code != 200:
                 logger.error(
-                    "Failed to fetch entries: %s", resp.status_code,
+                    "Failed to list entries: %s", resp.status_code,
                 )
                 return []
 
-            data = resp.json()
-            results = data.get("results", [])
+            listing = resp.json()
 
-            # Fetch full content for each result
+            # Fetch full content for each entry
             entries = []
-            for r in results:
+            for item in listing:
                 entry_resp = requests.get(
-                    f"{self.threadweave_url}/api/v1/entries/{r['id']}",
+                    f"{self.threadweave_url}/api/v1/entries/{item['id']}",
                     timeout=10,
                 )
                 if entry_resp.status_code == 200:
@@ -542,14 +544,14 @@ class ThreadWeaveGraphConnector:
                 else:
                     # Use the preview data as fallback
                     entries.append({
-                        "id": r["id"],
-                        "content": r.get("content_preview", ""),
-                        "wing": r.get("wing", ""),
-                        "room": r.get("room", ""),
-                        "created_at": r.get("created_at", ""),
-                        "content_type": r.get("content_type", ""),
+                        "id": item["id"],
+                        "content": "",
+                        "wing": "",
+                        "room": "",
+                        "created_at": item.get("created_at", ""),
+                        "content_type": "",
                         "source_type": "unknown",
-                        "author_id": r.get("author_team", ""),
+                        "author_id": "",
                         "scope": "team",
                     })
 

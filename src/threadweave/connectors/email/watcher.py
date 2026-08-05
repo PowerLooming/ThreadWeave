@@ -137,17 +137,19 @@ class MailWatcher:
             f"isRead eq false and receivedDateTime ge {since.isoformat()}"
         )
 
-        path = (
-            f"/users/{mailbox}/mailFolders/{folder}/messages"
-            f"?$filter={filter_query}"
-            f"&$orderby=receivedDateTime desc"
-            f"&$top={max_results}"
-            f"&$select=id,conversationId,subject,from,toRecipients,"
-            f"ccRecipients,body,hasAttachments,receivedDateTime,"
-            f"isRead,importance,internetMessageHeaders"
-        )
+        path = f"/users/{mailbox}/mailFolders/{folder}/messages"
+        params = {
+            "$filter": filter_query,
+            "$orderby": "receivedDateTime desc",
+            "$top": max_results,
+            "$select": (
+                "id,conversationId,subject,from,toRecipients,"
+                "ccRecipients,body,hasAttachments,receivedDateTime,"
+                "isRead,importance,internetMessageHeaders"
+            ),
+        }
 
-        data = await self.graph._request("GET", path)
+        data = await self.graph._request("GET", path, params=params)
         messages = []
 
         for item in data.get("value", []):
@@ -168,18 +170,22 @@ class MailWatcher:
         knowledge mailbox on reply #5, we need the full thread
         (messages 1-5) for context.
         """
-        path = (
-            f"/users/{mailbox}/messages"
-            f"?$filter=conversationId eq '{conversation_id}'"
-            f"&$orderby=receivedDateTime asc"
-            f"&$top=100"
-            f"&$select=id,conversationId,subject,from,toRecipients,"
-            f"ccRecipients,body,hasAttachments,receivedDateTime,"
-            f"isRead,importance"
-        )
+        path = f"/users/{mailbox}/messages"
+        params = {
+            "$filter": f"conversationId eq '{conversation_id}'",
+            "$top": 100,
+            "$select": (
+                "id,conversationId,subject,from,toRecipients,"
+                "ccRecipients,body,hasAttachments,receivedDateTime,"
+                "isRead,importance"
+            ),
+        }
 
-        data = await self.graph._request("GET", path)
+        data = await self.graph._request("GET", path, params=params)
         messages = [self._parse_message(item) for item in data.get("value", [])]
+        # Graph rejects $orderby combined with a conversationId filter
+        # (InefficientFilter) — sort client-side instead.
+        messages.sort(key=lambda m: m.received_at)
 
         if not messages:
             return EmailThread(
