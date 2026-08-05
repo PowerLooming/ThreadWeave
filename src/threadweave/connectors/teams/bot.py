@@ -382,7 +382,15 @@ class ThreadWeaveTeamsBot(ActivityHandler if BOTBUILDER_AVAILABLE else object):
         if activity.entities:
             for entity in activity.entities:
                 if entity.type == "mention":
-                    mentioned = entity.get("mentioned", {})
+                    # Modern botbuilder (>=4.15) exposes mention data via
+                    # additional_properties (Entity is a msrest Model now,
+                    # not a dict — .get() raises AttributeError). Fall back
+                    # to a plain dict for older SDK versions.
+                    mentioned = {}
+                    if hasattr(entity, "additional_properties"):
+                        mentioned = entity.additional_properties.get("mentioned", {})
+                    elif isinstance(entity, dict):
+                        mentioned = entity.get("mentioned", {})
                     if mentioned.get("id") == activity.recipient.id:
                         return True
 
