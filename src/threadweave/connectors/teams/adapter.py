@@ -27,10 +27,6 @@ import sys
 try:
     from aiohttp import web
     from botbuilder.core import BotFrameworkAdapter, BotFrameworkAdapterSettings
-    from botbuilder.core.integration import (
-        aiohttp_error_middleware,
-        aiohttp_channel_service_routes,
-    )
     from botbuilder.integration.aiohttp import (
         ConfigurationBotFrameworkAuthentication,
         CloudAdapter,
@@ -61,12 +57,24 @@ def create_adapter() -> BotFrameworkAdapter | object:
 
     app_id = os.environ.get("MICROSOFT_APP_ID", "")
     app_password = os.environ.get("MICROSOFT_APP_PASSWORD", "")
+    app_tenant = os.environ.get("MICROSOFT_APP_TENANT_ID", "")
 
     if not app_id or not app_password:
         logger.warning(
             "MICROSOFT_APP_ID and MICROSOFT_APP_PASSWORD not set. "
             "Bot will fail to authenticate with Teams."
         )
+
+    # CloudAdapter's ConfigurationBotFrameworkAuthentication reads UPPERCASE
+    # attributes (APP_ID, APP_PASSWORD, APP_TYPE, APP_TENANTID) off the config
+    # object. Passing a BotFrameworkAdapterSettings (lowercase attrs) silently
+    # produces an unauthenticated adapter that accepts ANY request — fixed
+    # 2026-08-05 during live Teams testing.
+    class _BotConfig:
+        APP_TYPE = os.environ.get("MICROSOFT_APP_TYPE", "MultiTenant")
+        APP_ID = app_id
+        APP_PASSWORD = app_password
+        APP_TENANTID = app_tenant
 
     settings = BotFrameworkAdapterSettings(
         app_id=app_id,
@@ -76,7 +84,7 @@ def create_adapter() -> BotFrameworkAdapter | object:
     # Try CloudAdapter first (modern), fall back to BotFrameworkAdapter
     try:
         if "CloudAdapter" in globals():
-            auth = ConfigurationBotFrameworkAuthentication(settings)
+            auth = ConfigurationBotFrameworkAuthentication(_BotConfig)
             return CloudAdapter(auth)
     except Exception:
         pass
@@ -97,10 +105,15 @@ def create_app(
     adapter = create_adapter()
     bot = ThreadWeaveTeamsBot(api_base_url=api_base_url, mode=mode)
 
-    app = web.Application(middlewares=[aiohttp_error_middleware])
+    app = web.Application()
 
-    # Set up the bot framework routes
-    aiohttp_channel_service_routes(app, "/api/messages", bot, adapter)
+    # Bot Framework messaging endpoint — POST /api/messages.
+    # Modern botbuilder (>=4.15) dropped the aiohttp_channel_service_routes
+    # helper; the canonical pattern is adapter.process(request, bot).
+    async def messages(request: web.Request) -> web.Response:
+        return await adapter.process(request, bot)
+
+    app.router.add_post("/api/messages", messages)
 
     # Health check endpoint
     async def health(request: web.Request) -> web.Response:

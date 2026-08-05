@@ -159,7 +159,8 @@ class ThreadWeaveTeamsBot(ActivityHandler if BOTBUILDER_AVAILABLE else object):
                 return
 
         text = (activity.text or "").strip()
-        if not text or activity.from_property.id == activity.recipient.id:
+        from_id = getattr(activity.from_property, "id", None) if activity.from_property else None
+        if not text or not from_id or from_id == activity.recipient.id:
             return
 
         is_mentioned = self._is_bot_mentioned(activity)
@@ -346,7 +347,32 @@ class ThreadWeaveTeamsBot(ActivityHandler if BOTBUILDER_AVAILABLE else object):
                 json=payload,
             )
             resp.raise_for_status()
-            return resp.json()
+            result = resp.json()
+
+        # The ingest pipeline gates on the detector (should_save >= 0.40).
+        # When the user EXPLICITLY approved the save via the card, their
+        # consent overrides the heuristic — fall back to the unconditional
+        # save endpoint instead of reporting a fake success. (Fixed
+        # 2026-08-05: explicit saves of low-confidence content previously
+        # returned id="not_saved" and the bot announced "Saved!" anyway.)
+        if result.get("id") == "not_saved" or result.get("should_save") is False:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                resp = await client.post(
+                    f"{self.api_base_url}/api/v1/entries",
+                    json={
+                        "content": content,
+                        "wing": "general",
+                        "room": content_type,
+                        "scope": scope,
+                        "source_type": "teams",
+                        "title": title,
+                        "tenant_id": "default",
+                    },
+                )
+                resp.raise_for_status()
+                return resp.json()
+
+        return result
 
     # ---- Helpers ----
 
