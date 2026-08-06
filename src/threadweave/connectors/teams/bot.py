@@ -206,7 +206,8 @@ class ThreadWeaveTeamsBot(ActivityHandler if BOTBUILDER_AVAILABLE else object):
         self.stats["prompted"] += 1
         fallback = activity.id or "msg"
         entry_id = f"{fallback}_{activity.from_property.id[-8:]}"
-        self._pending[entry_id] = (result, text)
+        ctx = self._conversation_context(activity)
+        self._pending[entry_id] = (result, text, ctx)
 
         card = self._build_prompt_card(entry_id, result, text)
         await turn_context.send_activity(MessageFactory.attachment(card))
@@ -231,7 +232,8 @@ class ThreadWeaveTeamsBot(ActivityHandler if BOTBUILDER_AVAILABLE else object):
         if result.confidence < 0.1:
             result.confidence = 0.5
 
-        self._pending[entry_id] = (result, text)
+        ctx = self._conversation_context(activity)
+        self._pending[entry_id] = (result, text, ctx)
         card = self._build_prompt_card(entry_id, result, text)
         await turn_context.send_activity(MessageFactory.attachment(card))
 
@@ -279,7 +281,7 @@ class ThreadWeaveTeamsBot(ActivityHandler if BOTBUILDER_AVAILABLE else object):
             )
             return
 
-        detection, original_text = stored
+        detection, original_text, ctx = stored
 
         try:
             saved = await self._save_to_api(
@@ -288,6 +290,8 @@ class ThreadWeaveTeamsBot(ActivityHandler if BOTBUILDER_AVAILABLE else object):
                 scope=detection.suggested_scope,
                 title=detection.suggested_title,
                 confidence=detection.confidence,
+                wing=ctx.get("wing", "general"),
+                room=ctx.get("room", ""),
             )
 
             self.stats["saved"] += 1
@@ -310,7 +314,7 @@ class ThreadWeaveTeamsBot(ActivityHandler if BOTBUILDER_AVAILABLE else object):
             await turn_context.send_activity("Entry not found.")
             return
 
-        detection, _ = stored
+        detection, _, _ = stored
         preview = detection.suggested_title or "this knowledge"
         await turn_context.send_activity(
             f"**Edit mode:** Reply with the final version of '{preview}' "
@@ -334,17 +338,22 @@ class ThreadWeaveTeamsBot(ActivityHandler if BOTBUILDER_AVAILABLE else object):
         scope: str = "team",
         title: str = "",
         confidence: float = 0.5,
+        wing: str = "general",
+        room: str = "",
     ) -> dict:
         """Save knowledge via central ingestion pipeline POST /api/v1/ingest."""
         import httpx
+
+        if not room:
+            room = content_type
 
         payload = {
             "content": content,
             "source": "teams",
             "tenant_id": "default",
             "metadata": {
-                "wing": "general",
-                "room": content_type,
+                "wing": wing,
+                "room": room,
                 "title": title,
                 "scope": scope,
                 "content_type": content_type,
@@ -371,8 +380,8 @@ class ThreadWeaveTeamsBot(ActivityHandler if BOTBUILDER_AVAILABLE else object):
                     f"{self.api_base_url}/api/v1/entries",
                     json={
                         "content": content,
-                        "wing": "general",
-                        "room": content_type,
+                        "wing": wing,
+                        "room": room,
                         "scope": scope,
                         "source_type": "teams",
                         "title": title,
@@ -383,6 +392,37 @@ class ThreadWeaveTeamsBot(ActivityHandler if BOTBUILDER_AVAILABLE else object):
                 return resp.json()
 
         return result
+
+    # ---- Conversation Context ----
+
+    def _conversation_context(self, activity: Activity) -> dict:
+        """Derive ThreadWeave wing/room from the Teams conversation.
+
+        Channel message  → wing = team name, room = channel name
+        Group chat       → wing = "general", room = "group-chat"
+        DM               → wing = "general", room = "dm"
+
+        Falls back to the default wing "general" when no team context
+        exists (DMs, group chats) — the palace model expects wing=team,
+        and untagged captures land in the general wing.
+        """
+        cd = getattr(activity, "channel_data", None) or {}
+        if not isinstance(cd, dict):
+            cd = {}
+
+        chat_type = cd.get("chatType", "")
+
+        if chat_type == "channel":
+            team = cd.get("team", {}) or {}
+            channel = cd.get("channel", {}) or {}
+            wing = (team.get("name") or "general").strip() or "general"
+            room = (channel.get("name") or "").strip() or "general"
+            return {"wing": wing, "room": room}
+
+        if chat_type == "groupChat":
+            return {"wing": "general", "room": "group-chat"}
+
+        return {"wing": "general", "room": "dm"}
 
     # ---- Helpers ----
 
