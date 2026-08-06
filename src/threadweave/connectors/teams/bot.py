@@ -194,6 +194,11 @@ class ThreadWeaveTeamsBot(ActivityHandler if BOTBUILDER_AVAILABLE else object):
             is_worth_saving, text
         )
         self.stats["detected"] += 1
+        logger.info(
+            "Passive: type=%s conf=%.2f should_save=%s len=%d text=%r",
+            result.content_type.value, result.confidence, should_save,
+            len(text), text[:80],
+        )
 
         if not should_save or result.confidence < self.min_confidence:
             return
@@ -214,6 +219,11 @@ class ThreadWeaveTeamsBot(ActivityHandler if BOTBUILDER_AVAILABLE else object):
         """Handle explicit save request (@ThreadWeave save this)."""
         should_save, result = await asyncio.to_thread(
             is_worth_saving, text
+        )
+        logger.info(
+            "Explicit: type=%s conf=%.2f should_save=%s len=%d text=%r",
+            result.content_type.value, result.confidence, should_save,
+            len(text), text[:80],
         )
         fallback = activity.id or "msg"
         entry_id = f"explicit_{fallback}"
