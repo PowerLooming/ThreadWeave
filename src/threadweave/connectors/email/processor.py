@@ -95,7 +95,10 @@ class EmailProcessor:
                 word_count=len(text.split()),
             )
         self.stats["emails_processed"] += 1
-        return await self._detect_and_save(text=text, source="single", email=email)
+        return await self._detect_and_save(
+            text=text, source="single", email=email,
+            participants=[email.sender_email] + email.recipients,
+        )
 
     async def process_thread(self, thread: EmailThread) -> ProcessedEmail:
         """Process an entire email thread as one knowledge unit."""
@@ -211,7 +214,7 @@ class EmailProcessor:
         """Submit email knowledge to the central ingestion pipeline."""
         import httpx
 
-        wing = await self._resolve_wing(sender)
+        wing = await self._resolve_wing(sender, recipients=participants)
 
         try:
             async with httpx.AsyncClient(timeout=30.0) as client:
@@ -242,33 +245,44 @@ class EmailProcessor:
             logger.error("Ingest API call failed: %s", e)
             raise
 
-    async def _resolve_wing(self, sender: str) -> str:
-        """Map a sender email to a palace wing via their department.
+    async def _resolve_wing(self, sender: str, recipients: list | None = None) -> str:
+        """Map an email to a palace wing via the participants' departments.
 
-        Palace model: wing = team/department. Resolves through Graph
-        (User.Read.All) when a graph client is configured, caching per
-        sender. Falls back to the "email" wing when unknown.
+        Palace model: wing = team/department. Resolution order:
+        1. sender's department (Graph, User.Read.All)
+        2. first recipient with a department (a conversation with a
+           dept-less sender still belongs to the recipients' wing)
+        3. fallback "email" wing
+
+        Lookups are cached per address; Graph failures degrade gracefully.
         """
-        if not self.graph or not sender:
+        if not self.graph:
             return "email"
-        if sender in self._wing_cache:
-            return self._wing_cache[sender]
 
-        wing = "email"
+        for addr in [sender] + list(recipients or []):
+            if not addr:
+                continue
+            if addr in self._wing_cache:
+                return self._wing_cache[addr]
+            wing = await self._lookup_department(addr)
+            self._wing_cache[addr] = wing
+            if wing != "email":
+                return wing
+        return "email"
+
+    async def _lookup_department(self, address: str) -> str:
+        """Resolve one address to its department via Graph (cached)."""
         try:
             data = await self.graph._request(
                 "GET",
-                f"/users/{sender}",
+                f"/users/{address}",
                 params={"$select": "department,userPrincipalName"},
             )
             dept = (data.get("department") or "").strip()
-            if dept:
-                wing = dept
+            return dept if dept else "email"
         except Exception as e:
-            logger.warning("Wing lookup failed for %s: %s", sender, e)
-
-        self._wing_cache[sender] = wing
-        return wing
+            logger.warning("Wing lookup failed for %s: %s", address, e)
+            return "email"
 
     @staticmethod
     def _thread_participants(thread: EmailThread) -> list[str]:

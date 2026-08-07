@@ -112,7 +112,12 @@ HR_SIGNALS = [
     re.compile(r"\b(medical leave|FMLA|disability|accommodation)\b", re.I),
     re.compile(r"\b(HR case|employee relations|investigation|complaint)\b", re.I),
     re.compile(r"\b(headcount|requisition|offer letter|candidate assessment)\b", re.I),
-    re.compile(r"\b(promotion|demotion|reorganization|org chart)\b", re.I),
+    # "promotion" is ambiguous (marketing promo vs career step) — require
+    # career context so retail promo reviews don't get HR-locked.
+    # (Fixed 2026-08-07: "seasonal promotion review" with a discount was
+    # classified hr_privileged and locked out of its Retail wing.)
+    re.compile(r"\bpromotion\b(?=.*\b(role|career|job|position|staff|employee|hire|recruit|salary|compensation)\b)", re.I),
+    re.compile(r"\b(demotion|reorganization|org chart)\b", re.I),
 ]
 
 # Financial / sensitive business patterns
