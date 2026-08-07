@@ -12,6 +12,7 @@ Usage:
 
 import argparse
 import json
+import os
 import sys
 from datetime import datetime, timezone, timedelta
 
@@ -159,6 +160,34 @@ def cmd_graph_daemon(args):
     )
     engine = SyncEngine(connector, sync_interval=args.interval)
     engine.run_daemon()
+
+
+# ── Email Commands ────────────────────────────────────────────────
+
+def cmd_email_watch(args):
+    """Run continuous email polling (M365 -> on-prem, one-way)."""
+    import asyncio
+    from threadweave.connectors.email.watcher import MailWatcher
+    from threadweave.connectors.email.processor import EmailProcessor
+    from threadweave.connectors.email.daemon import EmailWatchDaemon
+
+    if not args.mailbox:
+        print("Email watcher requires --mailbox (or THREADWEAVE_MAILBOX).",
+              file=sys.stderr)
+        sys.exit(1)
+
+    watcher = MailWatcher()
+    processor = EmailProcessor()
+    daemon = EmailWatchDaemon(
+        watcher=watcher,
+        processor=processor,
+        mailbox=args.mailbox,
+        interval=args.interval,
+        max_results=args.max_results,
+        mark_read=args.mark_read,
+        use_threads=not args.no_threads,
+    )
+    asyncio.run(daemon.run())
 
 
 # ── Google Workspace Commands ──────────────────────────────────────
@@ -519,6 +548,24 @@ def main():
     p_gws_onboard.add_argument("--host", default="localhost")
     p_gws_onboard.add_argument("--port", type=int, default=8000)
 
+    p_email = sub.add_parser("email", help="Microsoft 365 email connector")
+    p_email_watch = email_sub = p_email.add_subparsers(dest="email_command")
+    p_email_watch = email_sub.add_parser("watch",
+                                         help="Continuous polling of a mailbox "
+                                              "(M365 -> on-prem, one-way)")
+    p_email_watch.add_argument("--mailbox",
+                               default=os.environ.get("THREADWEAVE_MAILBOX", ""),
+                               help="Mailbox UPN/email (or THREADWEAVE_MAILBOX)")
+    p_email_watch.add_argument("--interval", type=int, default=300,
+                               help="Poll interval in seconds (default 300)")
+    p_email_watch.add_argument("--max-results", type=int, default=20,
+                               help="Unread messages fetched per poll")
+    p_email_watch.add_argument("--mark-read", action="store_true",
+                               help="Mark processed emails as read")
+    p_email_watch.add_argument("--no-threads", action="store_true",
+                               help="Process messages individually, skip "
+                                    "conversation thread grouping")
+
     args = parser.parse_args()
 
     if args.command == "detect":
@@ -555,6 +602,11 @@ def main():
             cmd_gws_onboard(args)
         else:
             p_gws.print_help()
+    elif args.command == "email":
+        if args.email_command == "watch":
+            cmd_email_watch(args)
+        else:
+            p_email.print_help()
     else:
         parser.print_help()
 

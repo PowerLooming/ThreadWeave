@@ -29,6 +29,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
+MAX_FOLDER_DEPTH = 8  # recursion bound for full-drive imports
+
 from threadweave.connectors.sharepoint.watcher import (
     GraphClient,
     ChangeNotification,
@@ -257,76 +259,138 @@ class DocumentProcessor:
             return batch
 
         for item in items:
-            # Skip folders for now (recursion can be added)
-            if item.get("folder"):
+            # Key-presence check, not truthiness: Graph returns a folder
+            # object that can be empty {} (falsy) but is still a folder.
+            if "folder" in item:
+                # Recurse into subfolders (full-import must cover the
+                # whole library — fixed 2026-08-07: previously folders
+                # were skipped, so sites with folder-organized content
+                # (e.g. Mark 8: /Design, /Digital Assets Web) imported
+                # ZERO documents).
+                sub_path = f"{folder_path.rstrip('/')}/{item['name']}"
+                await self._process_folder(
+                    batch, site_id, drive_id, sub_path,
+                    site_name, drive_name, depth=1,
+                )
                 continue
 
-            file_name = item.get("name", "unknown")
-            ext = Path(file_name).suffix.lower()
+            await self._process_file(
+                batch, site_id, drive_id, folder_path, item,
+                site_name, drive_name,
+            )
 
-            if ext not in self.SUPPORTED_EXTENSIONS:
+        batch.completed_at = datetime.now(timezone.utc).isoformat()
+        return batch
+
+    async def _process_folder(
+        self,
+        batch: ProcessingBatch,
+        site_id: str,
+        drive_id: str,
+        folder_path: str,
+        site_name: str,
+        drive_name: str,
+        depth: int = 0,
+    ) -> None:
+        """Recursively process a drive folder (bounded by MAX_FOLDER_DEPTH)."""
+        if depth > MAX_FOLDER_DEPTH:
+            logger.warning("Folder depth limit (%d) reached at %s", MAX_FOLDER_DEPTH, folder_path)
+            return
+        try:
+            items = await self.graph.list_folder(site_id, drive_id, folder_path)
+        except Exception as e:
+            logger.error("Failed to list folder %s: %s", folder_path, e)
+            return
+        for item in items:
+            if "folder" in item:
+                sub_path = f"{folder_path.rstrip('/')}/{item['name']}"
+                await self._process_folder(
+                    batch, site_id, drive_id, sub_path,
+                    site_name, drive_name, depth=depth + 1,
+                )
+                continue
+            await self._process_file(
+                batch, site_id, drive_id, folder_path, item,
+                site_name, drive_name,
+            )
+
+    async def _process_file(
+        self,
+        batch: ProcessingBatch,
+        site_id: str,
+        drive_id: str,
+        folder_path: str,
+        item: dict,
+        site_name: str,
+        drive_name: str,
+    ) -> None:
+        """Download, extract, and mine a single drive file."""
+        file_name = item.get("name", "unknown")
+        ext = Path(file_name).suffix.lower()
+
+        if ext not in self.SUPPORTED_EXTENSIONS:
+            self.stats["total_skipped"] += 1
+            return
+
+        if item.get("size", 0) > self.max_file_size:
+            self.stats["total_skipped"] += 1
+            return
+
+        try:
+            content = await self.graph.download_file(
+                site_id, drive_id, item["id"]
+            )
+
+            content_hash = hashlib.sha256(content).hexdigest()
+            if content_hash in self._processed_hashes:
                 self.stats["total_skipped"] += 1
-                continue
+                return
+            self._processed_hashes.add(content_hash)
 
-            if item.get("size", 0) > self.max_file_size:
+            text = self._extract_text(content, ext, file_name)
+            if not text.strip():
                 self.stats["total_skipped"] += 1
-                continue
+                return
 
-            try:
-                content = await self.graph.download_file(
-                    site_id, drive_id, item["id"]
-                )
+            drawer_ids = await self._mine_to_mempalace(
+                text=text,
+                wing=self._sanitize_wing(site_name or site_id),
+                room=self._sanitize_room(drive_name or drive_id),
+                source_file=file_name,
+            )
 
-                content_hash = hashlib.sha256(content).hexdigest()
-                if content_hash in self._processed_hashes:
-                    self.stats["total_skipped"] += 1
-                    continue
-                self._processed_hashes.add(content_hash)
+            doc = ProcessedDocument(
+                file_name=file_name,
+                file_path=self._join_path(folder_path, file_name),
+                site_name=site_name,
+                library_name=drive_name,
+                mime_type=self._guess_mime(ext),
+                size_bytes=len(content),
+                text_content=text,
+                word_count=len(text.split()),
+                drawer_ids=drawer_ids,
+            )
+            batch.documents.append(doc)
+            batch.total_processed += 1
+            self.stats["total_processed"] += 1
+            self.stats["total_documents"] += 1
 
-                text = self._extract_text(content, ext, file_name)
-                if not text.strip():
-                    self.stats["total_skipped"] += 1
-                    continue
-
-                drawer_ids = await self._mine_to_mempalace(
-                    text=text,
-                    wing=self._sanitize_wing(site_name or site_id),
-                    room=self._sanitize_room(drive_name or drive_id),
-                    source_file=file_name,
-                )
-
-                doc = ProcessedDocument(
-                    file_name=file_name,
-                    file_path=f"{folder_path}/{file_name}",
-                    site_name=site_name,
-                    library_name=drive_name,
-                    mime_type=self._guess_mime(ext),
-                    size_bytes=len(content),
-                    text_content=text,
-                    word_count=len(text.split()),
-                    drawer_ids=drawer_ids,
-                )
-                batch.documents.append(doc)
-                batch.total_processed += 1
-                self.stats["total_processed"] += 1
-                self.stats["total_documents"] += 1
-
-            except Exception as e:
-                logger.error("Failed to process %s: %s", file_name, e)
-                batch.documents.append(ProcessedDocument(
-                    file_name=file_name,
-                    file_path=f"{folder_path}/{file_name}",
-                    site_name=site_name,
-                    library_name=drive_name,
-                    mime_type="",
-                    size_bytes=0,
-                    text_content="",
-                    word_count=0,
-                    status="error",
-                    error=str(e),
-                ))
-                batch.total_errors += 1
-                self.stats["total_errors"] += 1
+        except Exception as e:
+            logger.error("Failed to process %s: %s", file_name, e)
+            batch.documents.append(ProcessedDocument(
+                file_name=file_name,
+                file_path=self._join_path(folder_path, file_name),
+                site_name=site_name,
+                library_name=drive_name,
+                mime_type="",
+                size_bytes=0,
+                text_content="",
+                word_count=0,
+                status="error",
+                error=str(e),
+            ))
+            batch.total_errors += 1
+            self.stats["total_errors"] += 1
 
         batch.total_skipped = self.stats["total_skipped"]
         batch.completed_at = datetime.now(timezone.utc).isoformat()
@@ -468,6 +532,14 @@ class DocumentProcessor:
             chunks.append(current.strip())
 
         return chunks
+
+    @staticmethod
+    def _join_path(folder_path: str, file_name: str) -> str:
+        """Join a drive folder path with a file name, avoiding double slashes."""
+        base = folder_path.rstrip("/")
+        if not base:
+            return f"/{file_name}"
+        return f"{base}/{file_name}"
 
     @staticmethod
     def _sanitize_wing(name: str) -> str:

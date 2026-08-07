@@ -257,7 +257,10 @@ class GraphClient:
 
         headers = {"Authorization": f"Bearer {token}"}
 
-        async with httpx.AsyncClient(timeout=120.0) as client:
+        # Graph returns a 302 to a SharePoint download.aspx URL with a
+        # temp auth token — must follow redirects or every download fails
+        # with HTTPStatusError on the redirect (fixed 2026-08-07 live test).
+        async with httpx.AsyncClient(timeout=120.0, follow_redirects=True) as client:
             resp = await client.get(url, headers=headers)
             resp.raise_for_status()
             return resp.content
