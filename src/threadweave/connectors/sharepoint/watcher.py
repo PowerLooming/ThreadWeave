@@ -170,8 +170,19 @@ class GraphClient:
         params: dict | None = None,
     ) -> dict:
         """Make an authenticated Graph API request."""
+        return await self._request_url(
+            method, f"{GRAPH_API_BASE}{path}", json_body=json_body, params=params
+        )
+
+    async def _request_url(
+        self,
+        method: str,
+        url: str,
+        json_body: dict | None = None,
+        params: dict | None = None,
+    ) -> dict:
+        """Make an authenticated request to a FULL URL (e.g. delta links)."""
         token = await self._get_token()
-        url = f"{GRAPH_API_BASE}{path}"
 
         headers = {
             "Authorization": f"Bearer {token}",
@@ -275,7 +286,13 @@ class GraphClient:
     ) -> tuple[list[dict], str | None]:
         """Get file changes via delta query. Returns (items, next_delta_token)."""
         if delta_token:
-            data = await self._request("GET", delta_token)
+            # Delta links from Graph are FULL URLs — pass them straight
+            # through; _request would prepend the base and double the
+            # host (fixed 2026-08-07 live test: 404 on every resume).
+            if delta_token.startswith("http"):
+                data = await self._request_url("GET", delta_token)
+            else:
+                data = await self._request("GET", delta_token)
         else:
             data = await self._request(
                 "GET",

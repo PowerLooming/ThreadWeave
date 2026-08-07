@@ -162,6 +162,27 @@ def cmd_graph_daemon(args):
     engine.run_daemon()
 
 
+# ── SharePoint Commands ────────────────────────────────────────────
+
+def cmd_sharepoint_watch(args):
+    """Run continuous SharePoint delta polling (M365 -> on-prem, one-way)."""
+    import asyncio
+    from threadweave.connectors.sharepoint.watcher import GraphClient
+    from threadweave.connectors.sharepoint.processor import DocumentProcessor
+    from threadweave.connectors.sharepoint.daemon import SharePointWatchDaemon
+
+    graph = GraphClient()
+    processor = DocumentProcessor(graph)
+    daemon = SharePointWatchDaemon(
+        graph=graph,
+        processor=processor,
+        interval=args.interval,
+        site_filter=args.site,
+        state_file=args.state_file,
+    )
+    asyncio.run(daemon.run())
+
+
 # ── Email Commands ────────────────────────────────────────────────
 
 def cmd_email_watch(args):
@@ -569,6 +590,22 @@ def main():
                                help="Process messages individually, skip "
                                     "conversation thread grouping")
 
+    p_sharepoint = sub.add_parser("sharepoint",
+                                  help="Microsoft 365 SharePoint connector")
+    sp_sub = p_sharepoint.add_subparsers(dest="sharepoint_command")
+    p_sp_watch = sp_sub.add_parser("watch",
+                                   help="Continuous delta polling of document "
+                                        "libraries (M365 -> on-prem, one-way)")
+    p_sp_watch.add_argument("--interval", type=int, default=300,
+                            help="Poll interval in seconds (default 300)")
+    p_sp_watch.add_argument("--site", default="",
+                            help="Only watch sites whose name contains this "
+                                 "substring (default: all sites)")
+    p_sp_watch.add_argument("--state-file",
+                            default=os.path.expanduser(
+                                "~/.threadweave/sharepoint_delta.json"),
+                            help="Path to the delta-token state file")
+
     args = parser.parse_args()
 
     if args.command == "detect":
@@ -610,6 +647,11 @@ def main():
             cmd_email_watch(args)
         else:
             p_email.print_help()
+    elif args.command == "sharepoint":
+        if args.sharepoint_command == "watch":
+            cmd_sharepoint_watch(args)
+        else:
+            p_sharepoint.print_help()
     else:
         parser.print_help()
 
