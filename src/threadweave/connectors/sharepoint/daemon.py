@@ -50,12 +50,14 @@ class SharePointWatchDaemon:
         interval: int = DEFAULT_INTERVAL,
         site_filter: str = "",
         state_file: str = DEFAULT_STATE_FILE,
+        onenote_client=None,
     ):
         self.graph = graph
         self.processor = processor
         self.interval = max(10, int(interval))
         self.site_filter = (site_filter or "").strip().lower()
         self.state_file = os.path.expanduser(state_file)
+        self.onenote = onenote_client  # optional OneNoteClient (delegated auth)
         self._state: dict[str, str] = {}
         self._load_state()
         self.stats = {
@@ -67,6 +69,9 @@ class SharePointWatchDaemon:
             "knowledge_submitted": 0,
             "skipped": 0,
             "errors": 0,
+            "onenote_pages_seen": 0,
+            "onenote_processed": 0,
+            "onenote_submitted": 0,
         }
 
     # ---- Public API ----
@@ -102,6 +107,8 @@ class SharePointWatchDaemon:
             "sites": 0, "drives": 0, "changes": 0,
             "documents_processed": 0, "knowledge_submitted": 0,
             "skipped": 0, "errors": 0,
+            "onenote_pages_seen": 0, "onenote_processed": 0,
+            "onenote_submitted": 0,
         }
 
         try:
@@ -128,6 +135,9 @@ class SharePointWatchDaemon:
                 result["drives"] += 1
                 self.stats["drives"] += 1
                 await self._poll_drive(site, drive, result)
+
+            if self.onenote is not None:
+                await self._poll_onenote(site, result)
 
         self._save_state()
         return result
@@ -223,6 +233,76 @@ class SharePointWatchDaemon:
             self.stats["knowledge_submitted"] += 1
             logger.info("Mined %s -> %s", file_name, drawer_ids)
 
+    # ---- OneNote polling (watermark-based; no delta endpoint exists) ----
+
+    async def _poll_onenote(self, site, result: dict) -> None:
+        """Poll a site's OneNote notebooks for new/edited pages.
+
+        OneNote has no delta API, so we track a per-site watermark: the
+        latest lastModifiedDateTime seen. Each poll lists pages ordered
+        by modified time (desc) and processes any page newer than the
+        watermark — catching both NEW pages and EDITS (OneNote updates
+        lastModifiedDateTime on edit).
+        """
+        key = f"onenote:{site.site_id}"
+        watermark = self._state.get(key, "")
+        try:
+            pages = await self.onenote.get_recent_pages_with_text(site.site_id)
+        except Exception as e:
+            result["errors"] += 1
+            self.stats["errors"] += 1
+            logger.error("OneNote poll %s failed: %s", site.display_name, e)
+            return
+
+        newest = watermark
+        for page in pages:
+            modified = page.last_modified or ""
+            if modified > newest:
+                newest = modified
+            result["changes"] += 1
+            result["onenote_pages_seen"] += 1
+            self.stats["onenote_pages_seen"] += 1
+            # Skip pages we've already captured (watermark = inclusive)
+            if watermark and modified <= watermark:
+                result["skipped"] += 1
+                self.stats["skipped"] += 1
+                continue
+            await self._process_onenote_page(site, page, result)
+
+        if newest:
+            self._state[key] = newest
+
+    async def _process_onenote_page(self, site, page, result: dict) -> None:
+        """Extract, detect, and ingest one OneNote page."""
+        text = (page.text or "").strip()
+        if len(text) < 50:  # empty/near-empty pages carry no knowledge
+            result["skipped"] += 1
+            self.stats["skipped"] += 1
+            return
+
+        room = (page.section_name or "onenote").strip().lower().replace(" ", "_")
+        try:
+            drawer_ids = await self.processor._mine_to_mempalace(
+                text=text,
+                wing=self.processor._sanitize_wing(site.display_name or site.site_id),
+                room=self.processor._sanitize_room(room),
+                source_file=f"onenote:{page.title}",
+            )
+        except Exception as e:
+            result["errors"] += 1
+            self.stats["errors"] += 1
+            logger.error("OneNote ingest %s failed: %s", page.title, e)
+            return
+
+        result["documents_processed"] += 1
+        result["onenote_processed"] += 1
+        self.stats["onenote_processed"] += 1
+        if drawer_ids:
+            result["knowledge_submitted"] += 1
+            result["onenote_submitted"] += 1
+            self.stats["onenote_submitted"] += 1
+            logger.info("Mined OneNote page %s -> %s", page.title, drawer_ids)
+
     # ---- State persistence ----
 
     def _load_state(self) -> None:
@@ -250,5 +330,7 @@ class SharePointWatchDaemon:
             f"changes={stats.get('changes', stats.get('changes_seen', 0))} "
             f"processed={stats.get('documents_processed', 0)} "
             f"submitted={stats.get('knowledge_submitted', 0)} "
+            f"onenote={stats.get('onenote_processed', 0)}/"
+            f"{stats.get('onenote_submitted', 0)} "
             f"skipped={stats.get('skipped', 0)} errors={stats.get('errors', 0)}"
         )

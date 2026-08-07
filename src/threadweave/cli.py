@@ -170,17 +170,30 @@ def cmd_sharepoint_watch(args):
     from threadweave.connectors.sharepoint.watcher import GraphClient
     from threadweave.connectors.sharepoint.processor import DocumentProcessor
     from threadweave.connectors.sharepoint.daemon import SharePointWatchDaemon
+    from threadweave.connectors.sharepoint.onenote import OneNoteClient
 
     graph = GraphClient()
     processor = DocumentProcessor(graph)
+    onenote = OneNoteClient() if args.onenote else None
     daemon = SharePointWatchDaemon(
         graph=graph,
         processor=processor,
         interval=args.interval,
         site_filter=args.site,
         state_file=args.state_file,
+        onenote_client=onenote,
     )
     asyncio.run(daemon.run())
+
+
+def cmd_sharepoint_onenote_login(args):
+    """Interactive OneNote sign-in (device code, caches token)."""
+    import asyncio
+    from threadweave.connectors.sharepoint.onenote import OneNoteClient
+
+    client = OneNoteClient(cache_file=args.cache_file)
+    token = client.get_token(interactive=True)
+    print(f"OneNote sign-in OK (token {len(token)} chars, cached).")
 
 
 # ── Email Commands ────────────────────────────────────────────────
@@ -605,6 +618,16 @@ def main():
                             default=os.path.expanduser(
                                 "~/.threadweave/sharepoint_delta.json"),
                             help="Path to the delta-token state file")
+    p_sp_watch.add_argument("--onenote", action="store_true",
+                            help="Also poll OneNote notebooks (requires "
+                                 "one-time sign-in: sharepoint onenote-login)")
+    p_sp_login = sp_sub.add_parser(
+        "onenote-login",
+        help="Interactive OneNote sign-in (device code, caches token)")
+    p_sp_login.add_argument("--cache-file",
+                            default=os.path.expanduser(
+                                "~/.threadweave/msal_cache.json"),
+                            help="MSAL token cache path")
 
     args = parser.parse_args()
 
@@ -650,6 +673,8 @@ def main():
     elif args.command == "sharepoint":
         if args.sharepoint_command == "watch":
             cmd_sharepoint_watch(args)
+        elif args.sharepoint_command == "onenote-login":
+            cmd_sharepoint_onenote_login(args)
         else:
             p_sharepoint.print_help()
     else:
