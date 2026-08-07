@@ -53,6 +53,18 @@ try:
 except ImportError:
     DOCX_AVAILABLE = False
 
+try:
+    import openpyxl
+    OPENPYXL_AVAILABLE = True
+except ImportError:
+    OPENPYXL_AVAILABLE = False
+
+try:
+    import pptx  # python-pptx
+    PPTX_AVAILABLE = True
+except ImportError:
+    PPTX_AVAILABLE = False
+
 
 # ---- Data Classes ----
 
@@ -415,14 +427,11 @@ class DocumentProcessor:
         if ext == ".pdf" and PYMUPDF_AVAILABLE:
             return self._extract_pdf(content)
 
-        # For .xlsx and .pptx, try basic extraction
-        if ext in {".xlsx", ".pptx"}:
-            # Graph API can provide text previews, but for now skip
-            logger.info(
-                "Skipping binary extraction for %s (install python-docx / PyMuPDF)",
-                file_name,
-            )
-            return ""
+        if ext == ".xlsx" and OPENPYXL_AVAILABLE:
+            return self._extract_xlsx(content)
+
+        if ext == ".pptx" and PPTX_AVAILABLE:
+            return self._extract_pptx(content)
 
         return ""
 
@@ -469,6 +478,48 @@ class DocumentProcessor:
             return "\n\n".join(pages)
         finally:
             doc.close()
+
+    def _extract_xlsx(self, content: bytes) -> str:
+        """Extract text from .xlsx workbooks (cell values per sheet).
+
+        Preserves sheet names as section headers so the detector sees
+        topic context, not a flat cell dump.
+        """
+        import io
+
+        wb = openpyxl.load_workbook(io.BytesIO(content), read_only=True,
+                                    data_only=True)
+        parts = []
+        for ws in wb.worksheets:
+            rows = []
+            for row in ws.iter_rows(values_only=True):
+                cells = [str(c).strip() for c in row if c is not None
+                         and str(c).strip()]
+                if cells:
+                    rows.append(" | ".join(cells))
+            if rows:
+                parts.append(f"[Sheet: {ws.title}]\n" + "\n".join(rows))
+        wb.close()
+        return "\n\n".join(parts)
+
+    def _extract_pptx(self, content: bytes) -> str:
+        """Extract text from .pptx decks (slide shapes + speaker notes)."""
+        import io
+
+        prs = pptx.Presentation(io.BytesIO(content))
+        parts = []
+        for i, slide in enumerate(prs.slides, start=1):
+            texts = []
+            for shape in slide.shapes:
+                if hasattr(shape, "text") and shape.text.strip():
+                    texts.append(shape.text.strip())
+            if slide.has_notes_slide:
+                notes = slide.notes_slide.notes_text_frame.text.strip()
+                if notes:
+                    texts.append(f"[notes] {notes}")
+            if texts:
+                parts.append(f"[Slide {i}]\n" + "\n".join(texts))
+        return "\n\n".join(parts)
 
     # ---- MemPalace Integration ----
 
