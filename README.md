@@ -168,7 +168,7 @@ Capture without disclosure is surveillance, so ThreadWeave ships a privacy layer
 | `THREADWEAVE_API_KEYS` | `tenant:key,tenant:key` format. For roles/identity (admin, hr_admin, legal, wing, person_id) use `~/.threadweave/keys.json` instead |
 | `THREADWEAVE_CORS_ORIGINS` | Comma-separated allowed origins (default: `*`). Restrict when exposed beyond local dev |
 | `THREADWEAVE_AUDIT_DB` | Audit log database path (default: `~/.threadweave/audit.sqlite3`). Falls back to in-memory if the DB can't be opened |
-| `THREADWEAVE_ENTRY_DB` | Entry store database path (default: `~/.threadweave/entries.sqlite3`). Entries survive API restarts |
+| `THREADWEAVE_ENTRY_DB` | Entry store database URL. SQLite (default `sqlite:///~/.threadweave/entries.sqlite3`) works out of the box; PostgreSQL (`postgresql://user:***@host/db`, install `.[postgres]`) for corporate deployments. Entries survive API restarts |
 
 **Connector extras:** `pip install -e ".[gws]"` (Google Workspace), `".[graph]"` (Microsoft Graph connector), `".[teams]"`, `".[sharepoint]"`, `".[email]"`, `".[outlook]"`, or `".[all-connectors]"` for everything.
 
