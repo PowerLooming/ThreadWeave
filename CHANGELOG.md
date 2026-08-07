@@ -21,6 +21,7 @@ uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **Teams bot wing/room mapping** — wing derived from conversation context (team name → wing, channel → room), matching the email department mapping.
 - **Email palace wing mapping** — sender → department → wing via Graph `User.Read.All`, recipient fallback, `email` fallback wing.
 - **Documentation** — `docs/privacy.md` (privacy model), expanded `docs/m365-connectors.md` (daemons, OneNote, delegated auth, troubleshooting), README continuous-capture + privacy sections.
+- **Durable entry store** — SQLite write-through persistence (`~/.threadweave/entries.sqlite3`, `THREADWEAVE_ENTRY_DB`). The knowledge palace now survives API restarts; startup reloads persisted entries into the memory stores. Verified live: save → restart → entry restored and searchable.
 
 ### Fixed
 
@@ -33,9 +34,10 @@ uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
-- Full test suite: **360 passed** (was 312 at 0.3.0).
+- Full test suite: **366 passed** (was 312 at 0.3.0).
 - `threadweave sharepoint watch` gained `--onenote` and `--site` flags; `sharepoint onenote-login` command added.
 - GraphReader app registration now also needs `User.Read.All` (Application) and `Notes.Read.All` (Delegated) plus "Allow public client flows" enabled (see `docs/m365-connectors.md`).
+- Entry storage is durable (SQLite write-through); the in-memory store is reloaded from disk at startup.
 
 ## [0.3.0] — 2026-08-01
 

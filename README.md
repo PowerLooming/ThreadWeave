@@ -168,6 +168,7 @@ Capture without disclosure is surveillance, so ThreadWeave ships a privacy layer
 | `THREADWEAVE_API_KEYS` | `tenant:key,tenant:key` format. For roles/identity (admin, hr_admin, legal, wing, person_id) use `~/.threadweave/keys.json` instead |
 | `THREADWEAVE_CORS_ORIGINS` | Comma-separated allowed origins (default: `*`). Restrict when exposed beyond local dev |
 | `THREADWEAVE_AUDIT_DB` | Audit log database path (default: `~/.threadweave/audit.sqlite3`). Falls back to in-memory if the DB can't be opened |
+| `THREADWEAVE_ENTRY_DB` | Entry store database path (default: `~/.threadweave/entries.sqlite3`). Entries survive API restarts |
 
 **Connector extras:** `pip install -e ".[gws]"` (Google Workspace), `".[graph]"` (Microsoft Graph connector), `".[teams]"`, `".[sharepoint]"`, `".[email]"`, `".[outlook]"`, or `".[all-connectors]"` for everything.
 
@@ -193,11 +194,11 @@ Capture without disclosure is surveillance, so ThreadWeave ships a privacy layer
 - ✅ **SharePoint watch daemon** — delta-polling of document libraries (new + edited files), xlsx/pptx/docx/pdf extraction, OneNote notebook polling via delegated auth
 - ✅ **Copilot connector** — Graph external connection, schema, item sync, continuous daemon
 - ✅ **Privacy layer** — opt-out registry (ingest gate + early daemon skips), audited right-to-delete, Teams privacy commands
-- ✅ **360 tests** — full suite green
+- ✅ **Durable entry store** — SQLite write-through (`~/.threadweave/entries.sqlite3`); the palace survives restarts
+- ✅ **366 tests** — full suite green
 
 ## What's Next
 
-- [ ] Durable entry store (SQLite-backed, survives API restarts)
 - [ ] Entry versioning (edits link to the original instead of a second entry)
 - [ ] Capture notification (Teams DM: "your email about X was added to the palace")
 - [ ] Knowledge entry nodes in the graph (entries linked to org entities)
