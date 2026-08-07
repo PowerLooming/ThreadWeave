@@ -170,6 +170,7 @@ def cmd_email_watch(args):
     from threadweave.connectors.email.watcher import MailWatcher
     from threadweave.connectors.email.processor import EmailProcessor
     from threadweave.connectors.email.daemon import EmailWatchDaemon
+    from threadweave.connectors.sharepoint.watcher import GraphClient
 
     if not args.mailbox:
         print("Email watcher requires --mailbox (or THREADWEAVE_MAILBOX).",
@@ -177,7 +178,9 @@ def cmd_email_watch(args):
         sys.exit(1)
 
     watcher = MailWatcher()
-    processor = EmailProcessor()
+    # Pass a Graph client so the processor can map sender -> department
+    # -> wing (palace model). Same credentials as the watcher.
+    processor = EmailProcessor(graph_client=watcher.graph)
     daemon = EmailWatchDaemon(
         watcher=watcher,
         processor=processor,
