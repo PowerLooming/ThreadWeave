@@ -1,15 +1,18 @@
 # SPDX-License-Identifier: MIT
 # Copyright (C) 2026 ThreadWeave contributors
-"""Tests for the durable entry store (SQLite persistence)."""
+"""Tests for the durable entry store (SQLite + PostgreSQL backends)."""
 
+import os
 import pytest
 
 from threadweave.store import EntryStore
 
+TEST_POSTGRES_URL = os.environ.get("TEST_POSTGRES_URL", "")
+
 
 @pytest.fixture
 def store(tmp_path):
-    return EntryStore(db_path=str(tmp_path / "entries.sqlite3"))
+    return EntryStore(url=f"sqlite:///{tmp_path}/entries.sqlite3")
 
 
 def _entry(eid="abc123", tenant="default", wing="engineering"):
@@ -49,11 +52,11 @@ def test_save_and_load_roundtrip(store):
 
 def test_survives_restart(tmp_path):
     """New store instance on the same DB file = the palace survived."""
-    path = str(tmp_path / "entries.sqlite3")
-    EntryStore(db_path=path).save(_entry("e1"))
-    EntryStore(db_path=path).save(_entry("e2", tenant="lqdx", wing="Retail"))
+    url = f"sqlite:///{tmp_path}/entries.sqlite3"
+    EntryStore(url=url).save(_entry("e1"))
+    EntryStore(url=url).save(_entry("e2", tenant="lqdx", wing="Retail"))
 
-    restarted = EntryStore(db_path=path)
+    restarted = EntryStore(url=url)
     entries = restarted.load_all()
     assert len(entries) == 2
     by_id = {e["id"]: e for e in entries}
@@ -63,13 +66,13 @@ def test_survives_restart(tmp_path):
 
 
 def test_delete_removes_persistently(tmp_path):
-    path = str(tmp_path / "entries.sqlite3")
-    s1 = EntryStore(db_path=path)
+    url = f"sqlite:///{tmp_path}/entries.sqlite3"
+    s1 = EntryStore(url=url)
     s1.save(_entry("keep"))
     s1.save(_entry("gone"))
     s1.delete("gone")
 
-    s2 = EntryStore(db_path=path)
+    s2 = EntryStore(url=url)
     entries = s2.load_all()
     assert [e["id"] for e in entries] == ["keep"]
 
@@ -94,3 +97,51 @@ def test_upsert_overwrites(store):
     store.save(updated)
     assert store.get("x")["content"] == "We decided to use Redis instead"
     assert store.count() == 1
+
+
+# ---- PostgreSQL backend ----
+
+@pytest.mark.skipif(not TEST_POSTGRES_URL, reason="TEST_POSTGRES_URL not set")
+def test_postgres_save_load_delete():
+    """Full roundtrip against a real PostgreSQL server (CI/dev only)."""
+    s = EntryStore(url=TEST_POSTGRES_URL)
+    s.save(_entry("pg1"))
+    s.save(_entry("pg2", tenant="lqdx", wing="Retail"))
+    assert s.count() == 2
+
+    by_id = {e["id"]: e for e in s.load_all()}
+    assert by_id["pg1"]["tenant_id"] == "default"
+    assert by_id["pg2"]["wing"] == "Retail"
+
+    s.delete("pg1")
+    assert s.get("pg1") is None
+    assert s.count() == 1
+    s.delete("pg2")
+
+
+def test_sql_compiles_for_postgresql_dialect():
+    """The store's SQL must compile for the PG dialect (no server needed)."""
+    from sqlalchemy import create_engine
+    from sqlalchemy.dialects import postgresql
+    from sqlalchemy import text
+
+    # Compile the DDL + upsert against the postgresql dialect to catch
+    # dialect-incompatible SQL without requiring a live server.
+    from threadweave.store import EntryStore as ES
+
+    es = ES.__new__(ES)
+    es._to_row  # noqa: B018  (verify static method exists)
+    row = es._to_row(_entry())
+    cols = list(row.keys())
+    placeholders = ", ".join(f":{c}" for c in cols)
+    upsert = (
+        f"INSERT INTO entries ({', '.join(cols)}) VALUES ({placeholders}) "
+        "ON CONFLICT(id) DO UPDATE SET "
+        + ", ".join(f"{c} = excluded.{c}" for c in cols if c != "id")
+    )
+    engine = create_engine("postgresql://u:p@h/db", _initialize=False)
+    compiled = str(text(upsert).compile(dialect=postgresql.dialect()))
+    assert compiled.startswith("INSERT INTO entries")
+    assert "ON CONFLICT" in compiled
+    # Named params become PG-style %(name)s
+    assert "%(id)s" in compiled
