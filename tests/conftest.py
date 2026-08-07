@@ -16,6 +16,10 @@ import pytest
 _audit_tmp = tempfile.mkdtemp(prefix="threadweave-audit-test-")
 os.environ["THREADWEAVE_AUDIT_DB"] = os.path.join(_audit_tmp, "audit.sqlite3")
 
+# Isolate the durable entry store too (set before threadweave.api is imported)
+_entry_tmp = tempfile.mkdtemp(prefix="threadweave-entry-test-")
+os.environ["THREADWEAVE_ENTRY_DB"] = os.path.join(_entry_tmp, "entries.sqlite3")
+
 
 @pytest.fixture
 def sample_threadweave_entry():

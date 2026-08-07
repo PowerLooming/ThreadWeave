@@ -38,6 +38,7 @@ from threadweave.confidentiality import (
     SensitivityLevel,
     get_audit_log,
 )
+from threadweave.store import get_entry_store
 
 logger = logging.getLogger("threadweave.api")
 
@@ -284,6 +285,23 @@ async def lifespan(app: FastAPI):
         logger.info(
             "MemPalace hybrid search available at %s", _mempalace.palace_path
         )
+
+    # Durability: reload persisted entries into the memory stores so the
+    # palace survives restarts (SQLite at ~/.threadweave/entries.sqlite3).
+    try:
+        persisted = get_entry_store().load_all()
+        for entry in persisted:
+            _memory_store[entry["id"]] = entry
+            _tenant_stores.setdefault(
+                entry.get("tenant_id", "default"), {}
+            )[entry["id"]] = entry
+        if persisted:
+            logger.info(
+                "Restored %d entries from %s", len(persisted),
+                get_entry_store().path,
+            )
+    except Exception as exc:
+        logger.warning("Entry store reload failed: %s", exc)
     yield
 
 
@@ -483,6 +501,12 @@ async def ingest_content(req: IngestRequest, request: Request):
     tenant_store[entry_id] = entry
     _memory_store[entry_id] = entry  # Also global for search
 
+    # Durability: write-through to SQLite so the palace survives restarts
+    try:
+        get_entry_store().save(entry)
+    except Exception:
+        pass  # persistence is best-effort; memory store is authoritative
+
     # 6. MemPalace (if available)
     if _mempalace_available:
         try:
@@ -593,6 +617,12 @@ async def save_entry(req: SaveRequest, request: Request):
     _memory_store[entry_id] = entry
     tenant_store = _tenant_stores.setdefault(req.tenant_id, {})
     tenant_store[entry_id] = entry
+
+    # Durability: write-through to SQLite so the palace survives restarts
+    try:
+        get_entry_store().save(entry)
+    except Exception:
+        pass  # persistence is best-effort; memory store is authoritative
 
     # Also store in MemPalace for semantic search
     if _mempalace_available:
@@ -720,6 +750,11 @@ async def delete_entry(
     tenant_store = _tenant_stores.get(entry.get("tenant_id", "default"), {})
     tenant_store.pop(entry_id, None)
     _memory_store.pop(entry_id, None)
+    # Durability: mirror the deletion
+    try:
+        get_entry_store().delete(entry_id)
+    except Exception:
+        pass
     return Response(status_code=204)
 
 
