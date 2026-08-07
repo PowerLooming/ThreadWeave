@@ -4,6 +4,39 @@ All notable changes to ThreadWeave are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project
 uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] — 2026-08-07
+
+### Added
+
+- **Email watch daemon** (`threadweave email watch`) — continuous one-way M365 → on-prem polling. Thread-aware capture (conversationId grouping), in-memory dedup, `--mark-read` opt-in, resilient to Graph outages.
+- **SharePoint watch daemon** (`threadweave sharepoint watch`) — continuous delta-polling of document libraries. Delta tokens persist to `~/.threadweave/sharepoint_delta.json` so restarts resume instead of re-crawling. Catches new files **and edits** (content-hash based). Site filter, per-site error containment (known 403s don't stop the loop).
+- **OneNote support** (`sharepoint watch --onenote` + `sharepoint onenote-login`) — reads notebooks via the Graph OneNote API with **delegated** auth (Microsoft deprecated app-only tokens for OneNote on 2025-03-31). Device-code sign-in, persisted MSAL cache, watermark-based polling (no delta API exists; new pages and edits caught).
+- **xlsx + pptx extraction** — openpyxl and python-pptx backed (previously listed in `SUPPORTED_EXTENSIONS` but extracted to empty text and silently skipped). Sheet names and speaker notes preserved as context.
+- **Privacy layer** — the "camera sign":
+  - `OptOutStore` (`~/.threadweave/optout.json`) with API endpoints `GET /api/v1/optout`, `POST /api/v1/optout/out`, `POST /api/v1/optout/in`
+  - Opt-out gate at ingest step 0 (checks author_id / email_sender / email_participants / participants) and early skips in the email/SharePoint daemons (content never extracted)
+  - `DELETE /api/v1/entries/{id}` with author / same-wing / admin rights; every deletion audited (`AuditLog.log_delete`)
+  - Teams bot privacy commands: `opt out`, `opt in`, `delete <topic>`, `status`
+  - Search results now carry `author_id`
+- **Teams bot wing/room mapping** — wing derived from conversation context (team name → wing, channel → room), matching the email department mapping.
+- **Email palace wing mapping** — sender → department → wing via Graph `User.Read.All`, recipient fallback, `email` fallback wing.
+- **Documentation** — `docs/privacy.md` (privacy model), expanded `docs/m365-connectors.md` (daemons, OneNote, delegated auth, troubleshooting), README continuous-capture + privacy sections.
+
+### Fixed
+
+- **SharePoint download crash** — Graph returns a 302 to `download.aspx`; httpx now follows redirects (`follow_redirects=True`). Every download previously failed.
+- **SharePoint folder recursion** — `process_drive` skipped all folders ("recursion can be added" comment), so folder-organized libraries imported zero documents. Now recursive with a depth bound; folder detection uses key-presence (`"folder" in item` — empty `{}` folder objects are falsy).
+- **SharePoint delta URL doubling** — Graph delta links are full URLs; passing them through `_request` (which prepends the base) doubled the host → 404 on every resume. Absolute URLs now use `_request_url`.
+- **Email wing recipient fallback** — `process_message` didn't pass participants, so department fallback never saw recipients.
+- **Wing cache poisoning** — cached "email" (unknown user) short-circuited recipient fallback; cache hits only satisfy when they hold a real wing.
+- **"promotion" HR false positive** — retail promo content (e.g. "seasonal promotion review") was classified `hr_privileged` and locked out of its own wing; "promotion" now requires career context (demotion/reorganization/org chart stay unconditional).
+
+### Changed
+
+- Full test suite: **360 passed** (was 312 at 0.3.0).
+- `threadweave sharepoint watch` gained `--onenote` and `--site` flags; `sharepoint onenote-login` command added.
+- GraphReader app registration now also needs `User.Read.All` (Application) and `Notes.Read.All` (Delegated) plus "Allow public client flows" enabled (see `docs/m365-connectors.md`).
+
 ## [0.3.0] — 2026-08-01
 
 ### Fixed

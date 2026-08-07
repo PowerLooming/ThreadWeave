@@ -28,7 +28,27 @@ We recommend two separate app registrations — different permissions, different
 
 ### App 1: ThreadWeave-GraphReader
 
-Used by the Email Watcher and SharePoint Watcher.
+Used by the Email, SharePoint, and OneNote connectors (app-only + delegated).
+
+**Application permissions (admin consent):**
+- `Mail.Read` — read mailboxes (email watcher)
+- `Sites.Read.All` — read SharePoint sites and documents
+- `User.Read.All` — resolve sender departments for palace wing mapping
+
+**Delegated permission (for OneNote — see note below):**
+- `Notes.Read.All` — read notebook pages via the Graph OneNote API
+
+**Authentication settings:**
+- Enable **"Allow public client flows"** = Yes (Authentication → Advanced settings).
+  Required for the OneNote device-code sign-in. The delegated OneNote consent
+  happens during the one-time sign-in, not via admin consent.
+
+> **Why OneNote needs delegated auth:** Microsoft deprecated app-only tokens
+> for the OneNote API on 2025-03-31. The `.one` binary is proprietary and
+> unparseable, so notebooks are read through the Graph OneNote API with a
+> user-context token. One-time setup: `threadweave sharepoint onenote-login`
+> (prints a device code; sign in once; the token cache is persisted at
+> `~/.threadweave/msal_cache.json` and refreshed silently thereafter).
 
 1. Go to **Azure Portal** → **Microsoft Entra ID** → **App registrations** → **New registration**
 2. Name: `ThreadWeave-GraphReader`
@@ -119,7 +139,47 @@ If `roles` is empty:
 - Admin consent wasn't granted — click the button in API permissions
 - You copied the **Secret ID** instead of the **Value** — the Value looks like `Xmf8Q~...`
 
-## Step 4: Test Each Connector
+## Step 4: Run the Connectors (daemons)
+
+All connectors run as continuous daemons that pull M365 content one-way into on-prem ThreadWeave. No webhooks, no tunnels, no third-party relays. Content flows outbound from the on-prem host only.
+
+### Email Watch (continuous email harvesting)
+
+```bash
+export AZURE_TENANT_ID=... AZURE_CLIENT_ID=... AZURE_CLIENT_SECRET=...
+uv run python -m threadweave.cli email watch \
+  --mailbox Admin@your-tenant.com --interval 300
+```
+
+Polls unread mail, groups conversations into threads, runs detection, and ingests knowledge. Flags: `--interval` (300s), `--max-results` (20), `--mark-read` (default OFF), `--no-threads` (skip thread grouping). Safe to restart anytime: in-memory dedup (1000) prevents re-processing within a run.
+
+### SharePoint Watch (continuous document harvesting)
+
+```bash
+uv run python -m threadweave.cli sharepoint watch \
+  --interval 300 --site "Mark 8" --onenote
+```
+
+Delta-polls all document libraries (or only sites whose name contains `--site`). New and edited files are extracted (txt/md/docx/pdf/xlsx/pptx/csv/json/etc), detected, and ingested. Delta tokens persist to `~/.threadweave/sharepoint_delta.json`, so restarts resume without re-crawling. `--onenote` also polls notebook pages (watermark-based; new pages and edits are caught).
+
+**OneNote one-time sign-in** (delegated auth, required before `--onenote`):
+
+```bash
+uv run python -m threadweave.cli sharepoint onenote-login
+```
+
+Prints a device code; sign in once as a tenant user with notebook access. The token cache (`~/.threadweave/msal_cache.json`) is refreshed silently thereafter.
+
+### Graph External Connector (Copilot / Microsoft Search)
+
+```bash
+export THREADWEAVE_GRAPH_TENANT_ID=... THREADWEAVE_GRAPH_CLIENT_ID=... THREADWEAVE_GRAPH_CLIENT_SECRET=...
+uv run python -m threadweave.cli graph setup    # create connection + register schema
+uv run python -m threadweave.cli graph sync     # push entries to the search index
+uv run python -m threadweave.cli graph daemon   # continuous sync every 5 min
+```
+
+## Step 5: Verify Each Connector
 
 ### Email Watcher
 
@@ -170,6 +230,34 @@ asyncio.run(test())
 
 Expected: lists SharePoint sites. If you get `400 Bad Request: Tenant does not have a SPO license`, your tenant lacks SharePoint Online.
 
+### OneNote Watcher
+
+Reads notebook pages via the Graph OneNote API (delegated auth, see the `onenote-login` step above). Verify page listing works before enabling `--onenote`:
+
+```bash
+uv run python -c "
+import asyncio, os, sys
+sys.path.insert(0, '.')
+from threadweave.connectors.sharepoint.onenote import OneNoteClient
+from threadweave.connectors.sharepoint.watcher import GraphClient
+
+async def test():
+    onenote = OneNoteClient()
+    gc = GraphClient()
+    sites = await gc.list_sites()
+    for s in sites:
+        if s.display_name == 'Your Site':
+            pages = await onenote.list_pages(s.site_id)
+            print(f'{len(pages)} pages')
+            for p in pages:
+                print(f'  {p.title} — {p.last_modified}')
+
+asyncio.run(test())
+"
+```
+
+Expected: lists notebook pages. Errors to expect if setup is wrong: `40001` (app-only token — must use delegated), `40004` (missing `Notes.Read.All`), `AADSTS65002` (using the Azure CLI client ID — must use your own app with public client flows enabled).
+
 ### Graph External Connector
 
 Creates an external connection and registers the ThreadWeave schema:
@@ -204,6 +292,10 @@ Expected: connection created (201), schema registered. If schema registration fa
 | `400: Tenant does not have a SPO license` | No SharePoint Online in tenant | Tenant needs SharePoint Online license. Bare Entra ID tenants don't include it |
 | `500` on `POST /external/connections` | No Graph connectors license | Requires M365 E5 or Graph connectors add-on. Dev sandbox may not support it |
 | `403` on upsert/delete | Schema not registered yet | Run `register_schema()` first — items can't be created without a schema |
+| `40001` on `/onenote/...` | App-only token used for OneNote | OneNote requires delegated auth since 2025-03-31 — run `sharepoint onenote-login` and use `--onenote` |
+| `40004` on `/onenote/...` | Missing `Notes.Read.All` scope | Add `Notes.Read.All` (Delegated) to GraphReader and re-sign-in |
+| `AADSTS65002` on device sign-in | Used the Azure CLI client ID | Use your own app registration with "Allow public client flows" = Yes |
+| `403` on a site's drives | App lacks that site collection | Known for root/communication sites with `Sites.Read.All` — the daemon logs and continues |
 
 ## Production Checklist
 
@@ -212,3 +304,9 @@ Expected: connection created (201), schema registered. If schema registration fa
 - Use separate app registrations per environment (dev/staging/prod)
 - Monitor the audit log at `/api/v1/audit/recent` for connector activity
 - Test with `--dry-run` and small `--max` values before full ingestion
+- Enable the OneNote device-code sign-in with a service account that has
+  notebook access, and keep the MSAL cache (`~/.threadweave/msal_cache.json`)
+  backed up with the other state files
+- Publish the privacy contract: see **`docs/privacy.md`** (transparency,
+  opt-out, right to delete, access control) and tell users about the Teams
+  commands `opt out` / `opt in` / `delete <topic>` / `status`

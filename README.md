@@ -78,15 +78,44 @@ Feed existing mailboxes into ThreadWeave without touching the API:
 
 Gmail requires an app password. If your org disabled app passwords, use `ingest_graph_mail.py` instead. All scripts support `--dry-run` to preview before ingesting.
 
+## Continuous Capture (daemons)
+
+The M365 connectors run as continuous daemons that pull content one-way into on-prem ThreadWeave. No webhooks, no tunnels, no third-party relays — content flows outbound from the on-prem host only.
+
+```bash
+# Email: poll inboxes, thread conversations, harvest decisions
+uv run python -m threadweave.cli email watch --mailbox Admin@your-tenant.com --interval 300
+
+# SharePoint: delta-poll document libraries (new + edited files)
+uv run python -m threadweave.cli sharepoint watch --interval 300 --site "Mark 8"
+
+# OneNote: poll notebooks too (one-time sign-in first)
+uv run python -m threadweave.cli sharepoint onenote-login
+uv run python -m threadweave.cli sharepoint watch --onenote
+
+# Copilot: keep the external connection in sync
+uv run python -m threadweave.cli graph daemon
+```
+
+State files (`~/.threadweave/`) let daemons resume safely: SharePoint delta tokens, OneNote watermarks, MSAL token cache, opt-out registry, audit log.
+
+## Privacy
+
+Capture without disclosure is surveillance, so ThreadWeave ships a privacy layer: per-person **opt-out** (checked at ingest and in every daemon before extraction), **right to delete** (audited per-entry deletion), Teams commands `opt out` / `opt in` / `delete <topic>` / `status`, and a full audit trail. See **[docs/privacy.md](docs/privacy.md)**.
+
 ## API Endpoints
 
 | Endpoint | Description |
 |---|---|
-| `POST /api/v1/ingest` | Central ingestion pipeline (dedup → detect → store) |
+| `POST /api/v1/ingest` | Central ingestion pipeline (dedup → detect → opt-out gate → store) |
 | `POST /api/v1/search` | Hybrid search (MemPalace vector + keyword fallback) |
 | `POST /api/v1/detect` | Classify text (answer/decision/question/chat) |
 | `POST /api/v1/entries` | Save knowledge entry |
 | `GET /api/v1/entries/{id}` | Retrieve entry |
+| `DELETE /api/v1/entries/{id}` | Delete entry (author / same-wing / admin; audited) |
+| `GET /api/v1/optout` | List opted-out people (privacy admin) |
+| `POST /api/v1/optout/out` | Register opt-out |
+| `POST /api/v1/optout/in` | Remove opt-out |
 | `GET /api/v1/wings` | List teams/departments |
 | `GET /api/v1/org/graph` | Org graph (nodes + edges for visualization) |
 | `POST /api/v1/org/relationships` | Manage org structure |
@@ -123,7 +152,8 @@ Gmail requires an app password. If your org disabled app passwords, use `ingest_
 
 ## Documentation
 
-- [M365 Connector Setup](docs/m365-connectors.md) — Azure app registration, Email Watcher, SharePoint Watcher, Copilot connector
+- [M365 Connector Setup](docs/m365-connectors.md) — Azure app registrations, email/SharePoint/OneNote daemons, Copilot connector, troubleshooting
+- [Privacy Model](docs/privacy.md) — on-prem one-way contract, opt-out, right to delete, access control
 - [Technical Specification](docs/technical-spec.md)
 
 ## Configuration
@@ -158,11 +188,17 @@ Gmail requires an app password. If your org disabled app passwords, use `ingest_
 - ✅ **Profiling** — Latency percentiles, throughput, Prometheus export
 - ✅ **Auth** — Opt-in API key middleware with tenant scoping
 - ✅ **Docker** — Multi-stage build with optional Ollama profile
-- ✅ **312 tests** — full suite green
+- ✅ **Teams bot connector** — @mention capture + passive detection with consent card, RSC group-chat capture, privacy commands (`opt out`, `opt in`, `delete <topic>`, `status`)
+- ✅ **Email watch daemon** — continuous one-way mailbox polling, thread-aware capture, sender→department→wing mapping
+- ✅ **SharePoint watch daemon** — delta-polling of document libraries (new + edited files), xlsx/pptx/docx/pdf extraction, OneNote notebook polling via delegated auth
+- ✅ **Copilot connector** — Graph external connection, schema, item sync, continuous daemon
+- ✅ **Privacy layer** — opt-out registry (ingest gate + early daemon skips), audited right-to-delete, Teams privacy commands
+- ✅ **360 tests** — full suite green
 
 ## What's Next
 
-- [ ] Multi-user / RBAC
-- [ ] Teams bot connector (code written, needs Bot Framework registration + public endpoint)
+- [ ] Durable entry store (SQLite-backed, survives API restarts)
+- [ ] Entry versioning (edits link to the original instead of a second entry)
+- [ ] Capture notification (Teams DM: "your email about X was added to the palace")
 - [ ] Knowledge entry nodes in the graph (entries linked to org entities)
-- [ ] Durable audit log (currently in-memory, cleared on restart)
+- [ ] Deployment packaging (systemd / Windows service wrappers for the daemons)
