@@ -66,3 +66,56 @@ async def test_resolve_wing_handles_graph_errors():
     proc = EmailProcessor(graph_client=BoomGraph())
     wing = await proc._resolve_wing("adele@x.com")
     assert wing == "email"  # graceful fallback
+
+
+@pytest.mark.asyncio
+async def test_resolve_wing_falls_back_to_recipient_department():
+    # Sender has no department; recipient (Adele) is in Retail
+    graph = FakeGraph({"admin@x.com": None, "adele@x.com": "Retail"})
+    proc = EmailProcessor(graph_client=graph)
+    wing = await proc._resolve_wing("admin@x.com", recipients=["adele@x.com"])
+    assert wing == "Retail"
+
+
+@pytest.mark.asyncio
+async def test_resolve_wing_sender_wins_over_recipients():
+    # Sender has a department -> wins even if recipients have one too
+    graph = FakeGraph({"patti@x.com": "Executive Management", "adele@x.com": "Retail"})
+    proc = EmailProcessor(graph_client=graph)
+    wing = await proc._resolve_wing("patti@x.com", recipients=["adele@x.com"])
+    assert wing == "Executive Management"
+
+
+@pytest.mark.asyncio
+async def test_resolve_wing_unknown_recipients_fall_back_to_email():
+    graph = FakeGraph({})  # nobody resolvable
+    proc = EmailProcessor(graph_client=graph)
+    wing = await proc._resolve_wing("admin@x.com", recipients=["someone@external.com"])
+    assert wing == "email"
+
+
+@pytest.mark.asyncio
+async def test_resolve_wing_cached_unknown_sender_does_not_block_recipients():
+    # Regression: after Admin is cached as "email" (no department), a second
+    # lookup with Adele as recipient must STILL resolve to Retail — a cached
+    # "email" (unknown) must not short-circuit the recipient fallback.
+    graph = FakeGraph({"adele@x.com": "Retail"})
+    proc = EmailProcessor(graph_client=graph)
+
+    wing1 = await proc._resolve_wing("admin@x.com", recipients=["adele@x.com"])
+    assert wing1 == "Retail"  # first lookup: sender unknown, recipient wins
+
+    wing2 = await proc._resolve_wing("admin@x.com", recipients=["adele@x.com"])
+    assert wing2 == "Retail"  # second lookup: Admin cached as email, no short-circuit
+
+
+@pytest.mark.asyncio
+async def test_resolve_wing_cached_real_wing_short_circuits():
+    graph = FakeGraph({"patti@x.com": "Executive Management"})
+    proc = EmailProcessor(graph_client=graph)
+
+    await proc._resolve_wing("patti@x.com", recipients=[])
+    # Cached real wing is returned without re-querying
+    wing = await proc._resolve_wing("patti@x.com", recipients=["adele@x.com"])
+    assert wing == "Executive Management"
+    assert len(graph.calls) == 1  # only the first lookup hit Graph

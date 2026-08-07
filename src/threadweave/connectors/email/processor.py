@@ -263,7 +263,13 @@ class EmailProcessor:
             if not addr:
                 continue
             if addr in self._wing_cache:
-                return self._wing_cache[addr]
+                # Only a real wing satisfies the lookup; a cached "email"
+                # (unknown user) must not short-circuit the recipient
+                # fallback. (Fixed 2026-08-07: caching Admin->email hid
+                # Adele's Retail wing from the same lookup.)
+                if self._wing_cache[addr] != "email":
+                    return self._wing_cache[addr]
+                continue
             wing = await self._lookup_department(addr)
             self._wing_cache[addr] = wing
             if wing != "email":
