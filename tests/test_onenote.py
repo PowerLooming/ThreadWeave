@@ -77,7 +77,7 @@ class FakeProcessor:
     def _sanitize_room(self, name):
         return name.lower()
 
-    async def _mine_to_mempalace(self, text, wing, room, source_file):
+    async def _mine_to_mempalace(self, text, wing, room, source_file, author_id=""):
         self.mined.append((source_file, wing, room))
         return [f"drawer-{source_file}"]
 

@@ -18,6 +18,7 @@ from typing import Optional
 
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -345,6 +346,31 @@ async def ingest_content(req: IngestRequest, request: Request):
     effective_tenant = get_tenant_id(request)
     if effective_tenant != "default":
         req.tenant_id = effective_tenant
+
+    # 0. Opt-out gate — "camera sign" layer: never store knowledge from
+    #    a person who declined harvesting. Checked on every identity the
+    #    connectors report: author_id, email_sender, participants.
+    from threadweave.optout import get_optout_store
+
+    optout = get_optout_store()
+    meta = req.metadata
+    identities = [
+        meta.get("author_id", ""), meta.get("email_sender", ""),
+    ] + [p.strip() for p in meta.get("email_participants", "").split(",")]
+    identities += list(meta.get("participants", []) or [])
+    if optout.any_opted_out(identities):
+        metrics.record_ingest(skipped=True)
+        return IngestResponse(
+            id="opted_out",
+            should_save=False,
+            content_type="chat",
+            confidence=0.0,
+            signals=["opted_out"],
+            has_pii=False,
+            suggested_title="",
+            suggested_scope="team",
+            detector="regex",
+        )
     detector_mode = "regex"  # default; updated after detection
     # 1. Dedup — hash content + key metadata to avoid false dedup
     # when two emails share a body (templates) but have different subjects/senders.
@@ -640,6 +666,96 @@ async def get_entry(
     )
 
 
+# ---- Delete Entry (the "camera sign" layer: right to delete) ----
+
+@app.delete("/api/v1/entries/{entry_id}", status_code=204)
+async def delete_entry(
+    entry_id: str,
+    request: Request,
+    person_id: Optional[str] = Query(None),
+    wing: Optional[str] = Query(None),
+    role: str = Query("readwrite"),
+):
+    """Delete an entry. The requester must be the author, in the same
+    wing, or have admin/legal/hr clearance. Deletions are audited."""
+    entry = _memory_store.get(entry_id)
+    if not entry:
+        raise HTTPException(status_code=404, detail="Entry not found")
+
+    scoped = _scoped_tenant(request)
+    if scoped and entry.get("tenant_id", "default") != scoped:
+        raise HTTPException(status_code=404, detail="Entry not found")
+
+    requester = _requester_from_request(
+        request, wing=wing or "", person_id=person_id or "", role=role,
+    )
+
+    # Deletion rights: the entry's author, or a same-wing member for
+    # non-sensitive entries, or admin/legal/hr.
+    author = entry.get("author_id", "")
+    sensitivity = entry.get("sensitivity", "internal")
+    can_delete = (
+        requester.role in ("admin", "legal", "hr_admin")
+        or (author and requester.person_id == author)
+        or (
+            requester.wing
+            and entry.get("wing") == requester.wing
+            and sensitivity in ("public", "internal")
+        )
+    )
+    if not can_delete:
+        audit = get_audit_log()
+        audit.log_denied(
+            requester, entry, "Insufficient rights to delete",
+            ip_hash=_request_ip_hash(request),
+        )
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    # Audit the deletion (always — deletions are permanent)
+    audit = get_audit_log()
+    audit.log_delete(requester, entry, reason="user requested",
+                     ip_hash=_request_ip_hash(request))
+
+    # Remove from both stores
+    tenant_store = _tenant_stores.get(entry.get("tenant_id", "default"), {})
+    tenant_store.pop(entry_id, None)
+    _memory_store.pop(entry_id, None)
+    return Response(status_code=204)
+
+
+# ---- Opt-out registry (the "camera sign" layer) ----
+
+class OptOutRequest(BaseModel):
+    person: str = Field(..., min_length=1,
+                        description="Email or person ID to opt out/in")
+
+
+@app.get("/api/v1/optout")
+async def list_optouts():
+    """List all opted-out identities (privacy admin view)."""
+    from threadweave.optout import get_optout_store
+
+    return {"opted_out": get_optout_store().list_opted_out()}
+
+
+@app.post("/api/v1/optout/out")
+async def optout_register(req: OptOutRequest):
+    """Register a person as opted out of harvesting."""
+    from threadweave.optout import get_optout_store
+
+    added = get_optout_store().opt_out(req.person)
+    return {"person": req.person.lower(), "opted_out": True, "changed": added}
+
+
+@app.post("/api/v1/optout/in")
+async def optout_remove(req: OptOutRequest):
+    """Remove a person from the opt-out registry."""
+    from threadweave.optout import get_optout_store
+
+    removed = get_optout_store().opt_in(req.person)
+    return {"person": req.person.lower(), "opted_out": False, "changed": removed}
+
+
 # ---- Search (MemPalace hybrid + keyword fallback, tenant-aware, confidentiality-filtered) ----
 
 @app.post("/api/v1/search", response_model=SearchResponse)
@@ -697,6 +813,7 @@ async def search(req: SearchRequest, request: Request):
                     "content_preview": mr.content[:200],
                     "created_at": mr.created_at,
                     "author_team": mr.wing,
+                    "author_id": mr.author_id or "",
                     "relevance_score": round(mr.similarity, 3),
                     "bm25_score": mr.bm25_score,
                     "source": "mempalace",
@@ -739,6 +856,7 @@ async def search(req: SearchRequest, request: Request):
                 "content_preview": entry["content"][:200],
                 "created_at": entry["created_at"],
                 "author_team": entry["wing"],
+                "author_id": entry.get("author_id", ""),
                 "relevance_score": score,
                 "content_type": entry.get("content_type", "unknown"),
                 "source": "in_memory",

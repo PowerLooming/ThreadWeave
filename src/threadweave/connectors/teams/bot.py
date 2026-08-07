@@ -168,6 +168,12 @@ class ThreadWeaveTeamsBot(ActivityHandler if BOTBUILDER_AVAILABLE else object):
             trigger in text.lower() for trigger in EXPLICIT_TRIGGERS
         )
 
+        # Privacy commands — the "camera sign" layer. Work when mentioned
+        # OR in a 1:1 DM with the bot.
+        handled = await self._handle_privacy_command(turn_context, activity, text)
+        if handled:
+            return
+
         if is_explicit:
             clean = self._strip_trigger_phrases(text)
             if clean:
@@ -180,6 +186,164 @@ class ThreadWeaveTeamsBot(ActivityHandler if BOTBUILDER_AVAILABLE else object):
 
         if self.mode in ("passive", "both"):
             await self._handle_passive(turn_context, text, activity)
+
+    # ---- Privacy commands ("camera sign" layer) ----
+
+    async def _handle_privacy_command(
+        self, turn_context: TurnContext, activity: Activity, text: str
+    ) -> bool:
+        """Handle opt-out/opt-in/delete/status commands. Returns True if handled.
+
+        Commands (work via @mention or in a 1:1 DM):
+          opt out              — stop harvesting my content
+          opt in               — resume harvesting
+          delete <topic>       — delete my entries matching <topic>
+          status               — show whether I'm opted out + entry count
+        """
+        lower = text.lower()
+        person = self._person_identity(activity)
+        if not person:
+            return False
+
+        if "opt out" in lower:
+            await self._api_post(
+                "/api/v1/optout/out", {"person": person}
+            )
+            await turn_context.send_activity(
+                "You're now opted out. I won't save knowledge from your "
+                "messages, emails, or documents anymore. Say 'opt in' "
+                "anytime to resume. (Existing entries stay until you "
+                "delete them.)"
+            )
+            return True
+
+        if "opt in" in lower:
+            await self._api_post(
+                "/api/v1/optout/in", {"person": person}
+            )
+            await turn_context.send_activity(
+                "Welcome back — you're opted in again. I'll capture "
+                "knowledge from your content as before."
+            )
+            return True
+
+        if lower.startswith("delete") or "delete " in lower:
+            topic = self._strip_trigger_phrases(text)
+            topic = topic.replace("delete", "", 1).strip() if topic else ""
+            if not topic:
+                await turn_context.send_activity(
+                    "What should I delete? Try 'delete <topic>', e.g. "
+                    "'delete Azure Functions'."
+                )
+                return True
+            await self._handle_delete_command(turn_context, person, topic)
+            return True
+
+        if lower.strip() in ("status", "status?"):
+            state = await self._api_get("/api/v1/optout")
+            opted = state.get("opted_out", []) if state else []
+            status = "opted OUT" if person.lower() in opted else "opted in"
+            await turn_context.send_activity(
+                f"Privacy status: {status}. "
+                "Commands: 'opt out', 'opt in', 'delete <topic>', 'status'."
+            )
+            return True
+
+        return False
+
+    async def _handle_delete_command(
+        self, turn_context: TurnContext, person: str, topic: str
+    ) -> None:
+        """Delete the requester's entries matching a topic."""
+        results = await self._api_search(topic)
+        mine = [
+            r for r in results
+            if (r.get("author_id") or "").lower() == person.lower()
+        ]
+        if not mine:
+            await turn_context.send_activity(
+                f"No entries by you matched '{topic}'."
+            )
+            return
+
+        deleted = 0
+        for r in mine:
+            ok = await self._api_delete(r["id"], person=person)
+            if ok:
+                deleted += 1
+        await turn_context.send_activity(
+            f"Deleted {deleted} of {len(mine)} matching entries. "
+            "Deletions are permanent and audited."
+        )
+
+    @staticmethod
+    def _person_identity(activity: Activity) -> str:
+        """Best-effort person identity from a Teams activity."""
+        fp = activity.from_property
+        if not fp:
+            return ""
+        # AAD object id is the most stable identity the API can match
+        # against author_id claims.
+        ident = getattr(fp, "aad_object_id", "") or getattr(fp, "id", "")
+        return str(ident).strip()
+
+    # ---- API helpers ----
+
+    async def _api_post(self, path: str, body: dict) -> dict | None:
+        import httpx
+
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                resp = await client.post(
+                    f"{self.api_base_url}{path}", json=body
+                )
+                if resp.status_code < 300:
+                    return resp.json()
+                logger.warning("POST %s -> %d", path, resp.status_code)
+        except Exception as e:
+            logger.warning("POST %s failed: %s", path, e)
+        return None
+
+    async def _api_get(self, path: str) -> dict | None:
+        import httpx
+
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                resp = await client.get(f"{self.api_base_url}{path}")
+                if resp.status_code < 300:
+                    return resp.json()
+        except Exception as e:
+            logger.warning("GET %s failed: %s", path, e)
+        return None
+
+    async def _api_search(self, query: str) -> list[dict]:
+        import httpx
+
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                resp = await client.post(
+                    f"{self.api_base_url}/api/v1/search",
+                    json={"query": query, "limit": 20},
+                )
+                if resp.status_code < 300:
+                    return resp.json().get("results", [])
+        except Exception as e:
+            logger.warning("search failed: %s", e)
+        return []
+
+    async def _api_delete(self, entry_id: str, person: str) -> bool:
+        import httpx
+
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                resp = await client.delete(
+                    f"{self.api_base_url}/api/v1/entries/{entry_id}",
+                    params={"person_id": person, "role": "readwrite"},
+                )
+                return resp.status_code == 204
+        except Exception as e:
+            logger.warning("delete %s failed: %s", entry_id, e)
+        return False
 
     # ---- Passive Detection ----
 

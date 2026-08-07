@@ -559,6 +559,28 @@ class AuditLog:
         )
         self._append(entry)
 
+    def log_delete(
+        self,
+        requester: RequesterContext,
+        entry: dict,
+        reason: str = "user requested",
+        ip_hash: str = "",
+    ) -> None:
+        """Log an entry deletion (always audited — deletions are permanent)."""
+        entry = AuditEntry(
+            timestamp=datetime.now(timezone.utc).isoformat(),
+            requester_id=requester.person_id or "anonymous",
+            requester_wing=requester.wing,
+            action="delete",
+            entry_id=entry.get("id", "unknown"),
+            entry_sensitivity=entry.get("sensitivity", "internal"),
+            entry_wing=entry.get("wing", ""),
+            reason=reason,
+            tenant_id=entry.get("tenant_id", "default"),
+            ip_hash=ip_hash,
+        )
+        self._append(entry)
+
     # ── reads ───────────────────────────────────────────────────
 
     def _query(self, sql: str, params: tuple) -> Optional[list[dict]]:

@@ -185,6 +185,21 @@ class SharePointWatchDaemon:
             self.stats["skipped"] += 1
             return
 
+        # Opt-out gate: skip files authored by someone who declined
+        # harvesting (don't even download their content).
+        from threadweave.optout import OptOutStore
+
+        author = (
+            (item.get("createdBy") or {}).get("user") or {}
+        ).get("email", "")
+        if author:
+            optout = OptOutStore()
+            if optout.is_opted_out(author):
+                result["skipped"] += 1
+                self.stats["skipped"] += 1
+                logger.info("Skipped %s (author %s opted out)", item.get("name"), author)
+                return
+
         file_name = item.get("name", "")
         ext = Path(file_name).suffix.lower()
         if ext not in self.processor.SUPPORTED_EXTENSIONS:
@@ -219,6 +234,7 @@ class SharePointWatchDaemon:
                 wing=self.processor._sanitize_wing(site.display_name or site.site_id),
                 room=self.processor._sanitize_room(drive.name or drive.drive_id),
                 source_file=file_name,
+                author_id=author,
             )
         except Exception as e:
             result["errors"] += 1

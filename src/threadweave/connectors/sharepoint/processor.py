@@ -531,6 +531,7 @@ class DocumentProcessor:
         wing: str,
         room: str,
         source_file: str = "",
+        author_id: str = "",
     ) -> list[str]:
         """Submit extracted text to the central ingestion pipeline."""
         import httpx
@@ -548,6 +549,7 @@ class DocumentProcessor:
                             "room": room,
                             "title": source_file,
                             "source_file": source_file,
+                            "author_id": author_id,
                         },
                     },
                 )

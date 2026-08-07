@@ -140,6 +140,9 @@ class EmailWatchDaemon:
 
         Returns the message IDs that were processed (for mark-as-read).
         """
+        from threadweave.optout import OptOutStore
+
+        optout = OptOutStore()  # early skip: don't even extract opted-out content
         processed_ids: list[str] = []
         by_conversation: dict = {}
         for m in messages:
@@ -150,6 +153,15 @@ class EmailWatchDaemon:
 
         for conv_id, msgs in by_conversation.items():
             try:
+                first = msgs[0]
+                participants = [
+                    getattr(first, "sender_email", ""),
+                ] + list(getattr(first, "recipients", []) or [])
+                if optout.any_opted_out(participants):
+                    result["skipped"] += 1
+                    self.stats["skipped"] += 1
+                    logger.info("Skipped thread %s (participant opted out)", conv_id)
+                    continue
                 thread = await self.watcher.fetch_thread(self.mailbox, conv_id)
                 processed = await self.processor.process_thread(thread)
                 processed_ids.extend(m.message_id for m in msgs)
@@ -165,12 +177,23 @@ class EmailWatchDaemon:
 
         Returns the message IDs that were processed (for mark-as-read).
         """
+        from threadweave.optout import OptOutStore
+
+        optout = OptOutStore()  # early skip: don't even extract opted-out content
         processed_ids: list[str] = []
         for m in messages:
             if self._is_duplicate(m):
                 result["skipped"] += 1
                 continue
             try:
+                identities = [
+                    getattr(m, "sender_email", ""),
+                ] + list(getattr(m, "recipients", []) or [])
+                if optout.any_opted_out(identities):
+                    result["skipped"] += 1
+                    self.stats["skipped"] += 1
+                    logger.info("Skipped message %s (sender opted out)", m.message_id)
+                    continue
                 processed = await self.processor.process_message(m)
                 processed_ids.append(m.message_id)
                 self._tally(processed, result)
