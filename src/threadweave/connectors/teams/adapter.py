@@ -103,7 +103,9 @@ def create_app(
         mode: Bot operation mode ("passive", "explicit", "both").
     """
     adapter = create_adapter()
-    bot = ThreadWeaveTeamsBot(api_base_url=api_base_url, mode=mode)
+    bot = ThreadWeaveTeamsBot(
+        api_base_url=api_base_url, mode=mode, adapter=adapter
+    )
 
     app = web.Application()
 

@@ -112,6 +112,7 @@ class ThreadWeaveTeamsBot(ActivityHandler if BOTBUILDER_AVAILABLE else object):
         api_base_url: str = "http://localhost:8000",
         mode: str = "both",
         min_confidence: float = MIN_CONFIDENCE,
+        adapter: object | None = None,
     ):
         if not BOTBUILDER_AVAILABLE:
             raise ImportError(
@@ -122,6 +123,7 @@ class ThreadWeaveTeamsBot(ActivityHandler if BOTBUILDER_AVAILABLE else object):
         self.api_base_url = api_base_url.rstrip("/")
         self.mode = mode
         self.min_confidence = min_confidence
+        self._adapter = adapter  # BotFrameworkAdapter/CloudAdapter for proactive DMs
         self._pending: dict[str, tuple[DetectionResult, str]] = {}  # (result, original_text)
         self.stats = {"detected": 0, "saved": 0, "ignored": 0, "prompted": 0}
         self._notify_task: asyncio.Task | None = None
@@ -234,55 +236,62 @@ class ThreadWeaveTeamsBot(ActivityHandler if BOTBUILDER_AVAILABLE else object):
     async def _send_capture_notification(
         self, notif: dict, ref: dict
     ) -> bool:
-        """Send one proactive DM to the content author via Bot Framework.
+        """Send one proactive DM to the content author via the adapter.
 
-        Requires the connector client for the service URL recorded when
-        the author last talked to the bot (1:1 DM or @mention).
+        Uses the stored conversation reference (captured when the
+        author last talked to the bot) with continue_conversation.
         """
+        if self._adapter is None:
+            logger.warning("No adapter configured — cannot send proactive DM")
+            return False
         try:
             from botbuilder.schema import (
-                Activity, ActivityTypes, ChannelAccount, ConversationAccount,
+                ChannelAccount, ConversationAccount, ConversationReference,
             )
 
-            connector = self._connector_for(ref.get("service_url", ""))
-            activity = Activity(
-                type=ActivityTypes.message,
-                text=(
+            reference = ConversationReference(
+                activity_id=ref.get("activity_id", ""),
+                user=ChannelAccount(
+                    id=ref.get("user_id", ""),
+                    aad_object_id=ref.get("user_aad_id", ""),
+                ),
+                bot=ChannelAccount(
+                    id=ref.get("bot_id", "") or self._bot_id,
+                    name=ref.get("bot_name", ""),
+                ),
+                conversation=ConversationAccount(
+                    id=ref.get("conversation_id", ""),
+                    conversation_type=ref.get("conversation_type", ""),
+                ),
+                channel_id=ref.get("channel_id", "msteams"),
+                service_url=ref.get("service_url", ""),
+            )
+
+            async def send_capture(turn_context) -> None:
+                await turn_context.send_activity(
                     f"**Captured to the palace** — your "
                     f"{notif.get('source', 'content')} "
                     f"\"{notif.get('title', '')}\" was added "
                     f"(wing: {notif.get('wing', '')}). "
                     f"Say **delete {notif.get('title', '')}** to remove it, "
                     f"or **opt out** to stop future captures."
-                ),
-                recipient=ChannelAccount(id=self._bot_id),
-                from_property=ChannelAccount(id=self._bot_id),
-                channel_id=ref.get("channel_id", "msteams"),
-                conversation=ConversationAccount(
-                    id=ref.get("conversation_id", ""),
-                ),
-            )
-            await connector.conversations.send_to_conversation(
-                ref.get("conversation_id", ""), activity
-            )
+                )
+
+            bot_app_id = os.environ.get("MICROSOFT_APP_ID", "")
+            if hasattr(self._adapter, "continue_conversation"):
+                await self._adapter.continue_conversation(
+                    reference, send_capture, bot_app_id=bot_app_id
+                )
+            else:
+                await self._adapter.continue_conversation(
+                    reference, send_capture
+                )
             logger.info("Capture notification DM sent to %s (entry %s)",
                         notif.get("author_id"), notif.get("entry_id"))
             return True
         except Exception as exc:
             logger.warning("Proactive DM failed: %s", exc)
             return False
-
-    def _connector_for(self, service_url: str):
-        """Build a connector client for a service URL (lazy)."""
-        from botbuilder.connector import ConnectorClient
-        from msrest.authentication import CognitiveServiceCredentials
-
-        app_id = os.environ.get("MICROSOFT_APP_ID", "")
-        app_password = os.environ.get("MICROSOFT_APP_PASSWORD", "")
-        return ConnectorClient(
-            CognitiveServiceCredentials(app_id, app_password),
-            base_url=service_url,
-        )
 
     # ---- Lifecycle ----
 
@@ -328,6 +337,7 @@ class ThreadWeaveTeamsBot(ActivityHandler if BOTBUILDER_AVAILABLE else object):
                     service_url=activity.service_url,
                     channel_id=activity.channel_id or "msteams",
                     name=getattr(fp, "name", "") or "",
+                    activity=activity,
                 )
         except Exception as exc:
             logger.warning("Conversation capture failed: %s", exc)

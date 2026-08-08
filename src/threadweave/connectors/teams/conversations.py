@@ -62,17 +62,41 @@ class ConversationStore:
         service_url: str,
         channel_id: str = "msteams",
         name: str = "",
+        activity: object | None = None,
     ) -> None:
-        """Record/refresh a person's conversation reference."""
+        """Record/refresh a person's conversation reference.
+
+        When an activity is provided, the full Bot Framework
+        ConversationReference is derived from it (the modern adapter
+        needs the complete reference for proactive messages).
+        """
         if not person_id or not conversation_id:
             return
+        ref = {
+            "conversation_id": conversation_id,
+            "service_url": service_url,
+            "channel_id": channel_id,
+            "name": name,
+        }
+        if activity is not None:
+            try:
+                act = activity
+                ref["activity_id"] = getattr(act, "id", "") or ""
+                conv = act.conversation
+                if conv is not None:
+                    ref["conversation_type"] = getattr(conv, "conversation_type", "") or ""
+                user = act.from_property
+                if user is not None:
+                    ref["user_id"] = getattr(user, "id", "") or ""
+                    ref["user_aad_id"] = getattr(user, "aad_object_id", "") or ""
+                bot = act.recipient
+                if bot is not None:
+                    ref["bot_id"] = getattr(bot, "id", "") or ""
+                    ref["bot_name"] = getattr(bot, "name", "") or ""
+            except Exception:
+                pass  # best-effort reference capture
         with self._lock:
-            self._data[person_id] = {
-                "conversation_id": conversation_id,
-                "service_url": service_url,
-                "channel_id": channel_id,
-                "name": name,
-            }
+            self._data[person_id] = ref
             self._save()
 
     def get(self, person_id: str) -> dict | None:
