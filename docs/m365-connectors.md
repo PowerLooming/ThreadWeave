@@ -179,6 +179,36 @@ uv run python -m threadweave.cli graph sync     # push entries to the search ind
 uv run python -m threadweave.cli graph daemon   # continuous sync every 5 min
 ```
 
+## Publishing the Teams app (org app catalog)
+
+The bot starts as a sideloaded zip; making it official = publishing to the
+**org app catalog** so users can install it from the Teams app store.
+
+**Build the package** (reproducible, validated):
+
+```bash
+uv run python -m threadweave.cli teams package \
+  --bot-id cb342c61-8ab1-4c7b-ac0c-0a7f191acf4b --version 1.0.1
+# → dist/threadweave-teams-app-1.0.1.zip (byte-identical rebuilds)
+```
+
+The builder checks icon sizes (color 192x192, outline 32x32), RSC
+permissions, and manifest fields. Version bumps: `--version 1.0.2` etc.
+
+**Upload to the org app catalog** (admin, one time):
+
+1. **https://admin.teams.microsoft.com** → **Teams apps** → **Manage apps**
+2. **Upload new app** → choose `dist/threadweave-teams-app-1.0.1.zip`
+3. The app appears in **Manage apps** — click it → **Publish**
+4. Users find it under **Apps** → **Built for your org** and install it
+   themselves (or you push it via an app setup policy)
+
+**For a pilot:** scope the app to one team by installing it only in that
+team's channel (works without a policy); the bot only sees conversations it
+is in, so nothing from other teams reaches it. The app ID and bot ID stay
+`cb342c61-8ab1-4c7b-ac0c-0a7f191acf4b` across versions — existing installs
+update in place.
+
 ## Step 5: Verify Each Connector
 
 ### Email Watcher
