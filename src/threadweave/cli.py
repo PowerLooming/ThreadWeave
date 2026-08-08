@@ -205,6 +205,37 @@ def cmd_teams_package(args):
           "Upload new app (org app catalog)")
 
 
+def cmd_teams_publish(args):
+    """Upload a package to the org app catalog via Graph."""
+    from threadweave.connectors.teams.publish import TeamsAppPublisher
+
+    zip_path = args.package
+    if not os.path.exists(zip_path):
+        print(f"Package not found: {zip_path}", file=sys.stderr)
+        sys.exit(1)
+
+    publisher = TeamsAppPublisher()
+    print(f"Uploading {zip_path} to the org app catalog...")
+    app = publisher.upload(zip_path)
+    app_id = app.get("id", "")
+    print(f"Uploaded: id={app_id}")
+
+    # Poll for readiness so the admin gets a definitive answer.
+    try:
+        ready = publisher.wait_ready(app_id, timeout=args.wait)
+        status = ready.get("appDefinitions", [{}])[0].get(
+            "publishingState", "unknown"
+        ) if ready.get("appDefinitions") else "unknown"
+        print(f"Catalog status: {status}")
+    except TimeoutError as exc:
+        print(f"Warning: {exc} — check the admin center.")
+
+    print("\nNext steps in the Teams admin center:")
+    print("  1. https://admin.teams.microsoft.com → Teams apps → Manage apps")
+    print(f"  2. Find '{app.get('displayName', 'ThreadWeave')}' → Publish")
+    print("  3. Users install from Apps → Built for your org")
+
+
 # ── Daemon Management (packaging) ──────────────────────────────────
 
 def cmd_daemon_run(args):
@@ -749,6 +780,13 @@ def main():
                              help="Outline icon path (32x32)")
     p_teams_pkg.add_argument("--out-dir", default="dist",
                              help="Output directory (default: dist)")
+    p_teams_pub = teams_sub.add_parser(
+        "publish", help="Upload a package to the org app catalog "
+                        "(device-code sign-in)")
+    p_teams_pub.add_argument("--package", default="dist/threadweave-bot-manifest.zip",
+                             help="Package zip path")
+    p_teams_pub.add_argument("--wait", type=int, default=120,
+                             help="Seconds to poll for catalog readiness")
 
     p_d_run = daemon_sub.add_parser(
         "run", help="Run a daemon with its env file (used by services)")
@@ -788,6 +826,8 @@ def main():
     elif args.command == "teams":
         if args.teams_command == "package":
             cmd_teams_package(args)
+        elif args.teams_command == "publish":
+            cmd_teams_publish(args)
         else:
             p_teams.print_help()
     elif args.command == "daemon":
