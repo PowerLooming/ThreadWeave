@@ -21,6 +21,7 @@ uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **Teams bot wing/room mapping** — wing derived from conversation context (team name → wing, channel → room), matching the email department mapping.
 - **Email palace wing mapping** — sender → department → wing via Graph `User.Read.All`, recipient fallback, `email` fallback wing.
 - **Documentation** — `docs/privacy.md` (privacy model), expanded `docs/m365-connectors.md` (daemons, OneNote, delegated auth, troubleshooting), README continuous-capture + privacy sections.
+- **Capture notifications** — when daemons save knowledge from someone's content, the Teams bot DMs that person ("camera sign" that talks): durable SQLite queue, author-only, email→AAD resolution, proactive delivery via `continue_conversation`, opt-out respected. Live-verified 2026-08-08.
 - **Durable entry store** — SQLAlchemy-based persistence. SQLite default (`~/.threadweave/entries.sqlite3`) for zero-config on-prem; PostgreSQL via `THREADWEAVE_ENTRY_DB` URL + `.[postgres]` extra for corporate deployments. The palace survives restarts on either backend; startup reloads persisted entries into the memory stores. Verified live: save → restart → entry restored and searchable.
 
 ### Fixed

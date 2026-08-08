@@ -23,6 +23,17 @@ ThreadWeave captures organizational knowledge so nobody has to ask Lars. Passive
 - The Teams bot never stores anything silently: it detects knowledge, offers an Adaptive Card, and saves only when the author clicks **Save**.
 - Email, SharePoint, and OneNote are automatic by design (there is no human at capture time), which is why layers 3 and 4 exist.
 
+### 2b. Capture notification (the sign that talks)
+
+When a daemon saves knowledge from someone's content, that person gets a **Teams DM from the bot**:
+
+> **Captured to the palace** — your email "root cause" was added (wing: email). Say **delete root cause** to remove it, or **opt out** to stop future captures.
+
+- Notifications are queued **only for the content author** (`~/.threadweave/notifications.sqlite3`), never for unrelated people.
+- Opted-out authors never generate entries, so they never generate notifications.
+- Delivery: the bot polls `GET /api/v1/notifications/pending` every 60s (configurable: `THREADWEAVE_NOTIFY_INTERVAL`, disable with `THREADWEAVE_NOTIFY_ENABLED=0`), resolves the author's email to their AAD id via Graph, and sends a proactive DM through the stored conversation reference (`~/.threadweave/bot_conversations.json`).
+- People who never talked to the bot can't be DM'd — their notifications stay pending (by design; nothing leaks to the wrong person).
+
 ### 3. Opt-out (per person, everywhere)
 
 Any person can decline harvesting. Their identity is registered once and checked at every capture path:
