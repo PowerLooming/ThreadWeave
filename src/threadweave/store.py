@@ -89,7 +89,8 @@ CREATE TABLE IF NOT EXISTS {self.table_name} (
     source_metadata TEXT DEFAULT '{{}}',
     sensitivity TEXT DEFAULT 'internal',
     client_id TEXT,
-    allowed_people TEXT DEFAULT '[]'
+    allowed_people TEXT DEFAULT '[]',
+    version_of TEXT
 )
 """,
             f"CREATE INDEX IF NOT EXISTS idx_{self.table_name}_tenant "
@@ -101,11 +102,30 @@ CREATE TABLE IF NOT EXISTS {self.table_name} (
             with self._engine.begin() as conn:
                 for statement in statements:
                     conn.execute(text(statement))
+                # Migration for existing DBs: add version_of if missing.
+                has_version = any(
+                    col["name"] == "version_of"
+                    for col in self._columns()
+                )
+                if not has_version:
+                    conn.execute(text(
+                        f"ALTER TABLE {self.table_name} ADD COLUMN "
+                        "version_of TEXT"
+                    ))
         except Exception as exc:
             logger.warning(
                 "Entry DB unavailable at %s (%s) — entries will be "
                 "memory-only for this run", self.url, exc,
             )
+
+    def _columns(self) -> list[dict]:
+        """Column metadata for the current table (dialect-neutral)."""
+        from sqlalchemy import inspect
+
+        try:
+            return inspect(self._engine).get_columns(self.table_name)
+        except Exception:
+            return []
 
     # ---- serialization ----
 
@@ -129,6 +149,7 @@ CREATE TABLE IF NOT EXISTS {self.table_name} (
             "sensitivity": entry.get("sensitivity", "internal"),
             "client_id": entry.get("client_id"),
             "allowed_people": json.dumps(entry.get("allowed_people", [])),
+            "version_of": entry.get("version_of"),
         }
 
     @staticmethod
@@ -151,6 +172,7 @@ CREATE TABLE IF NOT EXISTS {self.table_name} (
             "sensitivity": row["sensitivity"],
             "client_id": row["client_id"],
             "allowed_people": json.loads(row["allowed_people"] or "[]"),
+            "version_of": row["version_of"],
         }
 
     # ---- writes ----
@@ -227,6 +249,25 @@ CREATE TABLE IF NOT EXISTS {self.table_name} (
             return int(row["n"]) if row else 0
         except Exception:
             return 0
+
+    # ---- versioning ----
+
+    def find_by_source_key(self, source_key: str) -> list[dict]:
+        """Entries whose source_metadata matches a source identity key.
+
+        Used for version chaining: a re-captured document (same
+        source_file) becomes a new version of the earlier capture.
+        JSON filtering is done in Python for dialect neutrality.
+        """
+        if not source_key:
+            return []
+        matches = []
+        for entry in self.load_all():
+            meta = entry.get("source_metadata") or {}
+            if meta.get("source_file") == source_key:
+                matches.append(entry)
+        matches.sort(key=lambda e: e.get("created_at", ""))
+        return matches
 
 
 # Process-wide singleton (mirrors the audit log pattern)

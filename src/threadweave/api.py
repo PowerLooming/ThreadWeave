@@ -227,6 +227,7 @@ class EntryResponse(BaseModel):
     author_id: str
     created_at: str
     entities: list[dict]
+    version_of: str = ""
 
 
 class SearchRequest(BaseModel):
@@ -506,6 +507,20 @@ async def ingest_content(req: IngestRequest, request: Request):
     tenant_store[entry_id] = entry
     _memory_store[entry_id] = entry  # Also global for search
 
+    # Version chaining BEFORE the save: a re-captured document (same
+    # source_file) is a new version of the earlier capture, not a
+    # standalone duplicate. (Must run before the entry is persisted —
+    # otherwise find_by_source_key sees the new entry itself and the
+    # chain check `earlier[-1] != entry_id` fails.)
+    source_key = req.metadata.get("source_file", "")
+    if source_key:
+        try:
+            earlier = get_entry_store().find_by_source_key(source_key)
+            if earlier and earlier[-1]["id"] != entry_id:
+                entry["version_of"] = earlier[-1]["id"]
+        except Exception as exc:
+            logger.warning("Version chaining failed: %s", exc)
+
     # Durability: write-through to SQLite so the palace survives restarts
     try:
         get_entry_store().save(entry)
@@ -722,6 +737,7 @@ async def get_entry(
         room=entry["room"], scope=entry["scope"],
         source_type=entry["source_type"], author_id=entry["author_id"],
         created_at=entry["created_at"], entities=entry["entities"],
+        version_of=entry.get("version_of", "") or "",
     )
 
 
@@ -807,6 +823,49 @@ async def notifications_stats():
     store = get_notification_store()
     return {"pending": store.count(delivered_only=False),
             "delivered": store.count(delivered_only=True)}
+
+
+# ---- Entry version chain ----
+
+@app.get("/api/v1/entries/{entry_id}/versions")
+async def entry_versions(entry_id: str):
+    """Return the version chain for an entry (oldest -> newest)."""
+    entry = _memory_store.get(entry_id)
+    if not entry:
+        entry = get_entry_store().get(entry_id)
+    if not entry:
+        raise HTTPException(status_code=404, detail="Entry not found")
+
+    source_key = (entry.get("source_metadata") or {}).get("source_file", "")
+    chain = []
+    if source_key:
+        for e in get_entry_store().find_by_source_key(source_key):
+            chain.append({
+                "id": e["id"],
+                "title": e.get("title", ""),
+                "created_at": e.get("created_at", ""),
+                "version_of": e.get("version_of"),
+                "wing": e.get("wing", ""),
+            })
+    else:
+        # Walk the version_of pointers
+        seen = set()
+        current: dict | None = entry
+        while current and current["id"] not in seen:
+            seen.add(current["id"])
+            chain.append({
+                "id": current["id"],
+                "title": current.get("title", ""),
+                "created_at": current.get("created_at", ""),
+                "version_of": current.get("version_of"),
+                "wing": current.get("wing", ""),
+            })
+            parent_id = current.get("version_of")
+            if not parent_id:
+                break
+            current = _memory_store.get(parent_id) or get_entry_store().get(parent_id)
+        chain.reverse()
+    return {"entry_id": entry_id, "versions": chain}
 
 
 # ---- Opt-out registry (the "camera sign" layer) ----
@@ -900,6 +959,7 @@ async def search(req: SearchRequest, request: Request):
                     "created_at": mr.created_at,
                     "author_team": mr.wing,
                     "author_id": mr.author_id or "",
+                    "version_of": getattr(mr, "version_of", "") or "",
                     "relevance_score": round(mr.similarity, 3),
                     "bm25_score": mr.bm25_score,
                     "source": "mempalace",
@@ -943,6 +1003,7 @@ async def search(req: SearchRequest, request: Request):
                 "created_at": entry["created_at"],
                 "author_team": entry["wing"],
                 "author_id": entry.get("author_id", ""),
+                "version_of": entry.get("version_of", ""),
                 "relevance_score": score,
                 "content_type": entry.get("content_type", "unknown"),
                 "source": "in_memory",
