@@ -32,7 +32,16 @@ GRAPH_API = "https://graph.microsoft.com/v1.0"
 # Microsoft's well-known "Microsoft Authentication Library" client ID
 # for public client apps — works with device code flow without any
 # Azure registration. Used by Microsoft's own tools and SDKs.
-CLIENT_ID = "04b07795-8ddb-461a-bbee-02f9e1bf7b46"  # Azure CLI client
+# NOTE: Microsoft's first-party clients (incl. Azure CLI) are BLOCKED
+# for Graph Mail.Read since ~2025 (AADSTS65002: first-party consent
+# must be preauthorized — verified live 2026-08-08). Use your own app
+# registration (public client flows enabled, delegated Mail.Read):
+#   THREADWEAVE_MAIL_CLIENT_ID=<your app id>
+#   THREADWEAVE_MAIL_TENANT_ID=<your tenant id>
+CLIENT_ID = os.environ.get(
+    "THREADWEAVE_MAIL_CLIENT_ID", "04b07795-8ddb-461a-bbee-02f9e1bf7b46"
+)
+TENANT_ID = os.environ.get("THREADWEAVE_MAIL_TENANT_ID", "")
 SCOPES = ["Mail.Read"]
 TOKEN_FILE=Path.home() / ".threadweave" / "graph_token.json"
 
@@ -68,7 +77,12 @@ def _acquire_token() -> str:
             pass
 
     PublicClientApplication = _get_msal()
-    app = PublicClientApplication(CLIENT_ID, authority="https://login.microsoftonline.com/common")
+    authority = (
+        f"https://login.microsoftonline.com/{TENANT_ID}"
+        if TENANT_ID
+        else "https://login.microsoftonline.com/common"
+    )
+    app = PublicClientApplication(CLIENT_ID, authority=authority)
 
     flow = app.initiate_device_flow(scopes=SCOPES)
     if "user_code" not in flow:
@@ -84,6 +98,16 @@ def _acquire_token() -> str:
     if "access_token" not in result:
         error = result.get("error_description", result.get("error", "unknown"))
         print(f"\nSign-in failed: {error}")
+        if "AADSTS65002" in error:
+            print("\nMicrosoft blocks its own first-party clients from "
+                  "requesting Graph Mail.Read.")
+            print("Fix: create your own app registration (or reuse an "
+                  "existing one), enable 'Allow public client flows',")
+            print("add delegated Mail.Read, then set:")
+            print("  THREADWEAVE_MAIL_CLIENT_ID=<your app id>")
+            print("  THREADWEAVE_MAIL_TENANT_ID=<your tenant id>")
+            print("No client secret needed. No admin consent needed for "
+                  "delegated Mail.Read on your own mailbox.")
         sys.exit(1)
 
     # Cache it
