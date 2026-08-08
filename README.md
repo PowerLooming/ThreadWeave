@@ -158,6 +158,7 @@ Capture without disclosure is surveillance, so ThreadWeave ships a privacy layer
 - [M365 Connector Setup](docs/m365-connectors.md) — Azure app registrations, email/SharePoint/OneNote daemons, Copilot connector, troubleshooting
 - [Privacy Model](docs/privacy.md) — on-prem one-way contract, opt-out, right to delete, access control
 - [Distribution](docs/distribution.md) — how orgs get the app (manual upload, scripted publish, Teams Store), verified marketplace costs
+- [Enterprise Adoption Checklist](docs/enterprise-adoption.md) — tracked gates from the IT-manager review: permissions, licensing, vendor readiness, observability, data lifecycle
 - [Technical Specification](docs/technical-spec.md)
 
 ## Configuration
