@@ -22,6 +22,7 @@ uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **Email palace wing mapping** — sender → department → wing via Graph `User.Read.All`, recipient fallback, `email` fallback wing.
 - **Documentation** — `docs/privacy.md` (privacy model), expanded `docs/m365-connectors.md` (daemons, OneNote, delegated auth, troubleshooting), README continuous-capture + privacy sections.
 - **Capture notifications** — when daemons save knowledge from someone's content, the Teams bot DMs that person ("camera sign" that talks): durable SQLite queue, author-only, email→AAD resolution, proactive delivery via `continue_conversation`, opt-out respected. Live-verified 2026-08-08.
+- **Entry versioning** — re-captured documents (same `source_file`) chain to the original via a `version_of` pointer instead of piling up unrelated duplicates; `GET /api/v1/entries/{id}/versions` returns the evolution chain. Schema migration adds `version_of` to existing DBs. Live-verified 2026-08-08.
 - **Daemon packaging** — `threadweave daemon run|install|uninstall|status|config`: per-daemon env files (`~/.threadweave/daemons/<name>.env`), Windows Startup-folder launchers (no admin), systemd units with `Restart=always`, in-process dispatch (execvpe segfaults on MSYS Windows). Live-verified: all four launchers installed and polling.
 - **Durable entry store** — SQLAlchemy-based persistence. SQLite default (`~/.threadweave/entries.sqlite3`) for zero-config on-prem; PostgreSQL via `THREADWEAVE_ENTRY_DB` URL + `.[postgres]` extra for corporate deployments. The palace survives restarts on either backend; startup reloads persisted entries into the memory stores. Verified live: save → restart → entry restored and searchable.
 
@@ -36,7 +37,7 @@ uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
-- Full test suite: **387 passed** (was 312 at 0.3.0). The live-PostgreSQL roundtrip test is gated on `TEST_POSTGRES_URL`.
+- Full test suite: **393 passed** (was 312 at 0.3.0). The live-PostgreSQL roundtrip test is gated on `TEST_POSTGRES_URL`.
 - `threadweave sharepoint watch` gained `--onenote` and `--site` flags; `sharepoint onenote-login` command added.
 - GraphReader app registration now also needs `User.Read.All` (Application) and `Notes.Read.All` (Delegated) plus "Allow public client flows" enabled (see `docs/m365-connectors.md`).
 - Entry storage is durable and backend-pluggable (SQLAlchemy: SQLite default, PostgreSQL via `THREADWEAVE_ENTRY_DB` URL); the in-memory store is reloaded from the DB at startup.

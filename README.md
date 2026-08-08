@@ -198,6 +198,7 @@ Capture without disclosure is surveillance, so ThreadWeave ships a privacy layer
 - ✅ **Copilot connector** — Graph external connection, schema, item sync, continuous daemon
 - ✅ **Privacy layer** — opt-out registry (ingest gate + early daemon skips), audited right-to-delete, Teams privacy commands
 - ✅ **Durable entry store** — SQLite write-through (`~/.threadweave/entries.sqlite3`); the palace survives restarts
+- ✅ **Entry versioning** — re-captured documents (same source_file) chain to the original; `GET /api/v1/entries/{id}/versions` shows the evolution
 - ✅ **366 tests** — full suite green
 
 ## What's Next
