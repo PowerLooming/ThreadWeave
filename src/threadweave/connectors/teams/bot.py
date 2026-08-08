@@ -19,6 +19,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import re
 from typing import Optional
 
@@ -123,6 +124,165 @@ class ThreadWeaveTeamsBot(ActivityHandler if BOTBUILDER_AVAILABLE else object):
         self.min_confidence = min_confidence
         self._pending: dict[str, tuple[DetectionResult, str]] = {}  # (result, original_text)
         self.stats = {"detected": 0, "saved": 0, "ignored": 0, "prompted": 0}
+        self._notify_task: asyncio.Task | None = None
+        self._notify_interval = float(
+            os.environ.get("THREADWEAVE_NOTIFY_INTERVAL", "60")
+        )
+        self._notify_enabled = os.environ.get(
+            "THREADWEAVE_NOTIFY_ENABLED", "1"
+        ) not in ("0", "false", "False")
+        self._bot_id = os.environ.get("MICROSOFT_APP_ID", "")
+
+    # ---- Capture notification poller ("camera sign" DMs) ----
+
+    def start_notification_poller(self) -> None:
+        """Start the background task that DMs authors when their content
+        is captured by the daemons."""
+        if not self._notify_enabled:
+            logger.info("Capture notifications disabled "
+                        "(THREADWEAVE_NOTIFY_ENABLED=0)")
+            return
+        self._notify_task = asyncio.create_task(self._notification_loop())
+
+    async def stop_notification_poller(self) -> None:
+        if self._notify_task:
+            self._notify_task.cancel()
+            try:
+                await self._notify_task
+            except asyncio.CancelledError:
+                pass
+
+    async def _notification_loop(self) -> None:
+        while True:
+            try:
+                await self._deliver_pending_notifications()
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                logger.warning("Notification poll failed: %s", exc)
+            await asyncio.sleep(self._notify_interval)
+
+    async def _deliver_pending_notifications(self) -> None:
+        """Fetch undelivered notifications and DM their authors."""
+        from threadweave.connectors.teams.conversations import (
+            get_conversation_store,
+        )
+
+        data = await self._api_get("/api/v1/notifications/pending")
+        if not data:
+            return
+        store = get_conversation_store()
+        for notif in data.get("notifications", []):
+            try:
+                author = notif.get("author_id", "")
+                ref = store.get(author)
+                if not ref:
+                    # Author identity may be an email while the store is
+                    # keyed by AAD object id — resolve via Graph.
+                    aad_id = await self._resolve_aad_id(author)
+                    if aad_id:
+                        ref = store.get(aad_id)
+                if not ref:
+                    # Author never talked to the bot — nothing to DM to.
+                    continue
+                sent = await self._send_capture_notification(notif, ref)
+                if sent:
+                    await self._api_post(
+                        f"/api/v1/notifications/{notif['id']}/delivered", {}
+                    )
+                    self.stats["notified"] = self.stats.get("notified", 0) + 1
+            except Exception as exc:
+                logger.warning("Notify delivery failed for %s: %s",
+                               notif.get("id"), exc)
+
+    async def _resolve_aad_id(self, email: str) -> str:
+        """Resolve an email to an AAD object id via Graph (GraphReader
+        app credentials from the environment). Returns '' on failure."""
+        if not email or "@" not in email:
+            return ""
+        try:
+            from msal import ConfidentialClientApplication
+
+            tenant = os.environ.get("AZURE_TENANT_ID", "")
+            client_id = os.environ.get("AZURE_CLIENT_ID", "")
+            secret = os.environ.get("AZURE_CLIENT_SECRET", "")
+            if not (tenant and client_id and secret):
+                return ""
+            app = ConfidentialClientApplication(
+                client_id=client_id,
+                client_credential=secret,
+                authority=f"https://login.microsoftonline.com/{tenant}",
+            )
+            result = app.acquire_token_for_client(
+                scopes=["https://graph.microsoft.com/.default"]
+            )
+            if "access_token" not in result:
+                return ""
+            import httpx
+
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                resp = await client.get(
+                    f"https://graph.microsoft.com/v1.0/users/{email}",
+                    headers={"Authorization": f"Bearer {result['access_token']}"},
+                )
+                if resp.status_code == 200:
+                    return str(resp.json().get("id", ""))
+        except Exception as exc:
+            logger.warning("AAD id resolution failed for %s: %s", email, exc)
+        return ""
+
+    async def _send_capture_notification(
+        self, notif: dict, ref: dict
+    ) -> bool:
+        """Send one proactive DM to the content author via Bot Framework.
+
+        Requires the connector client for the service URL recorded when
+        the author last talked to the bot (1:1 DM or @mention).
+        """
+        try:
+            from botbuilder.schema import (
+                Activity, ActivityTypes, ChannelAccount, ConversationAccount,
+            )
+
+            connector = self._connector_for(ref.get("service_url", ""))
+            activity = Activity(
+                type=ActivityTypes.message,
+                text=(
+                    f"**Captured to the palace** — your "
+                    f"{notif.get('source', 'content')} "
+                    f"\"{notif.get('title', '')}\" was added "
+                    f"(wing: {notif.get('wing', '')}). "
+                    f"Say **delete {notif.get('title', '')}** to remove it, "
+                    f"or **opt out** to stop future captures."
+                ),
+                recipient=ChannelAccount(id=self._bot_id),
+                from_property=ChannelAccount(id=self._bot_id),
+                channel_id=ref.get("channel_id", "msteams"),
+                conversation=ConversationAccount(
+                    id=ref.get("conversation_id", ""),
+                ),
+            )
+            await connector.conversations.send_to_conversation(
+                ref.get("conversation_id", ""), activity
+            )
+            logger.info("Capture notification DM sent to %s (entry %s)",
+                        notif.get("author_id"), notif.get("entry_id"))
+            return True
+        except Exception as exc:
+            logger.warning("Proactive DM failed: %s", exc)
+            return False
+
+    def _connector_for(self, service_url: str):
+        """Build a connector client for a service URL (lazy)."""
+        from botbuilder.connector import ConnectorClient
+        from msrest.authentication import CognitiveServiceCredentials
+
+        app_id = os.environ.get("MICROSOFT_APP_ID", "")
+        app_password = os.environ.get("MICROSOFT_APP_PASSWORD", "")
+        return ConnectorClient(
+            CognitiveServiceCredentials(app_id, app_password),
+            base_url=service_url,
+        )
 
     # ---- Lifecycle ----
 
@@ -151,6 +311,26 @@ class ThreadWeaveTeamsBot(ActivityHandler if BOTBUILDER_AVAILABLE else object):
 
         if activity.type != ActivityTypes.message:
             return
+
+        # Remember the conversation so we can DM this person later
+        # ("camera sign" capture notifications).
+        try:
+            from threadweave.connectors.teams.conversations import (
+                get_conversation_store,
+            )
+
+            fp = activity.from_property
+            person = getattr(fp, "aad_object_id", "") or getattr(fp, "id", "")
+            if person and activity.conversation and activity.service_url:
+                get_conversation_store().remember(
+                    person_id=str(person),
+                    conversation_id=activity.conversation.id,
+                    service_url=activity.service_url,
+                    channel_id=activity.channel_id or "msteams",
+                    name=getattr(fp, "name", "") or "",
+                )
+        except Exception as exc:
+            logger.warning("Conversation capture failed: %s", exc)
 
         # Handle Adaptive Card submit actions
         if activity.value and isinstance(activity.value, dict):

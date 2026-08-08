@@ -53,11 +53,12 @@ class EntryStore:
     mirrors the entry dict exactly (JSON columns for nested fields).
     """
 
-    def __init__(self, url: str | None = None):
+    def __init__(self, url: str | None = None, table_name: str = "entries"):
         from sqlalchemy import create_engine
         from sqlalchemy.pool import NullPool
 
         self.url = url or _entry_url()
+        self.table_name = table_name
         # NullPool: the API is a long-lived single process; pooled
         # connections add nothing here and complicate multi-backend use.
         self._engine = create_engine(self.url, poolclass=NullPool)
@@ -70,8 +71,8 @@ class EntryStore:
         from sqlalchemy import text
 
         statements = [
-            """
-CREATE TABLE IF NOT EXISTS entries (
+            f"""
+CREATE TABLE IF NOT EXISTS {self.table_name} (
     id TEXT PRIMARY KEY,
     content TEXT NOT NULL,
     wing TEXT DEFAULT '',
@@ -85,14 +86,16 @@ CREATE TABLE IF NOT EXISTS entries (
     content_type TEXT DEFAULT 'answer',
     has_pii INTEGER DEFAULT 0,
     tenant_id TEXT DEFAULT 'default',
-    source_metadata TEXT DEFAULT '{}',
+    source_metadata TEXT DEFAULT '{{}}',
     sensitivity TEXT DEFAULT 'internal',
     client_id TEXT,
     allowed_people TEXT DEFAULT '[]'
 )
 """,
-            "CREATE INDEX IF NOT EXISTS idx_entries_tenant ON entries(tenant_id)",
-            "CREATE INDEX IF NOT EXISTS idx_entries_wing ON entries(wing)",
+            f"CREATE INDEX IF NOT EXISTS idx_{self.table_name}_tenant "
+            f"ON {self.table_name}(tenant_id)",
+            f"CREATE INDEX IF NOT EXISTS idx_{self.table_name}_wing "
+            f"ON {self.table_name}(wing)",
         ]
         try:
             with self._engine.begin() as conn:
@@ -160,7 +163,7 @@ CREATE TABLE IF NOT EXISTS entries (
         cols = list(row.keys())
         placeholders = ", ".join(f":{c}" for c in cols)
         sql = (
-            f"INSERT INTO entries ({', '.join(cols)}) VALUES ({placeholders}) "
+            f"INSERT INTO {self.table_name} ({', '.join(cols)}) VALUES ({placeholders}) "
             "ON CONFLICT(id) DO UPDATE SET "
             + ", ".join(f"{c} = excluded.{c}" for c in cols if c != "id")
         )
@@ -177,7 +180,7 @@ CREATE TABLE IF NOT EXISTS entries (
         try:
             with self._engine.begin() as conn:
                 conn.execute(
-                    text("DELETE FROM entries WHERE id = :id"),
+                    text(f"DELETE FROM {self.table_name} WHERE id = :id"),
                     {"id": entry_id},
                 )
         except Exception as exc:
@@ -192,7 +195,7 @@ CREATE TABLE IF NOT EXISTS entries (
         try:
             with self._engine.connect() as conn:
                 rows = conn.execute(
-                    text("SELECT * FROM entries ORDER BY created_at")
+                    text(f"SELECT * FROM {self.table_name} ORDER BY created_at")
                 ).mappings().all()
             return [self._from_row(r) for r in rows]
         except Exception as exc:
@@ -205,7 +208,7 @@ CREATE TABLE IF NOT EXISTS entries (
         try:
             with self._engine.connect() as conn:
                 row = conn.execute(
-                    text("SELECT * FROM entries WHERE id = :id"),
+                    text(f"SELECT * FROM {self.table_name} WHERE id = :id"),
                     {"id": entry_id},
                 ).mappings().first()
             return self._from_row(row) if row else None
@@ -219,7 +222,7 @@ CREATE TABLE IF NOT EXISTS entries (
         try:
             with self._engine.connect() as conn:
                 row = conn.execute(
-                    text("SELECT COUNT(*) AS n FROM entries")
+                    text(f"SELECT COUNT(*) AS n FROM {self.table_name}")
                 ).mappings().first()
             return int(row["n"]) if row else 0
         except Exception:

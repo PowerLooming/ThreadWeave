@@ -103,8 +103,24 @@ def test_upsert_overwrites(store):
 
 @pytest.mark.skipif(not TEST_POSTGRES_URL, reason="TEST_POSTGRES_URL not set")
 def test_postgres_save_load_delete():
-    """Full roundtrip against a real PostgreSQL server (CI/dev only)."""
-    s = EntryStore(url=TEST_POSTGRES_URL)
+    """Full roundtrip against a real PostgreSQL server (CI/dev only).
+
+    Uses a dedicated test table so leftover live data in `entries`
+    can't break the assertions.
+    """
+    from sqlalchemy import create_engine, text
+
+    # Create an isolated table for the test
+    engine = create_engine(TEST_POSTGRES_URL)
+    with engine.begin() as conn:
+        conn.execute(text(
+            "DROP TABLE IF EXISTS test_entries_pg"
+        ))
+        conn.execute(text(
+            "CREATE TABLE test_entries_pg (LIKE entries INCLUDING ALL)"
+        ))
+
+    s = EntryStore(url=TEST_POSTGRES_URL, table_name="test_entries_pg")
     s.save(_entry("pg1"))
     s.save(_entry("pg2", tenant="lqdx", wing="Retail"))
     assert s.count() == 2
@@ -117,6 +133,9 @@ def test_postgres_save_load_delete():
     assert s.get("pg1") is None
     assert s.count() == 1
     s.delete("pg2")
+
+    with engine.begin() as conn:
+        conn.execute(text("DROP TABLE test_entries_pg"))
 
 
 def test_sql_compiles_for_postgresql_dialect():

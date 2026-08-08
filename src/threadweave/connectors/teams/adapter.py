@@ -107,6 +107,17 @@ def create_app(
 
     app = web.Application()
 
+    # Start the capture-notification poller with the server ("camera
+    # sign" DMs). Stopped on shutdown to avoid dangling tasks.
+    async def _start_poller(app):
+        bot.start_notification_poller()
+
+    async def _stop_poller(app):
+        await bot.stop_notification_poller()
+
+    app.on_startup.append(_start_poller)
+    app.on_shutdown.append(_stop_poller)
+
     # Bot Framework messaging endpoint — POST /api/messages.
     # Modern botbuilder (>=4.15) dropped the aiohttp_channel_service_routes
     # helper; the canonical pattern is adapter.process(request, bot).

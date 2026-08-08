@@ -39,6 +39,7 @@ from threadweave.confidentiality import (
     get_audit_log,
 )
 from threadweave.store import get_entry_store
+from threadweave.notify import get_notification_store
 
 logger = logging.getLogger("threadweave.api")
 
@@ -507,6 +508,30 @@ async def ingest_content(req: IngestRequest, request: Request):
     except Exception:
         pass  # persistence is best-effort; memory store is authoritative
 
+    # Capture notification ("camera sign"): queue a DM for the content
+    # author so they know their material was saved. Opted-out authors
+    # never reach this point (the opt-out gate runs earlier).
+    try:
+        author = req.metadata.get("author_id") or req.metadata.get(
+            "email_sender", ""
+        )
+        if author:
+            notif_id = hashlib.sha256(
+                f"{entry_id}:{author}".encode()
+            ).hexdigest()[:16]
+            get_notification_store().enqueue(
+                notification_id=notif_id,
+                entry_id=entry_id,
+                author_id=author,
+                title=entry["title"],
+                wing=entry["wing"],
+                room=entry["room"],
+                source=req.source,
+                created_at=entry["created_at"],
+            )
+    except Exception as exc:
+        logger.warning("Notification enqueue failed: %s", exc)
+
     # 6. MemPalace (if available)
     if _mempalace_available:
         try:
@@ -756,6 +781,28 @@ async def delete_entry(
     except Exception:
         pass
     return Response(status_code=204)
+
+
+# ---- Capture notifications (bot polling) ----
+
+@app.get("/api/v1/notifications/pending")
+async def notifications_pending(limit: int = Query(50)):
+    """Return undelivered capture notifications (Teams bot polls this)."""
+    return {"notifications": get_notification_store().pending(limit=limit)}
+
+
+@app.post("/api/v1/notifications/{notification_id}/delivered")
+async def notification_delivered(notification_id: str):
+    """Mark a notification as delivered (after the bot DMs the author)."""
+    get_notification_store().mark_delivered(notification_id)
+    return {"id": notification_id, "delivered": True}
+
+
+@app.get("/api/v1/notifications/stats")
+async def notifications_stats():
+    store = get_notification_store()
+    return {"pending": store.count(delivered_only=False),
+            "delivered": store.count(delivered_only=True)}
 
 
 # ---- Opt-out registry (the "camera sign" layer) ----
