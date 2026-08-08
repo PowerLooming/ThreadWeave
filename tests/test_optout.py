@@ -94,6 +94,35 @@ def test_ingest_allows_non_opted_out():
     assert body["id"] != "opted_out"
 
 
+def test_email_ingest_sets_author_and_author_can_delete():
+    """Email captures store author_id from email_sender so the author
+    can delete their own entries (regression: was 'unknown')."""
+    r = client.post("/api/v1/ingest", json={
+        "content": "We resolved the email deletion issue. The root cause was "
+                   "the missing author mapping, so we decided to store the "
+                   "sender identity on the entry. This fixed self-service "
+                   "deletion completely.",
+        "source": "email",
+        "tenant_id": "default",
+        "metadata": {
+            "email_sender": "adele@x.com",
+            "title": "email deletion fix",
+        },
+    })
+    body = r.json()
+    assert body["should_save"] is True
+    entry_id = body["id"]
+
+    # the author can delete their own email-derived entry
+    r = client.delete(f"/api/v1/entries/{entry_id}",
+                      params={"person_id": "adele@x.com", "role": "readwrite"})
+    assert r.status_code == 204
+
+    r = client.get(f"/api/v1/entries/{entry_id}",
+                   params={"person_id": "adele@x.com", "role": "readwrite"})
+    assert r.status_code == 404
+
+
 # ---- API: delete entry ----
 
 def test_delete_entry_requires_rights():

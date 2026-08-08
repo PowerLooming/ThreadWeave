@@ -481,7 +481,11 @@ async def ingest_content(req: IngestRequest, request: Request):
         "room": req.metadata.get("room", result.content_type.value),
         "scope": result.suggested_scope,
         "source_type": req.source,
-        "author_id": req.metadata.get("author_id", "unknown"),
+        "author_id": (
+            req.metadata.get("author_id")
+            or req.metadata.get("email_sender")
+            or "unknown"
+        ),
         "title": req.metadata.get("title") or result.suggested_title,
         "created_at": now,
         "entities": result.entities,
