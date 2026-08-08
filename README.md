@@ -83,21 +83,24 @@ Gmail requires an app password. If your org disabled app passwords, use `ingest_
 The M365 connectors run as continuous daemons that pull content one-way into on-prem ThreadWeave. No webhooks, no tunnels, no third-party relays — content flows outbound from the on-prem host only.
 
 ```bash
-# Email: poll inboxes, thread conversations, harvest decisions
+# Run in the foreground (development):
 uv run python -m threadweave.cli email watch --mailbox Admin@your-tenant.com --interval 300
-
-# SharePoint: delta-poll document libraries (new + edited files)
-uv run python -m threadweave.cli sharepoint watch --interval 300 --site "Mark 8"
-
-# OneNote: poll notebooks too (one-time sign-in first)
-uv run python -m threadweave.cli sharepoint onenote-login
-uv run python -m threadweave.cli sharepoint watch --onenote
-
-# Copilot: keep the external connection in sync
+uv run python -m threadweave.cli sharepoint watch --interval 300 --site "Mark 8" --onenote
 uv run python -m threadweave.cli graph daemon
+
+# Or manage them as OS services (start at login, survive reboots):
+uv run python -m threadweave.cli daemon config email-watch \
+  --set THREADWEAVE_EMAIL_MAILBOX=Admin@your-tenant.com
+uv run python -m threadweave.cli daemon config teams-bot \
+  --set MICROSOFT_APP_ID=... MICROSOFT_APP_PASSWORD=...
+uv run python -m threadweave.cli daemon install email-watch   # all four
+uv run python -m threadweave.cli daemon status all
+uv run python -m threadweave.cli daemon uninstall email-watch
 ```
 
-State files (`~/.threadweave/`) let daemons resume safely: SharePoint delta tokens, OneNote watermarks, MSAL token cache, opt-out registry, audit log.
+**How packaging works:** per-daemon env files at `~/.threadweave/daemons/<name>.env` hold secrets and options (one place, not shell history); `daemon run <name>` loads the env and dispatches. **Windows:** a launcher `.cmd` is dropped into the Startup folder (no admin needed) with logs to `~/.threadweave/logs/`. **Linux:** systemd units with `Restart=always`. Daemon env options: `THREADWEAVE_DAEMON_INTERVAL`, `THREADWEAVE_EMAIL_MAILBOX`, `THREADWEAVE_SP_SITE`, `THREADWEAVE_SP_ONENOTE`, `THREADWEAVE_GRAPH_INTERVAL`, `PORT` (bot).
+
+State files (`~/.threadweave/`) let daemons resume safely: SharePoint delta tokens, OneNote watermarks, MSAL token cache, opt-out registry, audit log, entry store, notifications.
 
 ## Privacy
 
