@@ -38,9 +38,16 @@ uv run python -m threadweave.cli teams publish --package dist/threadweave-teams-
 # → Finish in admin center: Manage apps → Publish
 ```
 
-The upload goes to `POST /appCatalogs/teamsApps` (Graph v1.0). A cached
-MSAL token makes repeat publishes silent. The final Publish click still
-happens in the admin center (Graph has no org-publish endpoint).
+The upload goes to `POST /appCatalogs/teamsApps?requiresReview=true` (Graph
+v1.0) — the `requiresReview` path is required: `AppCatalog.Submit` submits
+for review only (a direct POST 403s even for global admins; verified live).
+The app lands in the catalog as pending review, and the admin approves it in
+the Teams admin center. A cached MSAL token makes repeat publishes silent;
+re-uploads of the same version print "Already published" and exit cleanly.
+Environment: `THREADWEAVE_PUBLISH_CLIENT_ID` (app registration with
+`AppCatalog.Submit` delegated + public client flows enabled) and
+`AZURE_TENANT_ID` — the authority must be tenant-scoped (AADSTS50059 with
+the `common` authority).
 
 **Cost:** $0. One sign-in + one click per customer.
 
