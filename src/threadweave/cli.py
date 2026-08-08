@@ -17,6 +17,7 @@ import sys
 from datetime import datetime, timezone, timedelta
 
 from threadweave.detector import detect, is_worth_saving
+from threadweave.daemons import DAEMONS  # noqa: E402  (registered before parser)
 
 
 def cmd_detect(args):
@@ -160,6 +161,56 @@ def cmd_graph_daemon(args):
     )
     engine = SyncEngine(connector, sync_interval=args.interval)
     engine.run_daemon()
+
+
+# ── Daemon Management (packaging) ──────────────────────────────────
+
+def cmd_daemon_run(args):
+    """Exec a daemon with its env file loaded (used by OS services)."""
+    from threadweave.daemons import run_daemon
+    sys.exit(run_daemon(args.name))
+
+
+def cmd_daemon_install(args):
+    from threadweave.daemons import install
+    install(args.name)
+
+
+def cmd_daemon_uninstall(args):
+    from threadweave.daemons import uninstall
+    uninstall(args.name)
+
+
+def cmd_daemon_status(args):
+    from threadweave.daemons import status
+    if args.name == "all":
+        from threadweave.daemons import DAEMONS
+        for name in DAEMONS:
+            st = status(name)
+            print(f"{name}: {'installed' if st.get('installed') else 'not installed'}")
+        return
+    st = status(args.name)
+    print(f"{args.name}: {'installed' if st.get('installed') else 'not installed'}")
+
+
+def cmd_daemon_config(args):
+    from threadweave.daemons import save_daemon_env, load_daemon_env
+    if args.show:
+        for k, v in sorted(load_daemon_env(args.name).items()):
+            if "SECRET" in k or "PASSWORD" in k or "PASS" in k:
+                print(f"{k}=***")
+            else:
+                print(f"{k}={v}")
+        return
+    values = {}
+    for group in args.set or []:
+        for kv in group:
+            if "=" in kv:
+                k, _, v = kv.partition("=")
+                values[k.strip()] = v.strip()
+    save_daemon_env(args.name, values)
+    print(f"{args.name}: {len(values)} values saved to "
+          "~/.threadweave/daemons/ config")
 
 
 # ── SharePoint Commands ────────────────────────────────────────────
@@ -629,6 +680,35 @@ def main():
                                 "~/.threadweave/msal_cache.json"),
                             help="MSAL token cache path")
 
+    p_daemon = sub.add_parser(
+        "daemon", help="Manage connector daemons as OS services")
+    daemon_sub = p_daemon.add_subparsers(dest="daemon_command")
+
+    p_d_run = daemon_sub.add_parser(
+        "run", help="Run a daemon with its env file (used by services)")
+    p_d_run.add_argument("name", choices=list(DAEMONS))
+
+    p_d_install = daemon_sub.add_parser(
+        "install", help="Register a daemon as a scheduled task / systemd unit")
+    p_d_install.add_argument("name", choices=list(DAEMONS))
+
+    p_d_uninstall = daemon_sub.add_parser(
+        "uninstall", help="Remove a daemon's service registration")
+    p_d_uninstall.add_argument("name", choices=list(DAEMONS))
+
+    p_d_status = daemon_sub.add_parser(
+        "status", help="Show daemon service status")
+    p_d_status.add_argument("name", choices=["all"] + list(DAEMONS))
+
+    p_d_config = daemon_sub.add_parser(
+        "config", help="Read/write a daemon's env file")
+    p_d_config.add_argument("name", choices=list(DAEMONS))
+    p_d_config.add_argument("--set", action="append", nargs="+", default=[],
+                            help="KEY=VALUE to set (repeatable, "
+                                 "space-separated values)")
+    p_d_config.add_argument("--show", action="store_true",
+                            help="Show current values (secrets masked)")
+
     args = parser.parse_args()
 
     if args.command == "detect":
@@ -639,6 +719,19 @@ def main():
         cmd_save(args)
     elif args.command == "serve":
         cmd_serve(args)
+    elif args.command == "daemon":
+        if args.daemon_command == "run":
+            cmd_daemon_run(args)
+        elif args.daemon_command == "install":
+            cmd_daemon_install(args)
+        elif args.daemon_command == "uninstall":
+            cmd_daemon_uninstall(args)
+        elif args.daemon_command == "status":
+            cmd_daemon_status(args)
+        elif args.daemon_command == "config":
+            cmd_daemon_config(args)
+        else:
+            p_daemon.print_help()
     elif args.command == "graph":
         if args.graph_command == "setup":
             cmd_graph_setup(args)
