@@ -163,6 +163,48 @@ def cmd_graph_daemon(args):
     engine.run_daemon()
 
 
+# ── Teams package builder ─────────────────────────────────────────
+
+def cmd_teams_package(args):
+    """Build a store-ready Teams app package (manifest zip)."""
+    from threadweave.connectors.teams.package import (
+        build_package, _validate_manifest, build_manifest,
+    )
+
+    bot_id = args.bot_id or os.environ.get("MICROSOFT_APP_ID", "")
+    if not bot_id:
+        print("teams package requires --bot-id (or MICROSOFT_APP_ID).",
+              file=sys.stderr)
+        sys.exit(1)
+
+    manifest = build_manifest(bot_id, args.version)
+    problems = _validate_manifest(manifest)
+    if problems:
+        print("Manifest validation problems:", file=sys.stderr)
+        for p in problems:
+            print(f"  - {p}", file=sys.stderr)
+        sys.exit(1)
+
+    zip_path, icon_problems = build_package(
+        bot_id=bot_id,
+        version=args.version,
+        color_icon=args.color_icon,
+        outline_icon=args.outline_icon,
+        out_dir=args.out_dir,
+    )
+    if icon_problems:
+        print("Icon problems (package built anyway):", file=sys.stderr)
+        for p in icon_problems:
+            print(f"  - {p}", file=sys.stderr)
+
+    print(f"Package built: {zip_path}")
+    print(f"  version:    {args.version}")
+    print(f"  bot id:     {bot_id}")
+    print(f"  size:       {zip_path.stat().st_size} bytes")
+    print("Upload to: Teams admin center → Teams apps → Manage apps → "
+          "Upload new app (org app catalog)")
+
+
 # ── Daemon Management (packaging) ──────────────────────────────────
 
 def cmd_daemon_run(args):
@@ -684,6 +726,30 @@ def main():
         "daemon", help="Manage connector daemons as OS services")
     daemon_sub = p_daemon.add_subparsers(dest="daemon_command")
 
+    p_teams = sub.add_parser("teams", help="Teams app tooling")
+    teams_sub = p_teams.add_subparsers(dest="teams_command")
+    p_teams_pkg = teams_sub.add_parser(
+        "package", help="Build a store-ready app package (manifest zip)")
+    p_teams_pkg.add_argument("--bot-id", default="",
+                             help="Bot application ID (default: "
+                                  "MICROSOFT_APP_ID env)")
+    p_teams_pkg.add_argument("--version", default="1.0.0",
+                             help="Package version (default 1.0.0)")
+    p_teams_pkg.add_argument("--color-icon",
+                             default=os.path.join(
+                                 os.path.dirname(os.path.dirname(
+                                     os.path.dirname(os.path.abspath(__file__)))),
+                                 "assets/teams/color.png"),
+                             help="Color icon path (192x192)")
+    p_teams_pkg.add_argument("--outline-icon",
+                             default=os.path.join(
+                                 os.path.dirname(os.path.dirname(
+                                     os.path.dirname(os.path.abspath(__file__)))),
+                                 "assets/teams/outline.png"),
+                             help="Outline icon path (32x32)")
+    p_teams_pkg.add_argument("--out-dir", default="dist",
+                             help="Output directory (default: dist)")
+
     p_d_run = daemon_sub.add_parser(
         "run", help="Run a daemon with its env file (used by services)")
     p_d_run.add_argument("name", choices=list(DAEMONS))
@@ -719,6 +785,11 @@ def main():
         cmd_save(args)
     elif args.command == "serve":
         cmd_serve(args)
+    elif args.command == "teams":
+        if args.teams_command == "package":
+            cmd_teams_package(args)
+        else:
+            p_teams.print_help()
     elif args.command == "daemon":
         if args.daemon_command == "run":
             cmd_daemon_run(args)
