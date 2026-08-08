@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import io
 import json
 import logging
 import os
@@ -123,6 +124,7 @@ class DocumentProcessor:
         ".txt", ".csv", ".json", ".md", ".yaml", ".yml",
         ".py", ".js", ".ts", ".html", ".css", ".xml",
         ".docx", ".pdf", ".xlsx", ".pptx",
+        ".odt", ".ods", ".odp",
         ".log", ".cfg", ".ini", ".toml",
     }
 
@@ -433,6 +435,11 @@ class DocumentProcessor:
         if ext == ".pptx" and PPTX_AVAILABLE:
             return self._extract_pptx(content)
 
+        # OpenDocument formats (LibreOffice native: odt/ods/odp) —
+        # stdlib only, always available
+        if ext in (".odt", ".ods", ".odp"):
+            return self._extract_odf(content, kind=ext.lstrip("."))
+
         return ""
 
     def _extract_text_file(self, content: bytes) -> str:
@@ -478,6 +485,50 @@ class DocumentProcessor:
             return "\n\n".join(pages)
         finally:
             doc.close()
+
+    def _extract_odf(self, content: bytes, kind: str) -> str:
+        """Extract text from OpenDocument files (odt/ods/odp).
+
+        LibreOffice's native formats are ZIP containers with a
+        content.xml inside (ISO 26300). Extracted with stdlib only:
+        paragraphs (text:p), headings (text:h), and table cells
+        (table:table-cell) are joined so the detector sees readable
+        content. Handles LibreOffice's default save formats so Linux
+        users are first-class.
+        """
+        import zipfile
+        from xml.etree import ElementTree as ET
+
+        try:
+            with zipfile.ZipFile(io.BytesIO(content)) as zf:
+                if "content.xml" not in zf.namelist():
+                    return ""
+                xml_data = zf.read("content.xml")
+        except zipfile.BadZipFile:
+            return ""
+
+        try:
+            root = ET.fromstring(xml_data)
+        except ET.ParseError:
+            return ""
+
+        parts: list[str] = []
+        # Paragraphs and headings, in document order
+        for elem in root.iter():
+            tag = elem.tag.split("}")[-1]
+            if tag in ("p", "h"):
+                text = "".join(elem.itertext()).strip()
+                if text:
+                    parts.append(text)
+        # Table cells (ods): include cell values so spreadsheet
+        # knowledge isn't lost (dedup prevents repeats)
+        if kind == "ods":
+            for elem in root.iter():
+                if elem.tag.split("}")[-1] == "table-cell":
+                    text = "".join(elem.itertext()).strip()
+                    if text:
+                        parts.append(text)
+        return "\n\n".join(parts)
 
     def _extract_xlsx(self, content: bytes) -> str:
         """Extract text from .xlsx workbooks (cell values per sheet).
