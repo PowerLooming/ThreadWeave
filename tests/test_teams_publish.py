@@ -63,7 +63,8 @@ def test_upload_sends_zip_and_parses_response(publisher, monkeypatch):
 
     result = publisher.upload(pkg)
 
-    assert calls["url"] == "https://graph.microsoft.com/v1.0/appCatalogs/teamsApps"
+    assert calls["url"] == ("https://graph.microsoft.com/v1.0/"
+                            "appCatalogs/teamsApps?requiresReview=true")
     assert calls["content_type"] == "application/zip"
     assert calls["auth"] == "Bearer fake-token"
     assert calls["data"] == b"PK\x03\x04fakezip"
@@ -79,6 +80,20 @@ def test_upload_failure_raises(publisher, monkeypatch, tmp_path):
     pkg = tmp_path / "x.zip"
     pkg.write_bytes(b"zip")
     with pytest.raises(RuntimeError, match="Upload failed"):
+        publisher.upload(pkg)
+
+
+def test_upload_conflict_raises_already_in_catalog(publisher, monkeypatch,
+                                                   tmp_path):
+    def fake_post(url, headers=None, data=None, timeout=None):
+        return _Resp(409, {"error": {"code": "AppDefinitionAlreadyExists"}})
+
+    monkeypatch.setattr("threadweave.connectors.teams.publish.requests.post",
+                        fake_post)
+    pkg = tmp_path / "x.zip"
+    pkg.write_bytes(b"zip")
+    from threadweave.connectors.teams.publish import AlreadyInCatalog
+    with pytest.raises(AlreadyInCatalog, match="already in the org catalog"):
         publisher.upload(pkg)
 
 

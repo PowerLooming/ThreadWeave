@@ -207,7 +207,9 @@ def cmd_teams_package(args):
 
 def cmd_teams_publish(args):
     """Upload a package to the org app catalog via Graph."""
-    from threadweave.connectors.teams.publish import TeamsAppPublisher
+    from threadweave.connectors.teams.publish import (
+        AlreadyInCatalog, TeamsAppPublisher,
+    )
 
     zip_path = args.package
     if not os.path.exists(zip_path):
@@ -216,7 +218,11 @@ def cmd_teams_publish(args):
 
     publisher = TeamsAppPublisher()
     print(f"Uploading {zip_path} to the org app catalog...")
-    app = publisher.upload(zip_path)
+    try:
+        app = publisher.upload(zip_path)
+    except AlreadyInCatalog as exc:
+        print(f"Already published: {exc}")
+        sys.exit(0)
     app_id = app.get("id", "")
     print(f"Uploaded: id={app_id}")
 
@@ -233,6 +239,7 @@ def cmd_teams_publish(args):
     print("\nNext steps in the Teams admin center:")
     print("  1. https://admin.teams.microsoft.com → Teams apps → Manage apps")
     print(f"  2. Find '{app.get('displayName', 'ThreadWeave')}' → Publish")
+    print("     (submitted for review — as admin you approve it here)")
     print("  3. Users install from Apps → Built for your org")
 
 

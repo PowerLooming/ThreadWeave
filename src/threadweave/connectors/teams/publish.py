@@ -29,6 +29,10 @@ logger = logging.getLogger(__name__)
 
 GRAPH_API_BASE = "https://graph.microsoft.com/v1.0"
 DEFAULT_CACHE_FILE = "~/.threadweave/msal_cache.json"
+
+
+class AlreadyInCatalog(Exception):
+    """The app package is already present in the org catalog."""
 # The same public client used for OneNote device flow. The user's
 # identity + consent is the credential — no client secret on the host.
 DEFAULT_CLIENT_ID = "04b07795-8ddb-461a-bbee-02f9e1bf7b46"
@@ -43,7 +47,8 @@ class TeamsAppPublisher:
 
     def __init__(self, client_id: str | None = None,
                  cache_file: str = DEFAULT_CACHE_FILE,
-                 api_base: str = GRAPH_API_BASE):
+                 api_base: str = GRAPH_API_BASE,
+                 tenant_id: str | None = None):
         import msal
 
         self.client_id = client_id or os.environ.get(
@@ -51,9 +56,17 @@ class TeamsAppPublisher:
         )
         self.api_base = api_base.rstrip("/")
         self._cache_file = os.path.expanduser(cache_file)
+        self.tenant_id = tenant_id or os.environ.get(
+            "AZURE_TENANT_ID", ""
+        )
+        authority = (
+            f"https://login.microsoftonline.com/{self.tenant_id}"
+            if self.tenant_id
+            else "https://login.microsoftonline.com/common"
+        )
         self._app = msal.PublicClientApplication(
             client_id=self.client_id,
-            authority="https://login.microsoftonline.com/common",
+            authority=authority,
             token_cache=msal.SerializableTokenCache(),
         )
         if os.path.exists(self._cache_file):
@@ -106,10 +119,15 @@ class TeamsAppPublisher:
             )
         return result["access_token"]
 
-    def upload(self, zip_path: str | Path) -> dict:
+    def upload(self, zip_path: str | Path, requires_review: bool = True) -> dict:
         """Upload a package zip to the org app catalog.
 
         Returns the created teamsApp object (id, externalId, status).
+
+        requires_review=True submits the app for admin approval (the
+        documented path for AppCatalog.Submit — the permission allows
+        submitting for review only, not direct publishing; verified
+        live: direct POST 403s, ?requiresReview=true → 201).
         """
         token = self.get_token()
         headers = {
@@ -117,13 +135,21 @@ class TeamsAppPublisher:
             "Content-Type": "application/zip",
         }
         data = Path(zip_path).read_bytes()
+        url = f"{self.api_base}/appCatalogs/teamsApps"
+        if requires_review:
+            url += "?requiresReview=true"
         resp = requests.post(
-            f"{self.api_base}/appCatalogs/teamsApps",
+            url,
             headers=headers,
             data=data,
             timeout=120,
         )
         if resp.status_code not in (200, 201):
+            if resp.status_code == 409 and requires_review:
+                raise AlreadyInCatalog(
+                    "The app is already in the org catalog — check "
+                    "Teams admin center → Teams apps → Manage apps."
+                )
             raise RuntimeError(
                 f"Upload failed ({resp.status_code}): {resp.text[:400]}"
             )
