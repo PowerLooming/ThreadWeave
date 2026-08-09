@@ -166,7 +166,8 @@ Capture without disclosure is surveillance, so ThreadWeave ships a privacy layer
 Versions are single-sourced from `pyproject.toml`. A GitHub Action
 (`.github/workflows/auto-tag-release.yml`) runs on any master push that
 changes the version: it tags `v<version>` (if the tag doesn't exist) and
-drafts a GitHub Release with generated notes. A human publishes the draft.
+publishes a GitHub Release with generated notes. Zero-touch: nothing to
+approve.
 
 The suite guards against drift: `tests/test_version_consistency.py` fails
 if `pyproject.toml`, the API health version, the changelog section, and the

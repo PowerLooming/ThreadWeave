@@ -44,10 +44,10 @@ jobs:
             -m "Release v${{ steps.version.outputs.version }}"
           git push origin "v${{ steps.version.outputs.version }}"
 
-      - name: Draft the release notes
+      - name: Publish the release
         if: steps.check.outputs.exists == 'false'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: "v${{ steps.version.outputs.version }}"
           generate_release_notes: true
-          draft: true   # human reviews the notes before publishing
+          # Zero-touch: releases publish immediately (chosen 2026-08-08)
