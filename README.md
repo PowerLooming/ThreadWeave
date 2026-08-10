@@ -199,7 +199,7 @@ to `CHANGELOG.md`, push. The action does the rest.
 - ✅ **Ingestion pipeline** — Central dedup → detect → PII gate → store
 - ✅ **MemPalace integration** — Hybrid search (BM25 + vector cosine)
 - ✅ **Org model** — Full MemPalace Knowledge Graph integration with temporal triples. Team membership, reporting chains, relevant-people search, HRIS bulk sync. Dual-mode: with or without KG.
-- ✅ **Hallway/Tunnel graph navigation** — D3.js force-directed graph visualization in the web dashboard. Click-to-highlight, drag-to-rearrange, wing filter, hallway (within-wing) vs tunnel (cross-wing) edge coloring.
+- ✅ **Hallway/Tunnel graph navigation** — D3.js force-directed graph visualization in the web dashboard. Click-to-highlight, drag-to-rearrange, wing filter, hallway (within-wing) vs tunnel (cross-wing) edge coloring. **Knowledge entries are nodes too**: captured decisions/answers render as violet diamonds linked to their author (authored_by) and wing (belongs_to).
 - ✅ **Web dashboard** — Single-file SPA with pipeline overview, search, save, entries, and graph tabs.
 - ✅ **API server** — FastAPI with auto-generated docs
 - ✅ **CLI** — `detect`, `search`, `save`, `serve`
@@ -224,6 +224,5 @@ to `CHANGELOG.md`, push. The action does the rest.
 
 ## What's Next
 
-- [ ] Knowledge entry nodes in the graph (entries linked to org entities)
 - [ ] Detector tuning with real capture noise (the 0.25 short-decision gap)
 - [ ] Visio (.vsdx) and video transcription support
