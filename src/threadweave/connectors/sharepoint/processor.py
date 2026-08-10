@@ -125,6 +125,8 @@ class DocumentProcessor:
         ".py", ".js", ".ts", ".html", ".css", ".xml",
         ".docx", ".pdf", ".xlsx", ".pptx",
         ".odt", ".ods", ".odp",
+        ".vsdx",
+        ".mp4", ".mkv", ".mov", ".webm", ".mp3", ".wav", ".m4a",
         ".log", ".cfg", ".ini", ".toml",
     }
 
@@ -440,6 +442,19 @@ class DocumentProcessor:
         if ext in (".odt", ".ods", ".odp"):
             return self._extract_odf(content, kind=ext.lstrip("."))
 
+        # Visio diagrams — stdlib only (ZIP + XML)
+        if ext == ".vsdx":
+            return self._extract_vsdx(content)
+
+        # Video/audio — on-prem transcription (ffmpeg + whisper)
+        if ext in (".mp4", ".mkv", ".mov", ".webm"):
+            return self._extract_video(content)
+        if ext in (".mp3", ".wav", ".m4a"):
+            from threadweave.connectors.sharepoint.video import (
+                transcribe_audio,
+            )
+            return transcribe_audio(content)
+
         return ""
 
     def _extract_text_file(self, content: bytes) -> str:
@@ -529,6 +544,59 @@ class DocumentProcessor:
                     if text:
                         parts.append(text)
         return "\n\n".join(parts)
+
+    def _extract_vsdx(self, content: bytes) -> str:
+        """Extract text from Visio .vsdx files (shape text per page).
+
+        .vsdx is a ZIP container (OOXML family): each page lives in
+        visio/pages/pageN.xml, and shape labels live in <Shape><Text>.
+        Only the <Text> content is taken — geometry and style
+        properties are noise for the detector.
+        """
+        import zipfile
+        from xml.etree import ElementTree as ET
+
+        try:
+            with zipfile.ZipFile(io.BytesIO(content)) as zf:
+                page_names = sorted(
+                    n for n in zf.namelist()
+                    if n.startswith("visio/pages/page") and n.endswith(".xml")
+                )
+                if not page_names:
+                    return ""
+                pages = [zf.read(n) for n in page_names]
+        except zipfile.BadZipFile:
+            return ""
+
+        parts: list[str] = []
+        for idx, xml_data in enumerate(pages):
+            try:
+                root = ET.fromstring(xml_data)
+            except ET.ParseError:
+                continue
+            page_parts: list[str] = []
+            for elem in root.iter():
+                # Text nodes anywhere in the shape tree (incl. nested)
+                if elem.tag.split("}")[-1] == "Text":
+                    text = "".join(elem.itertext()).strip()
+                    if text:
+                        page_parts.append(text)
+            if page_parts:
+                parts.append(f"[Page {idx + 1}]")
+                parts.extend(page_parts)
+        return "\n".join(parts)
+
+    def _extract_video(self, content: bytes) -> str:
+        """Transcribe a video file on-prem (ffmpeg + faster-whisper).
+
+        Returns "" when transcription isn't available (no whisper
+        package, no ffmpeg, or a bad file) — the file is then skipped
+        like any other unsupported type. The transcript text goes
+        through the normal detection/ingest path.
+        """
+        from threadweave.connectors.sharepoint.video import transcribe_video
+
+        return transcribe_video(content)
 
     def _extract_xlsx(self, content: bytes) -> str:
         """Extract text from .xlsx workbooks (cell values per sheet).
