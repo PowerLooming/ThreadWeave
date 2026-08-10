@@ -45,7 +45,12 @@ def test_changelog_has_current_version_section():
 
 
 def test_git_tag_exists_for_version():
-    """The current version must have a tag (release drift guard)."""
+    """The current version must have a tag (release drift guard).
+
+    With the auto-release workflow the tag is created by CI on push,
+    so an in-flight bump (version changed in the last commit) is
+    accepted: the next push will tag it.
+    """
     import subprocess
 
     version = _pyproject_version()
@@ -53,7 +58,24 @@ def test_git_tag_exists_for_version():
         ["git", "tag", "-l", f"v{version}"],
         capture_output=True, text=True, check=False,
     )
-    assert result.stdout.strip() == f"v{version}", (
-        f"no git tag v{version} — code is at {version} but no tag exists "
-        "(run: git tag -a v{version} && git push origin v{version})"
+    if result.stdout.strip() == f"v{version}":
+        return  # tagged
+
+    # No tag yet: allow if the version was just bumped (CI will tag
+    # on push) — but fail if the version drifted without any change.
+    prev = subprocess.run(
+        ["git", "show", "HEAD~1:pyproject.toml"],
+        capture_output=True, text=True, check=False,
     )
+    if prev.returncode != 0:
+        pytest.fail(f"no git tag v{version} and no previous version to "
+                    "compare — code is at {version} but nothing tags it "
+                    "(run: git tag -a v{version} && git push origin "
+                    "v{version})")
+    m = re.search(r'^version = "([^"]+)"', prev.stdout, re.M)
+    prev_version = m.group(1) if m else ""
+    if prev_version == version:
+        pytest.fail(f"no git tag v{version} and version unchanged since "
+                    "HEAD~1 — release drift (push to trigger the "
+                    "auto-release workflow, or tag manually)")
+    # version changed in the last commit: in-flight bump, CI will tag

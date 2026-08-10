@@ -1,53 +1,117 @@
-name: Auto-tag on version bump
+name: Auto-release on push
 
-# Releases used to drift: code version bumped, tag forgotten. This
-# workflow ties the two together — whenever pyproject.toml's version
-# changes on master, a tag + GitHub Release are created automatically.
+# Every push to master with code changes produces a release. The
+# workflow compares HEAD against the latest v* tag: if code changed
+# since the tag, it auto-increments the patch version (0.4.0 ->
+# 0.4.1), tags, and publishes the GitHub Release with generated notes.
+# Manual minor/major bumps (0.4.x -> 0.5.0) are honored as-is.
+#
+# Loop safety: the bump commit re-triggers this workflow; concurrency
+# serializes the runs, and the re-run sees no code diff since the new
+# tag, so it exits without doing anything.
 
 on:
   push:
     branches: [master]
-    paths: [pyproject.toml]
 
 permissions:
   contents: write
 
+concurrency:
+  group: auto-release
+  cancel-in-progress: false
+
 jobs:
-  tag-release:
+  auto-release:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0   # needed to compare against the previous tag
+          fetch-depth: 0   # full history + tags for the tag comparison
 
-      - name: Read new version
+      - name: Read current version
         id: version
         run: |
           VERSION=$(grep -m1 '^version = ' pyproject.toml | sed 's/^version = "\(.*\)"/\1/')
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "latest tag: $(git tag -l 'v*' | sort -V | tail -1 || true)"
 
-      - name: Check tag does not exist yet
-        id: check
+      - name: Check for code changes since the latest tag
+        id: code
         run: |
-          if git tag -l "v${{ steps.version.outputs.version }}" | grep -q .; then
-            echo "exists=true" >> "$GITHUB_OUTPUT"
+          LATEST=$(git tag -l 'v*' | sort -V | tail -1 || true)
+          if [ -z "$LATEST" ]; then
+            # No tags yet: anything on master is release material
+            echo "has_code=true" >> "$GITHUB_OUTPUT"
+            echo "latest=$LATEST" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "latest=$LATEST" >> "$GITHUB_OUTPUT"
+          if git diff --name-only "$LATEST" HEAD \
+             | grep -vE '^(docs/|README|CHANGELOG|\.github/|.*\.md$)' \
+             | grep -q .; then
+            echo "has_code=true" >> "$GITHUB_OUTPUT"
           else
-            echo "exists=false" >> "$GITHUB_OUTPUT"
+            echo "has_code=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Tag the release
-        if: steps.check.outputs.exists == 'false'
+      - name: Detect manual version bump
+        id: manual
         run: |
+          LATEST="${{ steps.code.outputs.latest }}"
+          CUR="${{ steps.version.outputs.version }}"
+          if [ -n "$LATEST" ] && [ "$LATEST" = "v$CUR" ]; then
+            echo "manual=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "manual=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Auto-increment patch version
+        id: bumped
+        if: steps.code.outputs.has_code == 'true' \
+            && steps.manual.outputs.manual == 'false'
+        run: |
+          python - <<'EOF'
+          import re
+          path = "pyproject.toml"
+          text = open(path, encoding="utf-8").read()
+          new_text, n = re.subn(
+              r'^version = "(\d+)\.(\d+)\.(\d+)"',
+              lambda m: f'version = "{m.group(1)}.{m.group(2)}.{int(m.group(3)) + 1}"',
+              text, count=1, flags=re.M,
+          )
+          if n != 1:
+              raise SystemExit("could not bump version in pyproject.toml")
+          open(path, "w", encoding="utf-8").write(new_text)
+          EOF
+          VERSION=$(grep -m1 '^version = ' pyproject.toml | sed 's/^version = "\(.*\)"/\1/')
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git tag -a "v${{ steps.version.outputs.version }}" \
-            -m "Release v${{ steps.version.outputs.version }}"
-          git push origin "v${{ steps.version.outputs.version }}"
+          git add pyproject.toml
+          # [skip ci] prevents this commit from re-triggering the
+          # workflow (otherwise the bump itself looks like a code
+          # change and the version would increment forever)
+          git commit -m "chore: bump version to v$VERSION [skip ci]"
+          git push origin master
+
+      - name: Tag the release
+        if: steps.code.outputs.has_code == 'true'
+        run: |
+          VERSION="${{ steps.bumped.outputs.version || steps.version.outputs.version }}"
+          if git tag -l "v$VERSION" | grep -q .; then
+            echo "tag v$VERSION already exists locally — skipping"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "v$VERSION" -m "Release v$VERSION"
+          git push origin "v$VERSION"
 
       - name: Publish the release
-        if: steps.check.outputs.exists == 'false'
+        if: steps.code.outputs.has_code == 'true'
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: "v${{ steps.version.outputs.version }}"
+          tag_name: "v${{ steps.bumped.outputs.version || steps.version.outputs.version }}"
           generate_release_notes: true
-          # Zero-touch: releases publish immediately (chosen 2026-08-08)
+          # Zero-touch: releases publish immediately

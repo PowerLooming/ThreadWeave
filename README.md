@@ -163,18 +163,21 @@ Capture without disclosure is surveillance, so ThreadWeave ships a privacy layer
 
 ## Release process
 
-Versions are single-sourced from `pyproject.toml`. A GitHub Action
-(`.github/workflows/auto-tag-release.yml`) runs on any master push that
-changes the version: it tags `v<version>` (if the tag doesn't exist) and
-publishes a GitHub Release with generated notes. Zero-touch: nothing to
-approve.
+Releases are fully automatic. The GitHub Action
+(`.github/workflows/auto-tag-release.yml`) runs on every push to master:
+when code changed since the latest tag, it auto-increments the patch
+version (0.4.0 → 0.4.1), tags it, and publishes the GitHub Release with
+generated notes. Manual minor/major bumps (0.4.x → 0.5.0) are honored
+as-is. Docs-only pushes produce no release. Nothing to approve, nothing
+to remember.
 
 The suite guards against drift: `tests/test_version_consistency.py` fails
-if `pyproject.toml`, the API health version, the changelog section, and the
-git tag disagree.
+if `pyproject.toml`, the API health version, and the changelog section
+disagree, or if the version drifted without a tag or an in-flight bump.
 
-To release: bump `version` in `pyproject.toml`, add a `## [x.y.z]` section
-to `CHANGELOG.md`, push. The action does the rest.
+To cut a manual minor/major release: bump `version` in `pyproject.toml`,
+add a `## [x.y.z]` section to `CHANGELOG.md`, push. Patch releases
+happen by themselves on every code push.
 
 ## Configuration
 
