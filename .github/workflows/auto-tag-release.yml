@@ -68,8 +68,7 @@ jobs:
 
       - name: Auto-increment patch version
         id: bumped
-        if: steps.code.outputs.has_code == 'true' \
-            && steps.manual.outputs.manual == 'false'
+        if: steps.code.outputs.has_code == 'true' && steps.manual.outputs.manual == 'false'
         run: |
           python - <<'EOF'
           import re
