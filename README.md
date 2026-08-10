@@ -214,13 +214,16 @@ to `CHANGELOG.md`, push. The action does the rest.
 - ✅ **SharePoint watch daemon** — delta-polling of document libraries (new + edited files), xlsx/pptx/docx/pdf extraction, OneNote notebook polling via delegated auth
 - ✅ **Copilot connector** — Graph external connection, schema, item sync, continuous daemon
 - ✅ **Privacy layer** — opt-out registry (ingest gate + early daemon skips), audited right-to-delete, Teams privacy commands
-- ✅ **Durable entry store** — SQLite write-through (`~/.threadweave/entries.sqlite3`); the palace survives restarts
+- ✅ **Capture notifications** — daemons queue a Teams DM for the content author ("your email about X was added to the palace"), with delete/opt-out right in the message
+- ✅ **Durable entry store** — SQLAlchemy persistence, SQLite default (`~/.threadweave/entries.sqlite3`) or PostgreSQL via `THREADWEAVE_ENTRY_DB`; the palace survives restarts
 - ✅ **Entry versioning** — re-captured documents (same source_file) chain to the original; `GET /api/v1/entries/{id}/versions` shows the evolution
-- ✅ **366 tests** — full suite green
+- ✅ **Daemon packaging** — `threadweave daemon install|status|run`: Windows Startup launchers, systemd units, per-daemon env files
+- ✅ **Teams app distribution** — deterministic package builder + scripted org-catalog publish (`threadweave teams package|publish`)
+- ✅ **OpenDocument support** — odt/ods/odp (LibreOffice native) extracted with stdlib only
+- ✅ **416 tests** — full suite green
 
 ## What's Next
 
-- [ ] Entry versioning (edits link to the original instead of a second entry)
-- [ ] Capture notification (Teams DM: "your email about X was added to the palace")
 - [ ] Knowledge entry nodes in the graph (entries linked to org entities)
-- [ ] Deployment packaging (systemd / Windows service wrappers for the daemons)
+- [ ] Detector tuning with real capture noise (the 0.25 short-decision gap)
+- [ ] Visio (.vsdx) and video transcription support
