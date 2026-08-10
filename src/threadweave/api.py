@@ -1226,7 +1226,75 @@ async def get_org_graph(
                 "type": "tunnel" if is_cross_wing else "hallway",
             })
 
+    # Knowledge entry nodes — attach captured knowledge to the org
+    # graph so "who knows what" is visible: each entry becomes a node
+    # linked to its author (authored_by) and its wing (belongs_to).
+    entry_nodes, entry_edges = _entry_graph_nodes(
+        wing=wing,
+        author_ids={eid: n.get("label", eid)
+                    for eid, n in nodes.items()
+                    if n.get("type") == "person"},
+        known_node_ids=set(nodes.keys()),
+    )
+    nodes.update(entry_nodes)
+    edges.extend(entry_edges)
+
     return GraphResponse(nodes=list(nodes.values()), edges=edges)
+
+
+def _entry_graph_nodes(
+    wing: Optional[str] = None,
+    author_ids: Optional[dict[str, str]] = None,
+    known_node_ids: Optional[set[str]] = None,
+    max_per_wing: int = 12,
+) -> tuple[dict[str, dict], list[dict]]:
+    """Build entry nodes + edges from the entry stores.
+
+    An entry node carries id, label (title), wing, room, and source
+    so the dashboard can render knowledge attached to the org. Edges:
+    authored_by (entry -> person when the author resolves) and
+    belongs_to (entry -> wing/team when the wing is a node).
+    """
+    author_ids = author_ids or {}
+    known_node_ids = known_node_ids or set()
+    entries = list(get_entry_store().load_all())
+    if wing:
+        entries = [e for e in entries if e.get("wing") == wing]
+
+    nodes: dict[str, dict] = {}
+    edges: list[dict] = []
+    for entry in entries[:max_per_wing]:
+        eid = entry["id"]
+        author = entry.get("author_id") or ""
+        node_wing = entry.get("wing") or ""
+        nodes[eid] = {
+            "id": eid,
+            "label": entry.get("title") or entry.get("content", "")[:40],
+            "type": "entry",
+            "wing": node_wing,
+            "room": entry.get("room", ""),
+            "source": entry.get("source_type", ""),
+        }
+        # belongs_to the wing/team — only when the wing is a real node
+        # (known_node_ids includes the filtered wing when it's an org
+        # entity, and all teams in the full graph; wings that aren't
+        # entities, e.g. the 'email' fallback, get no dangling edge)
+        if node_wing and node_wing in known_node_ids:
+            edges.append({
+                "source": eid,
+                "target": node_wing,
+                "relation": "belongs_to",
+                "type": "hallway",
+            })
+        # authored_by the person when the author resolves to a node
+        if author and author in author_ids:
+            edges.append({
+                "source": eid,
+                "target": author,
+                "relation": "authored_by",
+                "type": "hallway",
+            })
+    return nodes, edges
 
 # ---- Audit Log ----
 

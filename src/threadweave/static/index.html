@@ -124,11 +124,12 @@ button:disabled{opacity:.4;cursor:not-allowed}
   <div id="page-graph" class="page">
     <div class="card-header" style="margin-bottom:.75rem">
       <h3 style="font-size:.85rem;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;font-weight:500">Organization Graph</h3>
-      <div style="display:flex;gap:.5rem;align-items:center">
+      <div style="display:flex;gap:.5rem;align-items:center;flex-wrap:wrap">
         <select id="graph-wing" style="width:auto;margin-bottom:0;padding:.4rem .6rem;font-size:.8rem" onchange="fetchGraph()">
           <option value="">All Wings</option>
         </select>
         <span id="graph-stats" style="font-size:.75rem;color:var(--muted)"></span>
+        <span style="font-size:.7rem;color:var(--muted)">🔵 person · 🟢 team · 🟡 domain · <span style="color:#a78bfa">◆</span> entry</span>
       </div>
     </div>
     <div class="card" style="padding:.5rem;height:70vh;overflow:hidden">
@@ -311,8 +312,9 @@ function renderGraph(data){
   const box=svg.node().getBoundingClientRect();
   const W=box.width,H=box.height;
 
-  // Color scale
-  const nodeColor=d=>{switch(d.type){case'person':return'#3b82f6';case'team':return'#22c55e';case'domain':return'#f59e0b';default:return'#64748b'}};
+  // Color scale — entry nodes (captured knowledge) get violet,
+  // distinct from people (blue), teams (green), domains (amber)
+  const nodeColor=d=>{switch(d.type){case'person':return'#3b82f6';case'team':return'#22c55e';case'domain':return'#f59e0b';case'entry':return'#a78bfa';default:return'#64748b'}};
   const edgeColor=d=>d.type==='tunnel'?'#f59e0b':'#0ea5e9';
   const edgeDash=d=>d.type==='tunnel'?'6,3':null;
 
@@ -333,8 +335,13 @@ function renderGraph(data){
                      .on('drag',(e,d)=>{d.fx=e.x;d.fy=e.y})
                      .on('end',(e,d)=>{if(!e.active)sim.alphaTarget(0);d.fx=null;d.fy=null}));
 
-  // Circles
-  node.append('circle').attr('r',d=>d.type==='team'?12:d.type==='person'?8:10)
+  // Shapes — entries render as diamonds (knowledge), others as circles
+  node.filter(d=>d.type!=='entry')
+    .append('circle').attr('r',d=>d.type==='team'?12:d.type==='person'?8:10)
+    .attr('fill',nodeColor).attr('stroke','var(--bg)').attr('stroke-width',2);
+  node.filter(d=>d.type==='entry')
+    .append('path')
+    .attr('d',d=>{const r=d.source==='email'?7:9;return`M0,${-r}L${r},0L0,${r}L${-r},0Z`})
     .attr('fill',nodeColor).attr('stroke','var(--bg)').attr('stroke-width',2);
 
   // Labels
@@ -342,13 +349,14 @@ function renderGraph(data){
     .attr('dy',d=>d.type==='team'?-18:-14).attr('text-anchor','middle')
     .attr('fill','var(--text)').attr('font-size','10px').attr('font-family','inherit');
 
-  // Click to highlight
+  // Click to highlight (works for circles and entry diamonds)
+  const shapeSel=g=>g.select('circle,path');
   node.on('click',(e,d)=>{
     // Dim all
-    node.selectAll('circle').attr('opacity',0.2);
+    node.selectAll('circle,path').attr('opacity',0.2);
     link.attr('opacity',0.1);
     // Highlight this node
-    d3.select(e.currentTarget).select('circle').attr('opacity',1).attr('stroke','#fff').attr('stroke-width',3);
+    shapeSel(d3.select(e.currentTarget)).attr('opacity',1).attr('stroke','#fff').attr('stroke-width',3);
     // Highlight connected nodes and edges
     link.each(function(l){
       if(l.source.id===d.id||l.target.id===d.id){d3.select(this).attr('opacity',1).attr('stroke-width',3)}
@@ -356,14 +364,14 @@ function renderGraph(data){
     node.each(function(n){
       data.edges.forEach(l=>{
         if((l.source.id===d.id&&l.target.id===n.id)||(l.target.id===d.id&&l.source.id===n.id)){
-          d3.select(this).select('circle').attr('opacity',1)
+          shapeSel(d3.select(this)).attr('opacity',1)
         }
       });
     });
   });
 
   // Double-click to reset
-  svg.on('dblclick',()=>{node.selectAll('circle').attr('opacity',1).attr('stroke','var(--bg)').attr('stroke-width',2);link.attr('opacity',0.6).attr('stroke-width',1.5)});
+  svg.on('dblclick',()=>{node.selectAll('circle,path').attr('opacity',1).attr('stroke','var(--bg)').attr('stroke-width',2);link.attr('opacity',0.6).attr('stroke-width',1.5)});
 
   sim.on('tick',()=>{link.attr('x1',d=>d.source.x).attr('y1',d=>d.source.y).attr('x2',d=>d.target.x).attr('y2',d=>d.target.y);node.attr('transform',d=>`translate(${d.x},${d.y})`)});
 }
