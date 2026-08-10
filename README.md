@@ -220,9 +220,9 @@ to `CHANGELOG.md`, push. The action does the rest.
 - ✅ **Daemon packaging** — `threadweave daemon install|status|run`: Windows Startup launchers, systemd units, per-daemon env files
 - ✅ **Teams app distribution** — deterministic package builder + scripted org-catalog publish (`threadweave teams package|publish`)
 - ✅ **OpenDocument support** — odt/ods/odp (LibreOffice native) extracted with stdlib only
-- ✅ **416 tests** — full suite green
+- ✅ **Visio + video/audio** — .vsdx diagram text extraction; on-prem video/audio transcription (ffmpeg + faster-whisper, CPU)
+- ✅ **429 tests** — full suite green
 
 ## What's Next
 
 - [ ] Detector tuning with real capture noise (the 0.25 short-decision gap)
-- [ ] Visio (.vsdx) and video transcription support
