@@ -812,17 +812,25 @@ async def notifications_pending(limit: int = Query(50)):
 
 
 @app.post("/api/v1/notifications/{notification_id}/delivered")
-async def notification_delivered(notification_id: str):
-    """Mark a notification as delivered (after the bot DMs the author)."""
-    get_notification_store().mark_delivered(notification_id)
-    return {"id": notification_id, "delivered": True}
+async def notification_delivered(notification_id: str, status: str = "delivered"):
+    """Mark a notification as delivered (after the bot DMs the author).
+
+    status=skipped marks it undeliverable (no personal conversation ref
+    and activity-feed delivery failed after N attempts) so it stops
+    retrying without being reported as delivered.
+    """
+    skipped = status == "skipped"
+    get_notification_store().mark_delivered(notification_id, skipped=skipped)
+    return {"id": notification_id, "delivered": True,
+            "status": "skipped" if skipped else "delivered"}
 
 
 @app.get("/api/v1/notifications/stats")
 async def notifications_stats():
     store = get_notification_store()
     return {"pending": store.count(delivered_only=False),
-            "delivered": store.count(delivered_only=True)}
+            "delivered": store.count(delivered_only=True),
+            "skipped": store.count_skipped()}
 
 
 # ---- Entry version chain ----

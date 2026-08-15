@@ -93,9 +93,13 @@ bot is dark, and 1:1 chats are never covered by any bot mechanism.
       (Built 2026-08-15: `threadweave teams watch`, prime/backfill
       modes, delta-token state file, daemon registration, 9 tests.
       Pending live verification against the pilot tenant.)
-- [ ] Camera sign for passively captured authors: notification must
+- [~] Camera sign for passively captured authors: notification must
       not depend on the author having talked to the bot (activity-feed
       notification via Graph `TeamsActivity.Send`, email fallback).
+      (Built 2026-08-15: personal DMs only for personal conversation
+      refs, Graph activity-feed fallback for passive authors,
+      retry-then-skip with stats. Pending live verification. Email
+      fallback not yet implemented.)
 - [ ] Document the RSC consent step (Teams admin center, Manage apps,
       Permissions, Review permissions and consent) in the connector
       docs; add a startup probe that detects consent absence.

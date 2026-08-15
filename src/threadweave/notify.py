@@ -116,14 +116,15 @@ class NotificationStore:
             logger.warning("Notify pending failed: %s", exc)
             return []
 
-    def mark_delivered(self, notification_id: str) -> None:
+    def mark_delivered(self, notification_id: str, skipped: bool = False) -> None:
+        """Mark delivered (1) or undeliverable/skipped (2)."""
         if self._db is None:
             return
         try:
             with self._lock:
                 self._db.execute(
-                    "UPDATE notifications SET delivered = 1 WHERE id = ?",
-                    (notification_id,),
+                    "UPDATE notifications SET delivered = ? WHERE id = ?",
+                    (2 if skipped else 1, notification_id),
                 )
                 self._db.commit()
         except Exception as exc:
@@ -134,9 +135,29 @@ class NotificationStore:
             return 0
         try:
             with self._lock:
+                if delivered_only:
+                    row = self._db.execute(
+                        "SELECT COUNT(*) AS n FROM notifications "
+                        "WHERE delivered = 1"
+                    ).fetchone()
+                else:
+                    row = self._db.execute(
+                        "SELECT COUNT(*) AS n FROM notifications "
+                        "WHERE delivered = 0"
+                    ).fetchone()
+            return int(row["n"]) if row else 0
+        except Exception:
+            return 0
+
+    def count_skipped(self) -> int:
+        """Notifications marked undeliverable (delivered = 2)."""
+        if self._db is None:
+            return 0
+        try:
+            with self._lock:
                 row = self._db.execute(
                     "SELECT COUNT(*) AS n FROM notifications "
-                    "WHERE delivered = ?", (1 if delivered_only else 0,)
+                    "WHERE delivered = 2"
                 ).fetchone()
             return int(row["n"]) if row else 0
         except Exception:

@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 from threadweave.api import app
 from threadweave.notify import NotificationStore
 from threadweave.connectors.teams.conversations import ConversationStore
+from threadweave.connectors.teams.bot import ThreadWeaveTeamsBot
 
 client = TestClient(app)
 
@@ -81,12 +82,31 @@ def test_conversation_store_roundtrip(tmp_path):
     assert s2.get("unknown") is None
 
 
-# ---- Bot delivery loop (fakes) ----
+def test_skipped_not_retried_and_counted(tmp_path):
+    s = NotificationStore(db_path=str(tmp_path / "n.sqlite3"))
+    s.enqueue("n1", "e1", "a@x.com", "T", "w", "r", "email", "now")
+    s.mark_delivered("n1", skipped=True)
+    assert s.pending() == []
+    assert s.count() == 0
+    assert s.count(delivered_only=True) == 0  # skipped is not delivered
+    assert s.count_skipped() == 1
 
-class FakeApi:
-    def __init__(self, notifications):
+
+# ---- Bot delivery loop (real ThreadWeaveTeamsBot, faked IO) ----
+
+
+class BotUnderTest(ThreadWeaveTeamsBot):
+    """Real delivery logic with faked API, resolution, and senders."""
+
+    def __init__(self, notifications, resolved=None, max_attempts=3):
+        super().__init__(adapter=None)
         self._pending = list(notifications)
-        self.delivered = []
+        self.delivered_paths = []
+        self.dm_refs = []
+        self.activity_targets = []
+        self.activity_ok = True
+        self._resolved = resolved or {}
+        self._notify_max_attempts = max_attempts
 
     async def _api_get(self, path):
         if "pending" in path:
@@ -94,72 +114,139 @@ class FakeApi:
         return None
 
     async def _api_post(self, path, body):
-        nid = path.split("/")[-2]
-        self.delivered.append(nid)
+        self.delivered_paths.append(path)
         return {"ok": True}
 
-
-class FakeBot:
-    """Minimal stand-in exercising the delivery loop without botbuilder."""
-
-    def __init__(self, notifications, store):
-        self._api = FakeApi(notifications)
-        self.stats = {}
-        self._store = store
-        self.sent = []
-        self.resolved = {}
-
-    async def _deliver_pending_notifications(self):
-        data = await self._api._api_get("/api/v1/notifications/pending")
-        for notif in data["notifications"]:
-            author = notif["author_id"]
-            ref = self._store.get(author)
-            if not ref:
-                aad = self.resolved.get(author, "")
-                if aad:
-                    ref = self._store.get(aad)
-            if not ref:
-                continue
-            self.sent.append((author, notif["entry_id"]))
-            await self._api._api_post(
-                f"/api/v1/notifications/{notif['id']}/delivered", {})
-
     async def _resolve_aad_id(self, email):
-        return self.resolved.get(email, "")
+        return self._resolved.get(email, "")
+
+    async def _send_capture_notification(self, notif, ref):
+        self.dm_refs.append(ref.get("conversation_type"))
+        return True
+
+    async def _send_activity_notification(self, notif, aad_id):
+        if not aad_id:  # mirror the real method's guard
+            return False
+        if not self.activity_ok:
+            return False
+        self.activity_targets.append(aad_id)
+        return True
+
+
+@pytest.fixture
+def bot_store(monkeypatch, tmp_path):
+    store = ConversationStore(path=str(tmp_path / "c.json"))
+    monkeypatch.setattr(
+        "threadweave.connectors.teams.conversations._store", store
+    )
+    return store
+
+
+def remember(store, person_id, conversation_type):
+    """Store a ref with an explicit conversation type."""
+    from types import SimpleNamespace
+
+    activity = SimpleNamespace(
+        id="a1",
+        conversation=SimpleNamespace(conversation_type=conversation_type),
+        from_property=SimpleNamespace(id=person_id, aad_object_id=person_id),
+        recipient=SimpleNamespace(id="bot1", name="ThreadWeave"),
+    )
+    store.remember(
+        person_id, "conv-1", "https://smba.example.com", activity=activity
+    )
+
+
+def make_notif(nid, author_id):
+    return {
+        "id": nid, "entry_id": f"e-{nid}", "author_id": author_id,
+        "title": "The pipeline decision", "wing": "engineering",
+        "room": "general", "source": "teams",
+    }
 
 
 @pytest.mark.asyncio
-async def test_delivery_skips_unknown_author(tmp_path):
-    store = ConversationStore(path=str(tmp_path / "c.json"))
-    bot = FakeBot([{"id": "n1", "author_id": "adele@x.com",
-                    "entry_id": "e1", "title": "T", "wing": "w",
-                    "source": "email"}], store)
+async def test_delivery_dms_personal_ref(bot_store):
+    remember(bot_store, "aad-123", "personal")
+    bot = BotUnderTest([make_notif("n1", "aad-123")])
     await bot._deliver_pending_notifications()
-    assert bot.sent == []
-    assert bot._api.delivered == []
+    assert bot.dm_refs == ["personal"]
+    assert bot.activity_targets == []
+    assert bot.delivered_paths == ["/api/v1/notifications/n1/delivered"]
 
 
 @pytest.mark.asyncio
-async def test_delivery_dms_known_author_and_marks_delivered(tmp_path):
-    store = ConversationStore(path=str(tmp_path / "c.json"))
-    store.remember("aad-adele", "conv-1", "https://smba.example.com")
-    bot = FakeBot([{"id": "n1", "author_id": "adele@x.com",
-                    "entry_id": "e1", "title": "T", "wing": "w",
-                    "source": "email"}], store)
-    bot.resolved = {"adele@x.com": "aad-adele"}
+async def test_channel_ref_never_receives_dm(bot_store):
+    remember(bot_store, "aad-123", "channel")
+    bot = BotUnderTest([make_notif("n1", "aad-123")])
     await bot._deliver_pending_notifications()
-    assert bot.sent == [("adele@x.com", "e1")]
-    assert bot._api.delivered == ["n1"]
+    assert bot.dm_refs == []  # the channel-posting bug must stay fixed
+    assert bot.activity_targets == ["aad-123"]
+    assert bot.delivered_paths == ["/api/v1/notifications/n1/delivered"]
 
 
 @pytest.mark.asyncio
-async def test_delivery_email_key_direct_match(tmp_path):
-    """Author id is a Teams AAD id directly in the store."""
-    store = ConversationStore(path=str(tmp_path / "c.json"))
-    store.remember("aad-123", "conv-1", "https://smba.example.com")
-    bot = FakeBot([{"id": "n1", "author_id": "aad-123",
-                    "entry_id": "e1", "title": "T", "wing": "w",
-                    "source": "sharepoint"}], store)
+async def test_passive_author_gets_activity_notification(bot_store):
+    # Never talked to the bot: no ref, email resolves to an AAD id.
+    bot = BotUnderTest(
+        [make_notif("n1", "adele@x.com")], resolved={"adele@x.com": "aad-a"}
+    )
     await bot._deliver_pending_notifications()
-    assert bot.sent == [("aad-123", "e1")]
-    assert bot._api.delivered == ["n1"]
+    assert bot.dm_refs == []
+    assert bot.activity_targets == ["aad-a"]
+    assert bot.delivered_paths == ["/api/v1/notifications/n1/delivered"]
+
+
+@pytest.mark.asyncio
+async def test_email_ref_channel_type_falls_back_to_activity(bot_store):
+    # Ref exists under the AAD id but points at a group chat.
+    remember(bot_store, "aad-a", "groupChat")
+    bot = BotUnderTest(
+        [make_notif("n1", "adele@x.com")], resolved={"adele@x.com": "aad-a"}
+    )
+    await bot._deliver_pending_notifications()
+    assert bot.dm_refs == []
+    assert bot.activity_targets == ["aad-a"]
+
+
+@pytest.mark.asyncio
+async def test_undeliverable_skipped_after_max_attempts(bot_store):
+    bot = BotUnderTest(
+        [make_notif("n1", "ghost@x.com")], resolved={}, max_attempts=3
+    )
+    for _ in range(3):
+        await bot._deliver_pending_notifications()
+    # 3 failures -> marked skipped, nothing marked delivered.
+    assert bot.delivered_paths == [
+        "/api/v1/notifications/n1/delivered?status=skipped"
+    ]
+    assert bot.stats["notify_skipped"] == 1
+    assert bot.stats.get("notified", 0) == 0
+
+
+@pytest.mark.asyncio
+async def test_activity_failure_recovers_before_max(bot_store):
+    bot = BotUnderTest(
+        [make_notif("n1", "adele@x.com")],
+        resolved={"adele@x.com": "aad-a"}, max_attempts=3,
+    )
+    bot.activity_ok = False
+    await bot._deliver_pending_notifications()  # attempt 1 fails
+    await bot._deliver_pending_notifications()  # attempt 2 fails
+    assert bot.delivered_paths == []
+    bot.activity_ok = True
+    await bot._deliver_pending_notifications()  # attempt 3 succeeds
+    assert bot.activity_targets == ["aad-a"]
+    assert bot.delivered_paths == ["/api/v1/notifications/n1/delivered"]
+
+
+def test_ref_is_personal_guard():
+    from threadweave.connectors.teams.bot import ThreadWeaveTeamsBot
+
+    assert ThreadWeaveTeamsBot._ref_is_personal(
+        {"conversation_type": "personal"})
+    assert ThreadWeaveTeamsBot._ref_is_personal({})  # legacy refs
+    assert not ThreadWeaveTeamsBot._ref_is_personal(
+        {"conversation_type": "channel"})
+    assert not ThreadWeaveTeamsBot._ref_is_personal(
+        {"conversation_type": "groupChat"})

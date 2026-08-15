@@ -9,6 +9,7 @@ uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Added
 
 - **Teams watch daemon** (`threadweave teams watch`): continuous one-way harvesting of Teams channel messages via Graph delta polling with app-only permissions (`ChannelMessage.Read.All` + `Team.ReadBasic.All`). Captures every channel in every team with no bot installs, no @mentions, no RSC consent. Prime mode (default) starts capturing from install time; `--backfill` processes channel history with a per-channel cap. Delta tokens persist to `~/.threadweave/teams_delta.json`. Filters system events, bot posts, unattributable messages, opted-out authors, and sub-50-character texts before the central ingest pipeline. Registered as the `teams-watch` daemon.
+- **Activity-feed capture notifications**: the camera sign now reaches passively captured authors. Delivery chain per notification: personal DM when the author has a 1:1 conversation with the bot, otherwise a Teams activity-feed notification via Graph (`TeamsActivity.Send` app permission, `POST /users/{id}/teamwork/sendActivityNotification`). Channel/group-chat conversation refs are never used for capture DMs (fixes public-channel posting). Undeliverable notifications are marked skipped after `THREADWEAVE_NOTIFY_MAX_ATTEMPTS` retries (default 5) and surfaced in `/api/v1/notifications/stats`.
 
 ## [0.4.0] — 2026-08-07
 

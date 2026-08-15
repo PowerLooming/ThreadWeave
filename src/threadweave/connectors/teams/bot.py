@@ -133,6 +133,11 @@ class ThreadWeaveTeamsBot(ActivityHandler if BOTBUILDER_AVAILABLE else object):
         self._notify_enabled = os.environ.get(
             "THREADWEAVE_NOTIFY_ENABLED", "1"
         ) not in ("0", "false", "False")
+        self._notify_max_attempts = int(
+            os.environ.get("THREADWEAVE_NOTIFY_MAX_ATTEMPTS", "5")
+        )
+        self._notify_failures: dict[str, int] = {}
+        self._graph_client = None  # lazy, for activity-feed delivery
         self._bot_id = os.environ.get("MICROSOFT_APP_ID", "")
 
     # ---- Capture notification poller ("camera sign" DMs) ----
@@ -165,7 +170,21 @@ class ThreadWeaveTeamsBot(ActivityHandler if BOTBUILDER_AVAILABLE else object):
             await asyncio.sleep(self._notify_interval)
 
     async def _deliver_pending_notifications(self) -> None:
-        """Fetch undelivered notifications and DM their authors."""
+        """Fetch undelivered notifications and deliver to their authors.
+
+        Delivery chain per notification:
+        1. Personal DM via the stored 1:1 conversation ref (only for
+           authors who talked to the bot, and only when the ref really
+           is a personal conversation — channel refs must never receive
+           capture notices).
+        2. Activity-feed notification via Graph (TeamsActivity.Send)
+           for everyone else — this is the camera sign for authors
+           captured passively (teams-watch, email, SharePoint) who
+           never interacted with the bot.
+        3. After THREADWEAVE_NOTIFY_MAX_ATTEMPTS failures the
+           notification is marked skipped (stops retrying, counted in
+           stats, not reported as delivered).
+        """
         from threadweave.connectors.teams.conversations import (
             get_conversation_store,
         )
@@ -176,26 +195,146 @@ class ThreadWeaveTeamsBot(ActivityHandler if BOTBUILDER_AVAILABLE else object):
         store = get_conversation_store()
         for notif in data.get("notifications", []):
             try:
-                author = notif.get("author_id", "")
-                ref = store.get(author)
-                if not ref:
-                    # Author identity may be an email while the store is
-                    # keyed by AAD object id — resolve via Graph.
-                    aad_id = await self._resolve_aad_id(author)
-                    if aad_id:
-                        ref = store.get(aad_id)
-                if not ref:
-                    # Author never talked to the bot — nothing to DM to.
-                    continue
-                sent = await self._send_capture_notification(notif, ref)
-                if sent:
-                    await self._api_post(
-                        f"/api/v1/notifications/{notif['id']}/delivered", {}
-                    )
-                    self.stats["notified"] = self.stats.get("notified", 0) + 1
+                await self._deliver_one(notif, store)
             except Exception as exc:
                 logger.warning("Notify delivery failed for %s: %s",
                                notif.get("id"), exc)
+
+    async def _deliver_one(self, notif: dict, store) -> None:
+        """Deliver one notification (DM or activity feed) and ack it."""
+        nid = notif.get("id", "")
+        author = notif.get("author_id", "")
+        ref = store.get(author)
+        if ref and not self._ref_is_personal(ref):
+            ref = None  # channel/group refs are not private delivery targets
+        if not ref and "@" in author:
+            aad_id = await self._resolve_aad_id(author)
+            if aad_id:
+                ref = store.get(aad_id)
+                if ref and not self._ref_is_personal(ref):
+                    ref = None
+
+        if ref:
+            sent = await self._send_capture_notification(notif, ref)
+        else:
+            # Passive author: activity-feed notification via Graph.
+            target = author
+            if "@" in target:
+                target = await self._resolve_aad_id(author)
+            sent = await self._send_activity_notification(notif, target)
+
+        if sent:
+            await self._api_post(
+                f"/api/v1/notifications/{nid}/delivered", {}
+            )
+            self.stats["notified"] = self.stats.get("notified", 0) + 1
+            self._notify_failures.pop(nid, None)
+            return
+
+        attempts = self._notify_failures.get(nid, 0) + 1
+        self._notify_failures[nid] = attempts
+        if attempts >= self._notify_max_attempts:
+            await self._api_post(
+                f"/api/v1/notifications/{nid}/delivered?status=skipped", {}
+            )
+            self.stats["notify_skipped"] = (
+                self.stats.get("notify_skipped", 0) + 1
+            )
+            logger.warning(
+                "Notification %s undeliverable after %d attempts — marked "
+                "skipped (author %s)", nid, attempts, author,
+            )
+
+    @staticmethod
+    def _ref_is_personal(ref: dict) -> bool:
+        """Only 1:1 conversations may receive capture DMs.
+
+        A ref captured from a channel/group-chat message points at that
+        conversation; continue_conversation on it would post the
+        capture notice into the channel where everyone sees it. Treat
+        anything not explicitly personal as non-DMable (missing type is
+        allowed for legacy stores, which predate group refs).
+        """
+        return ref.get("conversation_type", "") in ("", "personal")
+
+    async def _send_activity_notification(
+        self, notif: dict, aad_id: str
+    ) -> bool:
+        """Activity-feed notification via Graph (TeamsActivity.Send).
+
+        The camera sign for passively captured authors who never talked
+        to the bot. Requires the AZURE_* app registration to hold
+        TeamsActivity.Send (application). Returns False on failure.
+        """
+        if not aad_id:
+            logger.warning(
+                "Notification %s: no AAD identity for %r — cannot notify",
+                notif.get("id"), notif.get("author_id"),
+            )
+            return False
+        graph = self._get_graph_client()
+        if graph is None:
+            return False
+        title = notif.get("title") or "content"
+        payload = {
+            "topic": {"source": "text", "value": "ThreadWeave capture"},
+            "activityType": "systemDefault",
+            "previewText": {
+                "content": (
+                    f"ThreadWeave saved your {notif.get('source', 'content')} "
+                    f"\"{title}\" (wing: {notif.get('wing', '')}). "
+                    f"Message the ThreadWeave bot: 'delete {title}' removes "
+                    f"it, 'opt out' stops future captures."
+                )
+            },
+            "templateParameters": [
+                {"name": "title", "value": "Captured to the palace"},
+            ],
+        }
+        try:
+            await graph._request(
+                "POST",
+                f"/users/{aad_id}/teamwork/sendActivityNotification",
+                json_body=payload,
+            )
+            logger.info(
+                "Activity notification sent to %s (entry %s)",
+                aad_id, notif.get("entry_id"),
+            )
+            return True
+        except Exception as exc:
+            status = ""
+            try:
+                status = f" HTTP {exc.response.status_code}"
+            except Exception:
+                pass
+            logger.warning(
+                "Activity notification failed for %s%s: %s",
+                notif.get("id"), status, exc,
+            )
+            if "403" in status:
+                logger.warning(
+                    "Hint: grant TeamsActivity.Send (application) on the "
+                    "AZURE_CLIENT_ID app registration and re-consent."
+                )
+            return False
+
+    def _get_graph_client(self):
+        """Lazily build the app-only Graph client for activity delivery."""
+        if self._graph_client is None:
+            tenant = os.environ.get("AZURE_TENANT_ID", "")
+            client_id = os.environ.get("AZURE_CLIENT_ID", "")
+            secret = os.environ.get("AZURE_CLIENT_SECRET", "")
+            if not (tenant and client_id and secret):
+                logger.warning(
+                    "AZURE_* credentials missing — activity-feed "
+                    "notifications disabled"
+                )
+                return None
+            from threadweave.connectors.sharepoint.watcher import GraphClient
+
+            self._graph_client = GraphClient(tenant, client_id, secret)
+        return self._graph_client
 
     async def _resolve_aad_id(self, email: str) -> str:
         """Resolve an email to an AAD object id via Graph (GraphReader

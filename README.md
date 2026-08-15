@@ -218,14 +218,14 @@ happen by themselves on every code push.
 - ✅ **SharePoint watch daemon** — delta-polling of document libraries (new + edited files), xlsx/pptx/docx/pdf extraction, OneNote notebook polling via delegated auth
 - ✅ **Copilot connector** — Graph external connection, schema, item sync, continuous daemon
 - ✅ **Privacy layer** — opt-out registry (ingest gate + early daemon skips), audited right-to-delete, Teams privacy commands
-- ✅ **Capture notifications** — daemons queue a Teams DM for the content author ("your email about X was added to the palace"), with delete/opt-out right in the message
+- ✅ **Capture notifications** — daemons queue a camera-sign notice for the content author; delivery is a personal Teams DM for authors the bot knows, and a Teams activity-feed notification via Graph (`TeamsActivity.Send`) for everyone captured passively. Undeliverable notices are marked skipped after retries, never silently dropped.
 - ✅ **Durable entry store** — SQLAlchemy persistence, SQLite default (`~/.threadweave/entries.sqlite3`) or PostgreSQL via `THREADWEAVE_ENTRY_DB`; the palace survives restarts
 - ✅ **Entry versioning** — re-captured documents (same source_file) chain to the original; `GET /api/v1/entries/{id}/versions` shows the evolution
 - ✅ **Daemon packaging** — `threadweave daemon install|status|run`: Windows Startup launchers, systemd units, per-daemon env files
 - ✅ **Teams app distribution** — deterministic package builder + scripted org-catalog publish (`threadweave teams package|publish`)
 - ✅ **OpenDocument support** — odt/ods/odp (LibreOffice native) extracted with stdlib only
 - ✅ **Visio + video/audio** — .vsdx diagram text extraction; on-prem video/audio transcription (ffmpeg + faster-whisper, CPU)
-- ✅ **438 tests** — full suite green
+- ✅ **443 tests** — full suite green
 
 ## What's Next
 

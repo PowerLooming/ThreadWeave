@@ -222,6 +222,9 @@ once):
 
 - `ChannelMessage.Read.All` — read channel messages in all teams
 - `Team.ReadBasic.All` — enumerate teams and channels
+- `TeamsActivity.Send` — activity-feed capture notifications to authors
+  who never talked to the bot (also needs `User.Read.All` for email to
+  AAD id resolution)
 
 ```bash
 uv run python -m threadweave.cli teams watch \
