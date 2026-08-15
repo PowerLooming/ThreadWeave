@@ -117,7 +117,13 @@ def create_app(
     async def _stop_poller(app):
         await bot.stop_notification_poller()
 
+    # Probe RSC consent at startup so a missing grant is loud in the
+    # logs instead of silently degrading capture to @mention-only.
+    async def _start_rsc_probe(app):
+        await bot.check_rsc_consent()
+
     app.on_startup.append(_start_poller)
+    app.on_startup.append(_start_rsc_probe)
     app.on_shutdown.append(_stop_poller)
 
     # Bot Framework messaging endpoint — POST /api/messages.
@@ -134,6 +140,7 @@ def create_app(
             "status": "healthy",
             "bot_mode": mode,
             "stats": bot.stats,
+            "rsc_status": bot.rsc_status,
         })
 
     app.router.add_get("/health", health)

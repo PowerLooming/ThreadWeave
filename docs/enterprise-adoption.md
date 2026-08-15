@@ -101,9 +101,13 @@ bot is dark, and 1:1 chats are never covered by any bot mechanism.
       fallback via Graph sendMail for tenants that refuse
       TeamsActivity.Send, retry-then-skip with stats. Pending live
       verification.)
-- [ ] Document the RSC consent step (Teams admin center, Manage apps,
+- [~] Document the RSC consent step (Teams admin center, Manage apps,
       Permissions, Review permissions and consent) in the connector
       docs; add a startup probe that detects consent absence.
+      (Built 2026-08-15: consent section in m365-connectors.md with
+      click path and PowerShell alternative; bot probe via
+      /teams/{id}/permissionGrants at startup and on new teams,
+      rsc_status in /health, 11 tests. Pending live verification.)
 - [ ] Acceptance: a channel message in a team where the bot was never
       installed is captured within one poll interval, and its author
       receives a capture notification.

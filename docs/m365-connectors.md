@@ -253,6 +253,38 @@ Credentials: `AZURE_TENANT_ID`, `AZURE_CLIENT_ID`,
 uses, with the two Teams permissions added). Register as a service with
 `threadweave daemon install teams-watch`.
 
+### RSC consent (bot passive capture, separate admin step)
+
+The Teams manifest declares two RSC (Resource-Specific Consent)
+permissions that let the bot receive ALL messages in a conversation,
+not just @mentions:
+
+- `ChannelMessage.Read.Group` — channels of teams where the app is installed
+- `ChatMessage.Read.Chat` — group chats the bot was added to
+
+**Declaring RSC in the manifest grants nothing.** A tenant admin must
+consent explicitly. Without that step the bot silently degrades to
+@mention-only capture with no error anywhere. (The teams-watch daemon
+does not depend on RSC at all, it uses Graph app permissions.)
+
+**Grant consent (Teams admin center):**
+
+1. https://admin.teams.microsoft.com → **Teams apps** → **Manage apps**
+2. Select **ThreadWeave** → **Permissions** tab
+3. **Review permissions and consent** → grant
+   `ChannelMessage.Read.Group` and `ChatMessage.Read.Chat`
+   (menu labels vary by portal version; an org-wide PowerShell
+   preapproval path also exists, see Microsoft's RSC preapproval docs)
+
+**The consent probe.** The bot tracks the teams it observes (install
+events, messages) and verifies each team's granted RSC permissions via
+Graph `GET /teams/{id}/permissionGrants`, matching the grant's
+`clientAppId` against the app id. It runs at startup and whenever a new
+team is seen; a missing grant logs a loud warning, and the results are
+exposed as `rsc_status` on the bot's `/health` endpoint. For the probe
+to read the grant list, the app registration also needs
+`TeamsAppInstallation.ReadForTeam.All` (application, admin consent).
+
 ## Step 5: Verify Each Connector
 
 ### Email Watcher

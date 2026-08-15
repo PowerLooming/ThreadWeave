@@ -143,6 +143,7 @@ class ThreadWeaveTeamsBot(ActivityHandler if BOTBUILDER_AVAILABLE else object):
         self._notify_sender = os.environ.get("THREADWEAVE_NOTIFY_SENDER", "")
         self._graph_client = None  # lazy, for activity-feed delivery
         self._bot_id = os.environ.get("MICROSOFT_APP_ID", "")
+        self.rsc_status: dict[str, dict] = {}  # team id -> consent probe result
 
     # ---- Capture notification poller ("camera sign" DMs) ----
 
@@ -425,6 +426,108 @@ class ThreadWeaveTeamsBot(ActivityHandler if BOTBUILDER_AVAILABLE else object):
                 )
             return False
 
+    # ---- RSC consent probe (no silent @mention-only mode) ----
+
+    def _remember_team(self, activity) -> None:
+        """Record the activity's team id and probe consent if it is new."""
+        cd = getattr(activity, "channel_data", None) or {}
+        if not isinstance(cd, dict):
+            return
+        team = cd.get("team") or {}
+        team_id = (team.get("id") if isinstance(team, dict) else "") or ""
+        team_id = team_id.strip()
+        if not team_id:
+            return
+        from threadweave.connectors.teams.rsc import TeamSeenStore
+
+        if TeamSeenStore().add(team_id):
+            logger.info("New team observed: %s — probing RSC consent", team_id)
+            try:
+                asyncio.create_task(self._probe_new_team(team_id))
+            except Exception as exc:
+                logger.warning("RSC probe scheduling failed: %s", exc)
+
+    async def check_rsc_consent(self) -> None:
+        """Probe RSC consent for every known team; warn when missing.
+
+        Runs at startup (adapter hook). Without consent the bot only
+        receives @mentions, so capture degrades silently; this makes it
+        loud. Results land in self.rsc_status and the /health endpoint.
+        """
+        if not self._bot_id:
+            logger.warning(
+                "RSC consent check skipped: MICROSOFT_APP_ID missing"
+            )
+            return
+        graph = self._get_graph_client()
+        if graph is None:
+            logger.warning(
+                "RSC consent check skipped: AZURE_* credentials missing"
+            )
+            return
+        from threadweave.connectors.teams.rsc import (
+            TeamSeenStore, check_team_consent,
+        )
+
+        teams = TeamSeenStore().all()
+        if not teams:
+            logger.info(
+                "RSC consent check skipped: no teams observed yet "
+                "(add the bot to a team and restart, or wait for the "
+                "first activity)"
+            )
+            return
+        for team_id in teams:
+            try:
+                result = await check_team_consent(
+                    graph, team_id, self._bot_id
+                )
+            except Exception as exc:
+                result = {
+                    "team_id": team_id, "status": "error",
+                    "permissions": [],
+                    "detail": f"consent probe failed: {exc}",
+                }
+            self.rsc_status[team_id] = result
+            self._log_consent_result(result)
+
+    async def _probe_new_team(self, team_id: str) -> None:
+        """Fire-and-forget consent probe for a newly observed team."""
+        try:
+            if not self._bot_id:
+                return
+            graph = self._get_graph_client()
+            if graph is None:
+                return
+            from threadweave.connectors.teams.rsc import check_team_consent
+
+            result = await check_team_consent(graph, team_id, self._bot_id)
+            self.rsc_status[team_id] = result
+            self._log_consent_result(result)
+        except Exception as exc:
+            logger.warning("RSC probe for team %s failed: %s", team_id, exc)
+
+    @staticmethod
+    def _log_consent_result(result: dict) -> None:
+        team_id = result.get("team_id", "?")
+        status = result.get("status")
+        if status == "granted":
+            logger.info(
+                "RSC consent verified for team %s: %s",
+                team_id, ", ".join(result.get("permissions", [])) or "grant",
+            )
+        elif status == "missing":
+            logger.warning(
+                "RSC consent MISSING for team %s — the bot only receives "
+                "@mentions there. %s",
+                team_id, result.get("detail", ""),
+            )
+        else:
+            logger.warning(
+                "RSC consent check for team %s failed: %s",
+                team_id, result.get("detail", ""),
+            )
+
     def _get_graph_client(self):
         """Lazily build the app-only Graph client for activity delivery."""
         if self._graph_client is None:
@@ -544,6 +647,7 @@ class ThreadWeaveTeamsBot(ActivityHandler if BOTBUILDER_AVAILABLE else object):
         self, members_added: list[ChannelAccount], turn_context: TurnContext
     ):
         """Send welcome message when bot is added to a team."""
+        self._remember_team(turn_context.activity)
         for member in members_added:
             if member.id != turn_context.activity.recipient.id:
                 welcome = (
@@ -565,6 +669,9 @@ class ThreadWeaveTeamsBot(ActivityHandler if BOTBUILDER_AVAILABLE else object):
 
         if activity.type != ActivityTypes.message:
             return
+
+        # Track the team for the RSC consent probe.
+        self._remember_team(activity)
 
         # Remember the conversation so we can DM this person later
         # ("camera sign" capture notifications).
