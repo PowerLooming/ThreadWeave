@@ -188,3 +188,92 @@ def test_health_exposes_rsc_status():
 
     app = create_app()
     assert app is not None  # botbuilder import path exercised
+
+
+# ---- GraphClient empty-body handling (202/204 responses) --------------------
+
+
+class FakeResponse:
+    def __init__(self, content=b"", status_code=202):
+        self._content = content
+        self.status_code = status_code
+
+    def raise_for_status(self):
+        pass
+
+    @property
+    def content(self):
+        return self._content
+
+    def json(self):
+        raise ValueError("no JSON on empty 202")
+
+
+def fake_async_client_factory(response):
+    """Returns a FakeAsyncClient class bound to a specific response."""
+
+    class FakeAsyncClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+        async def request(self, *args, **kwargs):
+            return response
+
+    return FakeAsyncClient
+
+
+def make_bare_graph(response):
+    from threadweave.connectors.sharepoint.watcher import GraphClient
+
+    client = object.__new__(GraphClient)
+
+    async def fake_token():
+        return "tok"
+
+    client._get_token = fake_token
+    return client
+
+
+@pytest.mark.asyncio
+async def test_graph_request_accepts_empty_202(monkeypatch):
+    from threadweave.connectors.sharepoint import watcher as watcher_mod
+
+    client = make_bare_graph(None)
+    monkeypatch.setattr(
+        watcher_mod.httpx, "AsyncClient",
+        fake_async_client_factory(FakeResponse()),
+    )
+    result = await client._request_url(
+        "POST", "https://graph.microsoft.com/v1.0/users/x/sendMail",
+        json_body={"message": {}},
+    )
+    assert result == {}  # 202 empty body is success, not a JSON error
+
+
+@pytest.mark.asyncio
+async def test_graph_request_parses_json_bodies(monkeypatch):
+    from threadweave.connectors.sharepoint import watcher as watcher_mod
+
+    class JsonResponse(FakeResponse):
+        @property
+        def content(self):
+            return b'{"value": [1, 2]}'
+
+        def json(self):
+            return {"value": [1, 2]}
+
+    client = make_bare_graph(None)
+    monkeypatch.setattr(
+        watcher_mod.httpx, "AsyncClient",
+        fake_async_client_factory(JsonResponse()),
+    )
+    result = await client._request_url(
+        "GET", "https://graph.microsoft.com/v1.0/teams/t1/permissionGrants"
+    )
+    assert result == {"value": [1, 2]}

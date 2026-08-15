@@ -194,6 +194,11 @@ class GraphClient:
                 method, url, headers=headers, json=json_body, params=params
             )
             resp.raise_for_status()
+            # 202/204 responses carry no body (sendMail,
+            # sendActivityNotification, ...); resp.json() would raise
+            # JSONDecodeError and mask a successful call as a failure.
+            if not resp.content:
+                return {}
             return resp.json()
 
     # ---- Site Discovery ----
