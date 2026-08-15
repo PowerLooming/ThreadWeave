@@ -105,6 +105,9 @@ class BotUnderTest(ThreadWeaveTeamsBot):
         self.dm_refs = []
         self.activity_targets = []
         self.activity_ok = True
+        self.email_sent = []
+        self.email_ok = True
+        self.email_map = {}
         self._resolved = resolved or {}
         self._notify_max_attempts = max_attempts
 
@@ -130,6 +133,21 @@ class BotUnderTest(ThreadWeaveTeamsBot):
         if not self.activity_ok:
             return False
         self.activity_targets.append(aad_id)
+        return True
+
+    async def _resolve_author_email(self, author_id):
+        if "@" in author_id:
+            return author_id
+        return self.email_map.get(author_id, "")
+
+    async def _send_email_notification(self, notif, author_email):
+        if not self._notify_email_enabled:  # mirror the real guard
+            return False
+        if not author_email or "@" not in author_email:
+            return False
+        if not self.email_ok:
+            return False
+        self.email_sent.append(author_email)
         return True
 
 
@@ -214,6 +232,7 @@ async def test_undeliverable_skipped_after_max_attempts(bot_store):
     bot = BotUnderTest(
         [make_notif("n1", "ghost@x.com")], resolved={}, max_attempts=3
     )
+    bot.email_ok = False  # email fallback also unavailable
     for _ in range(3):
         await bot._deliver_pending_notifications()
     # 3 failures -> marked skipped, nothing marked delivered.
@@ -231,6 +250,7 @@ async def test_activity_failure_recovers_before_max(bot_store):
         resolved={"adele@x.com": "aad-a"}, max_attempts=3,
     )
     bot.activity_ok = False
+    bot.email_ok = False  # isolate the activity path
     await bot._deliver_pending_notifications()  # attempt 1 fails
     await bot._deliver_pending_notifications()  # attempt 2 fails
     assert bot.delivered_paths == []
@@ -238,6 +258,67 @@ async def test_activity_failure_recovers_before_max(bot_store):
     await bot._deliver_pending_notifications()  # attempt 3 succeeds
     assert bot.activity_targets == ["aad-a"]
     assert bot.delivered_paths == ["/api/v1/notifications/n1/delivered"]
+
+
+@pytest.mark.asyncio
+async def test_email_fallback_when_activity_fails(bot_store):
+    bot = BotUnderTest(
+        [make_notif("n1", "adele@x.com")], resolved={"adele@x.com": "aad-a"}
+    )
+    bot.activity_ok = False  # tenant refuses TeamsActivity.Send
+    await bot._deliver_pending_notifications()
+    assert bot.activity_targets == []
+    assert bot.email_sent == ["adele@x.com"]
+    assert bot.delivered_paths == ["/api/v1/notifications/n1/delivered"]
+
+
+@pytest.mark.asyncio
+async def test_email_fallback_resolves_aad_id_to_mail(bot_store):
+    # teams-watch authors are stored by AAD id, not email.
+    bot = BotUnderTest([make_notif("n1", "aad-9")])
+    bot.activity_ok = False
+    bot.email_map = {"aad-9": "jane@x.com"}
+    await bot._deliver_pending_notifications()
+    assert bot.email_sent == ["jane@x.com"]
+    assert bot.delivered_paths == ["/api/v1/notifications/n1/delivered"]
+
+
+@pytest.mark.asyncio
+async def test_email_not_attempted_when_activity_succeeds(bot_store):
+    bot = BotUnderTest(
+        [make_notif("n1", "adele@x.com")], resolved={"adele@x.com": "aad-a"}
+    )
+    await bot._deliver_pending_notifications()
+    assert bot.activity_targets == ["aad-a"]
+    assert bot.email_sent == []
+    assert bot.delivered_paths == ["/api/v1/notifications/n1/delivered"]
+
+
+@pytest.mark.asyncio
+async def test_email_disabled_env_skips_fallback(bot_store, monkeypatch):
+    monkeypatch.setenv("THREADWEAVE_NOTIFY_EMAIL", "0")
+    bot = BotUnderTest([make_notif("n1", "adele@x.com")])
+    bot.activity_ok = False
+    bot._notify_email_enabled = False  # what the env would set
+    await bot._deliver_pending_notifications()
+    assert bot.email_sent == []
+    assert bot.delivered_paths == []
+
+
+def test_real_email_sender_guard_requires_sender():
+    """The real _send_email_notification refuses without a sender."""
+    bot = ThreadWeaveTeamsBot(adapter=None)
+    bot._notify_sender = ""
+    bot._graph_client = None
+
+    import asyncio
+
+    async def run():
+        return await bot._send_email_notification(
+            make_notif("n1", "adele@x.com"), "adele@x.com"
+        )
+
+    assert asyncio.run(run()) is False  # sender missing, never reaches Graph
 
 
 def test_ref_is_personal_guard():

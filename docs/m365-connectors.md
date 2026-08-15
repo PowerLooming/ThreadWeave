@@ -225,6 +225,10 @@ once):
 - `TeamsActivity.Send` — activity-feed capture notifications to authors
   who never talked to the bot (also needs `User.Read.All` for email to
   AAD id resolution)
+- `Mail.Send` — email fallback for capture notifications in tenants
+  that refuse `TeamsActivity.Send`; needs `THREADWEAVE_NOTIFY_SENDER`
+  set to a mailbox the app may send from. `User.Read.All` also covers
+  AAD id to email resolution for this path.
 
 ```bash
 uv run python -m threadweave.cli teams watch \

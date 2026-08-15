@@ -137,6 +137,10 @@ class ThreadWeaveTeamsBot(ActivityHandler if BOTBUILDER_AVAILABLE else object):
             os.environ.get("THREADWEAVE_NOTIFY_MAX_ATTEMPTS", "5")
         )
         self._notify_failures: dict[str, int] = {}
+        self._notify_email_enabled = os.environ.get(
+            "THREADWEAVE_NOTIFY_EMAIL", "1"
+        ) not in ("0", "false", "False")
+        self._notify_sender = os.environ.get("THREADWEAVE_NOTIFY_SENDER", "")
         self._graph_client = None  # lazy, for activity-feed delivery
         self._bot_id = os.environ.get("MICROSOFT_APP_ID", "")
 
@@ -181,7 +185,10 @@ class ThreadWeaveTeamsBot(ActivityHandler if BOTBUILDER_AVAILABLE else object):
            for everyone else — this is the camera sign for authors
            captured passively (teams-watch, email, SharePoint) who
            never interacted with the bot.
-        3. After THREADWEAVE_NOTIFY_MAX_ATTEMPTS failures the
+        3. Email fallback via Graph sendMail (Mail.Send) for tenants
+           that refuse TeamsActivity.Send, or when the activity
+           notification fails (THREADWEAVE_NOTIFY_SENDER required).
+        4. After THREADWEAVE_NOTIFY_MAX_ATTEMPTS failures the
            notification is marked skipped (stops retrying, counted in
            stats, not reported as delivered).
         """
@@ -217,11 +224,15 @@ class ThreadWeaveTeamsBot(ActivityHandler if BOTBUILDER_AVAILABLE else object):
         if ref:
             sent = await self._send_capture_notification(notif, ref)
         else:
-            # Passive author: activity-feed notification via Graph.
+            # Passive author: activity-feed notification via Graph,
+            # email fallback when that is unavailable or fails.
             target = author
             if "@" in target:
                 target = await self._resolve_aad_id(author)
             sent = await self._send_activity_notification(notif, target)
+            if not sent:
+                email = await self._resolve_author_email(author)
+                sent = await self._send_email_notification(notif, email)
 
         if sent:
             await self._api_post(
@@ -315,6 +326,101 @@ class ThreadWeaveTeamsBot(ActivityHandler if BOTBUILDER_AVAILABLE else object):
             if "403" in status:
                 logger.warning(
                     "Hint: grant TeamsActivity.Send (application) on the "
+                    "AZURE_CLIENT_ID app registration and re-consent."
+                )
+            return False
+
+    async def _resolve_author_email(self, author_id: str) -> str:
+        """Best-effort email address for an author id (email or AAD id)."""
+        if "@" in (author_id or ""):
+            return author_id
+        graph = self._get_graph_client()
+        if graph is None:
+            return ""
+        try:
+            data = await graph._request(
+                "GET", f"/users/{author_id}",
+                params={"$select": "mail,userPrincipalName"},
+            )
+            return data.get("mail") or data.get("userPrincipalName") or ""
+        except Exception as exc:
+            logger.warning(
+                "Email resolution failed for %s: %s", author_id, exc
+            )
+            return ""
+
+    async def _send_email_notification(
+        self, notif: dict, author_email: str
+    ) -> bool:
+        """Email fallback for the camera sign via Graph sendMail.
+
+        Used when the activity-feed path is unavailable (tenant refuses
+        TeamsActivity.Send) or failed. Requires Mail.Send (application)
+        on the AZURE_* app registration and THREADWEAVE_NOTIFY_SENDER
+        set to a mailbox the app may send from. Returns False on
+        failure or when email delivery is disabled/unconfigured.
+        """
+        if not self._notify_email_enabled:
+            return False
+        if not author_email or "@" not in author_email:
+            return False
+        sender = self._notify_sender or os.environ.get(
+            "THREADWEAVE_EMAIL_MAILBOX", ""
+        )
+        if not sender:
+            logger.warning(
+                "THREADWEAVE_NOTIFY_SENDER not set — email fallback "
+                "disabled (notification %s)", notif.get("id"),
+            )
+            return False
+        graph = self._get_graph_client()
+        if graph is None:
+            return False
+
+        from html import escape
+
+        title = escape(notif.get("title") or "content")
+        source = escape(notif.get("source") or "content")
+        wing = escape(notif.get("wing") or "")
+        body_html = (
+            f"<p>ThreadWeave saved your {source} &quot;{title}&quot; to "
+            f"the palace (wing: {wing}).</p>"
+            f"<p>This is an automated capture notice. In Teams, message "
+            f"the ThreadWeave bot: <b>delete {title}</b> removes the "
+            f"entry, <b>opt out</b> stops future captures.</p>"
+        )
+        payload = {
+            "message": {
+                "subject": f"ThreadWeave captured your {source}",
+                "body": {"contentType": "html", "content": body_html},
+                "toRecipients": [
+                    {"emailAddress": {"address": author_email}}
+                ],
+            }
+        }
+        try:
+            await graph._request(
+                "POST", f"/users/{sender}/sendMail", json_body=payload
+            )
+            self.stats["notify_email"] = self.stats.get("notify_email", 0) + 1
+            logger.info(
+                "Email capture notification sent to %s (entry %s)",
+                author_email, notif.get("entry_id"),
+            )
+            return True
+        except Exception as exc:
+            status = ""
+            try:
+                status = f" HTTP {exc.response.status_code}"
+            except Exception:
+                pass
+            logger.warning(
+                "Email capture notification failed for %s%s: %s",
+                notif.get("id"), status, exc,
+            )
+            if "403" in status:
+                logger.warning(
+                    "Hint: grant Mail.Send (application) on the "
                     "AZURE_CLIENT_ID app registration and re-consent."
                 )
             return False

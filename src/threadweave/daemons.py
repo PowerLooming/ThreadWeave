@@ -72,6 +72,8 @@ DAEMONS: dict[str, dict] = {
             "THREADWEAVE_BOT_MODE": "both",
             "THREADWEAVE_NOTIFY_ENABLED": "1",
             "THREADWEAVE_NOTIFY_INTERVAL": "60",
+            "THREADWEAVE_NOTIFY_EMAIL": "1",
+            "THREADWEAVE_NOTIFY_SENDER": "",
         },
     },
     "teams-watch": {
