@@ -209,6 +209,43 @@ is in, so nothing from other teams reaches it. The app ID and bot ID stay
 `cb342c61-8ab1-4c7b-ac0c-0a7f191acf4b` across versions — existing installs
 update in place.
 
+### Teams Watch (passive channel capture, no bot installs)
+
+The Teams bot only sees conversations it was invited into (@mention, DM, or
+RSC-consented teams/chats). For true passive capture of channel messages,
+the watch daemon polls Graph directly with app-only permissions. No app
+installs, no user action, and it also covers teams where the bot was never
+added.
+
+Required app permissions on the app registration (tenant admin consent,
+once):
+
+- `ChannelMessage.Read.All` — read channel messages in all teams
+- `Team.ReadBasic.All` — enumerate teams and channels
+
+```bash
+uv run python -m threadweave.cli teams watch \
+  --interval 300 --team "Mark 8"
+```
+
+On a channel's first poll the daemon primes its delta token and captures
+only messages posted afterwards (nothing retroactive). To also mine
+existing history, pass `--backfill`, capped at `--max-messages` per
+channel (default 100, 0 = unlimited). Delta tokens persist to
+`~/.threadweave/teams_delta.json`, so restarts resume without
+re-crawling. `--team` limits polling to teams whose display name matches
+a substring (pilot scoping).
+
+Messages are filtered before ingestion: system events, bot/app posts,
+unattributable messages, opted-out authors, and texts under 50 characters
+are skipped. Everything else goes through the central ingest pipeline
+(detection, PII gate, opt-out gate, capture notification queue).
+
+Credentials: `AZURE_TENANT_ID`, `AZURE_CLIENT_ID`,
+`AZURE_CLIENT_SECRET` (the same app registration the SharePoint watcher
+uses, with the two Teams permissions added). Register as a service with
+`threadweave daemon install teams-watch`.
+
 ## Step 5: Verify Each Connector
 
 ### Email Watcher

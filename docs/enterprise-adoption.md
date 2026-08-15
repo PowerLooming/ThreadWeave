@@ -79,6 +79,30 @@ forget on schedule.
 - [ ] Acceptance: restore-from-backup rehearsal passes; a retention
       purge deletes only what it should and logs every deletion
 
+## Gate 6: Passive Teams capture without per-team installs
+
+**Why:** the product promise is passive capture. The Teams bot alone
+only sees conversations it is installed into (@mention, DM, or
+RSC-consented teams/chats). Any team or chat where nobody installs the
+bot is dark, and 1:1 chats are never covered by any bot mechanism.
+
+- [~] Implement a `teams-watch` daemon: Graph app-only polling of
+      channel messages via delta queries (`ChannelMessage.Read.All` +
+      `Team.ReadBasic.All`), same pull-only pattern as email-watch and
+      sharepoint-watch. No webhooks, no per-team installs.
+      (Built 2026-08-15: `threadweave teams watch`, prime/backfill
+      modes, delta-token state file, daemon registration, 9 tests.
+      Pending live verification against the pilot tenant.)
+- [ ] Camera sign for passively captured authors: notification must
+      not depend on the author having talked to the bot (activity-feed
+      notification via Graph `TeamsActivity.Send`, email fallback).
+- [ ] Document the RSC consent step (Teams admin center, Manage apps,
+      Permissions, Review permissions and consent) in the connector
+      docs; add a startup probe that detects consent absence.
+- [ ] Acceptance: a channel message in a team where the bot was never
+      installed is captured within one poll interval, and its author
+      receives a capture notification.
+
 ## Pilot conditions (running now)
 
 - [ ] Pilot team's knowledge stays in its own wing

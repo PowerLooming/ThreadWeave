@@ -213,6 +213,7 @@ happen by themselves on every code push.
 - ✅ **Auth** — Opt-in API key middleware with tenant scoping
 - ✅ **Docker** — Multi-stage build with optional Ollama profile
 - ✅ **Teams bot connector** — @mention capture + passive detection with consent card, RSC group-chat capture, privacy commands (`opt out`, `opt in`, `delete <topic>`, `status`)
+- ✅ **Teams watch daemon** — Graph delta polling of channel messages with app-only permissions. Captures every channel in every team with no bot installs, no @mentions, no RSC consent. Prime mode starts from install time; `--backfill` mines channel history. Delta tokens persist across restarts.
 - ✅ **Email watch daemon** — continuous one-way mailbox polling, thread-aware capture, sender→department→wing mapping
 - ✅ **SharePoint watch daemon** — delta-polling of document libraries (new + edited files), xlsx/pptx/docx/pdf extraction, OneNote notebook polling via delegated auth
 - ✅ **Copilot connector** — Graph external connection, schema, item sync, continuous daemon
@@ -224,7 +225,7 @@ happen by themselves on every code push.
 - ✅ **Teams app distribution** — deterministic package builder + scripted org-catalog publish (`threadweave teams package|publish`)
 - ✅ **OpenDocument support** — odt/ods/odp (LibreOffice native) extracted with stdlib only
 - ✅ **Visio + video/audio** — .vsdx diagram text extraction; on-prem video/audio transcription (ffmpeg + faster-whisper, CPU)
-- ✅ **429 tests** — full suite green
+- ✅ **438 tests** — full suite green
 
 ## What's Next
 

@@ -74,6 +74,17 @@ DAEMONS: dict[str, dict] = {
             "THREADWEAVE_NOTIFY_INTERVAL": "60",
         },
     },
+    "teams-watch": {
+        "description": "Continuous one-way Teams channel harvesting (M365 -> on-prem)",
+        "argv": [sys.executable, "-m", "threadweave.cli", "teams", "watch"],
+        "env_defaults": {
+            "THREADWEAVE_DAEMON_INTERVAL": "300",
+            "THREADWEAVE_TEAMS_BACKFILL": "0",
+            "THREADWEAVE_TEAMS_MAX_MESSAGES": "100",
+            "THREADWEAVE_TEAMS_FILTER": "",
+            "THREADWEAVE_API_URL": "http://localhost:8000",
+        },
+    },
 }
 
 WINDOWS_TASK_PREFIX = "ThreadWeave-"
@@ -132,6 +143,18 @@ def build_argv(name: str) -> list[str]:
             argv += ["--onenote"]
     elif name == "graph-daemon":
         argv += ["--interval", env.get("THREADWEAVE_GRAPH_INTERVAL", "300")]
+    elif name == "teams-watch":
+        argv += ["--interval", env.get("THREADWEAVE_DAEMON_INTERVAL", "300")]
+        if env.get("THREADWEAVE_TEAMS_BACKFILL", "0") == "1":
+            argv += ["--backfill"]
+        argv += ["--max-messages",
+                 env.get("THREADWEAVE_TEAMS_MAX_MESSAGES", "100")]
+        team_filter = env.get("THREADWEAVE_TEAMS_FILTER", "")
+        if team_filter:
+            argv += ["--team", team_filter]
+        api_url = env.get("THREADWEAVE_API_URL", "")
+        if api_url:
+            argv += ["--api-url", api_url]
     return argv
 
 
@@ -184,6 +207,16 @@ def run_daemon(name: str) -> int:
     elif name == "teams-bot":
         from threadweave.connectors.teams.adapter import main as bot_main
         bot_main()
+    elif name == "teams-watch":
+        from threadweave.cli import cmd_teams_watch
+        args = SimpleNamespace(
+            interval=int(env.get("THREADWEAVE_DAEMON_INTERVAL", "300")),
+            api_url=env.get("THREADWEAVE_API_URL", "http://localhost:8000"),
+            backfill=env.get("THREADWEAVE_TEAMS_BACKFILL", "0") == "1",
+            max_messages=int(env.get("THREADWEAVE_TEAMS_MAX_MESSAGES", "100")),
+            team=env.get("THREADWEAVE_TEAMS_FILTER", ""),
+        )
+        cmd_teams_watch(args)
     return 0
 
 

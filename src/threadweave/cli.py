@@ -243,6 +243,25 @@ def cmd_teams_publish(args):
     print("  3. Users install from Apps → Built for your org")
 
 
+def cmd_teams_watch(args):
+    """Continuously harvest Teams channel messages via Graph delta polling."""
+    import asyncio
+    from threadweave.connectors.teams.watcher import (
+        TeamsGraphClient, TeamsWatchDaemon,
+    )
+
+    graph = TeamsGraphClient()
+    daemon = TeamsWatchDaemon(
+        graph=graph,
+        interval=args.interval,
+        api_base_url=args.api_url,
+        backfill=args.backfill,
+        max_messages=args.max_messages,
+        team_filter=args.team,
+    )
+    asyncio.run(daemon.run())
+
+
 # ── Daemon Management (packaging) ──────────────────────────────────
 
 def cmd_daemon_run(args):
@@ -794,6 +813,25 @@ def main():
                              help="Package zip path")
     p_teams_pub.add_argument("--wait", type=int, default=120,
                              help="Seconds to poll for catalog readiness")
+    p_teams_watch = teams_sub.add_parser(
+        "watch", help="Continuously harvest channel messages via "
+                      "Graph delta polling (no bot installs needed)")
+    p_teams_watch.add_argument("--interval", type=int, default=300,
+                               help="Seconds between polls (default 300)")
+    p_teams_watch.add_argument("--backfill", action="store_true",
+                               help="Process full channel history on the "
+                                    "first poll (default: start from now)")
+    p_teams_watch.add_argument("--max-messages", type=int, default=100,
+                               help="Per-channel history cap in backfill "
+                                    "mode, 0 = unlimited (default 100)")
+    p_teams_watch.add_argument("--team", default="",
+                               help="Only watch teams whose display name "
+                                    "contains this substring")
+    p_teams_watch.add_argument(
+        "--api-url",
+        default=os.environ.get("THREADWEAVE_API_URL", "http://localhost:8000"),
+        help="ThreadWeave API server URL (default: THREADWEAVE_API_URL "
+             "or http://localhost:8000)")
 
     p_d_run = daemon_sub.add_parser(
         "run", help="Run a daemon with its env file (used by services)")
@@ -835,6 +873,8 @@ def main():
             cmd_teams_package(args)
         elif args.teams_command == "publish":
             cmd_teams_publish(args)
+        elif args.teams_command == "watch":
+            cmd_teams_watch(args)
         else:
             p_teams.print_help()
     elif args.command == "daemon":

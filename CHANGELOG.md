@@ -4,6 +4,12 @@ All notable changes to ThreadWeave are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project
 uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Teams watch daemon** (`threadweave teams watch`): continuous one-way harvesting of Teams channel messages via Graph delta polling with app-only permissions (`ChannelMessage.Read.All` + `Team.ReadBasic.All`). Captures every channel in every team with no bot installs, no @mentions, no RSC consent. Prime mode (default) starts capturing from install time; `--backfill` processes channel history with a per-channel cap. Delta tokens persist to `~/.threadweave/teams_delta.json`. Filters system events, bot posts, unattributable messages, opted-out authors, and sub-50-character texts before the central ingest pipeline. Registered as the `teams-watch` daemon.
+
 ## [0.4.0] — 2026-08-07
 
 ### Added
