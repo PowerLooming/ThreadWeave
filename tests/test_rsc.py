@@ -53,38 +53,58 @@ class FakeGraph:
         return {"value": self.grants or []}
 
 
+@pytest.fixture
+def team_guid():
+    return "11111111-2222-3333-4444-555555555555"
+
+
 @pytest.mark.asyncio
-async def test_consent_granted_for_our_app():
+async def test_consent_granted_for_our_app(team_guid):
     graph = FakeGraph(grants=[
         {"clientAppId": "bot-1", "permission": "ChannelMessage.Read.Group"},
         {"clientAppId": "other-app", "permission": "ChannelMessage.Read.Group"},
         {"clientAppId": "bot-1", "permission": "ChatMessage.Read.Chat"},
     ])
-    result = await check_team_consent(graph, "team-1", "bot-1")
+    result = await check_team_consent(graph, team_guid, "bot-1")
     assert result["status"] == "granted"
     assert result["permissions"] == [
         "ChannelMessage.Read.Group", "ChatMessage.Read.Chat",
     ]
-    assert graph.calls == [("GET", "/teams/team-1/permissionGrants")]
+    assert graph.calls == [
+        ("GET", f"/teams/{team_guid}/permissionGrants")
+    ]
 
 
 @pytest.mark.asyncio
-async def test_consent_missing_when_no_grants_for_app():
+async def test_consent_missing_when_no_grants_for_app(team_guid):
     graph = FakeGraph(grants=[
         {"clientAppId": "other-app", "permission": "ChannelMessage.Read.Group"},
     ])
-    result = await check_team_consent(graph, "team-1", "bot-1")
+    result = await check_team_consent(graph, team_guid, "bot-1")
     assert result["status"] == "missing"
     assert result["permissions"] == []
     assert "Teams admin center" in result["detail"]
 
 
 @pytest.mark.asyncio
-async def test_consent_check_403_reports_read_permission_hint():
+async def test_consent_check_403_reports_read_permission_hint(team_guid):
     graph = FakeGraph(error_status=403)
-    result = await check_team_consent(graph, "team-1", "bot-1")
+    result = await check_team_consent(graph, team_guid, "bot-1")
     assert result["status"] == "error"
     assert "TeamsAppInstallation.ReadForTeam.All" in result["detail"]
+
+
+@pytest.mark.asyncio
+async def test_consent_check_rejects_channel_ids():
+    """19:...@thread.tacv2 ids are channels, not teams: clean error."""
+    graph = FakeGraph()
+    result = await check_team_consent(
+        graph, "19:5c345b5e1e1e4e64bb6c191611d9973f@thread.tacv2", "bot-1"
+    )
+    assert result["status"] == "error"
+    assert "not a team GUID" in result["detail"]
+    assert "Review permissions and consent" in result["detail"]
+    assert graph.calls == []  # no wasted Graph call
 
 
 @pytest.mark.asyncio
@@ -110,28 +130,28 @@ def make_bot(monkeypatch, tmp_path, graph, bot_id="bot-1"):
 
 @pytest.mark.asyncio
 async def test_bot_check_rsc_consent_populates_status(
-    monkeypatch, tmp_path
+    monkeypatch, tmp_path, team_guid
 ):
     graph = FakeGraph(grants=[
         {"clientAppId": "bot-1", "permission": "ChannelMessage.Read.Group"},
     ])
     bot = make_bot(monkeypatch, tmp_path, graph)
-    TeamSeenStore().add("team-1")
+    TeamSeenStore().add(team_guid)
 
     await bot.check_rsc_consent()
-    assert bot.rsc_status["team-1"]["status"] == "granted"
+    assert bot.rsc_status[team_guid]["status"] == "granted"
 
 
 @pytest.mark.asyncio
 async def test_bot_check_rsc_consent_missing_is_reported(
-    monkeypatch, tmp_path
+    monkeypatch, tmp_path, team_guid
 ):
     graph = FakeGraph(grants=[])
     bot = make_bot(monkeypatch, tmp_path, graph)
-    TeamSeenStore().add("team-1")
+    TeamSeenStore().add(team_guid)
 
     await bot.check_rsc_consent()
-    assert bot.rsc_status["team-1"]["status"] == "missing"
+    assert bot.rsc_status[team_guid]["status"] == "missing"
 
 
 @pytest.mark.asyncio
@@ -153,24 +173,51 @@ async def test_bot_check_rsc_skips_without_credentials(
 
 
 @pytest.mark.asyncio
-async def test_remember_team_records_and_probes(monkeypatch, tmp_path):
+async def test_remember_team_records_and_probes(
+    monkeypatch, tmp_path, team_guid
+):
     graph = FakeGraph(grants=[
         {"clientAppId": "bot-1", "permission": "ChannelMessage.Read.Group"},
     ])
     bot = make_bot(monkeypatch, tmp_path, graph)
 
     activity = SimpleNamespace(
-        channel_data={"team": {"id": "team-9"}, "channel": {"id": "c1"}}
+        channel_data={"team": {"id": team_guid}, "channel": {"id": "c1"}}
     )
     bot._remember_team(activity)
-    assert TeamSeenStore().all() == ["team-9"]
+    assert TeamSeenStore().all() == [team_guid]
 
     # the fire-and-forget probe task runs on the loop
     import asyncio
 
     await asyncio.sleep(0)
     await asyncio.sleep(0)
-    assert bot.rsc_status["team-9"]["status"] == "granted"
+    assert bot.rsc_status[team_guid]["status"] == "granted"
+
+
+def test_remember_team_prefers_aad_group_id(monkeypatch, tmp_path):
+    """Channel-scoped installs: team.id is the channel id, aadGroupId is
+    the team GUID. The store must record the GUID (Graph's team id)."""
+    bot = make_bot(monkeypatch, tmp_path, FakeGraph())
+    bot._bot_id = ""  # no probe side effects
+
+    activity = SimpleNamespace(
+        channel_data={
+            "team": {
+                "id": "19:5c345b5e1e1e4e64bb6c191611d9973f@thread.tacv2",
+                "aadGroupId": "22222222-3333-4444-5555-666666666666",
+                "name": "Sales West",
+            },
+            "channel": {
+                "id": "19:5c345b5e1e1e4e64bb6c191611d9973f@thread.tacv2",
+                "name": "Sales West",
+            },
+        }
+    )
+    bot._remember_team(activity)
+    assert TeamSeenStore().all() == [
+        "22222222-3333-4444-5555-666666666666"
+    ]
 
 
 def test_remember_team_ignores_activities_without_team(

@@ -28,11 +28,19 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_SEEN_FILE = "~/.threadweave/teams_seen.json"
+
+# Team GUIDs are canonical GUIDs; channel ids look like
+# 19:<hex>@thread.tacv2 and are NOT valid /teams/{id} path segments.
+_TEAM_GUID_RE = re.compile(
+    r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
+    r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+)
 
 # RSC permissions the bot depends on for passive capture, by scope.
 EXPECTED_PERMISSIONS = {
@@ -109,6 +117,18 @@ async def check_team_consent(graph, team_id: str, bot_app_id: str) -> dict:
     if not team_id or not bot_app_id:
         return {"team_id": team_id, "status": "error",
                 "permissions": [], "detail": "missing team id or bot app id"}
+    if not _TEAM_GUID_RE.match(team_id):
+        # Channel ids (19:...@thread.tacv2) are not valid here; the
+        # caller should pass the team's AAD group GUID (aadGroupId).
+        return {
+            "team_id": team_id, "status": "error", "permissions": [],
+            "detail": (
+                f"'{team_id[:24]}...' is not a team GUID (channel-scoped "
+                "install). Verify RSC consent manually in the Teams admin "
+                "center: Teams apps -> Manage apps -> ThreadWeave -> "
+                "Permissions -> Review permissions and consent."
+            ),
+        }
     try:
         data = await graph._request(
             "GET", f"/teams/{team_id}/permissionGrants"

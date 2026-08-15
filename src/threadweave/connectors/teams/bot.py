@@ -434,8 +434,12 @@ class ThreadWeaveTeamsBot(ActivityHandler if BOTBUILDER_AVAILABLE else object):
         if not isinstance(cd, dict):
             return
         team = cd.get("team") or {}
-        team_id = (team.get("id") if isinstance(team, dict) else "") or ""
-        team_id = team_id.strip()
+        if not isinstance(team, dict):
+            team = {}
+        # Channel-scoped installs put the CHANNEL id (19:...@thread.tacv2)
+        # in team.id; the real team GUID is aadGroupId. Graph's
+        # /teams/{id}/permissionGrants wants the GUID.
+        team_id = (team.get("aadGroupId") or team.get("id") or "").strip()
         if not team_id:
             return
         from threadweave.connectors.teams.rsc import TeamSeenStore
