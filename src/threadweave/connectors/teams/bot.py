@@ -442,6 +442,17 @@ class ThreadWeaveTeamsBot(ActivityHandler if BOTBUILDER_AVAILABLE else object):
         team_id = (team.get("aadGroupId") or team.get("id") or "").strip()
         if not team_id:
             return
+        from threadweave.connectors.teams import rsc
+
+        if not rsc.TEAM_GUID_RE.match(team_id):
+            # No aadGroupId and team.id is a channel id: nothing
+            # verifiable to record. Skip instead of polluting the seen
+            # store with an id the probe can never check.
+            logger.debug(
+                "Skipping non-GUID team id %s (no aadGroupId in activity)",
+                team_id[:30],
+            )
+            return
         from threadweave.connectors.teams.rsc import TeamSeenStore
 
         if TeamSeenStore().add(team_id):

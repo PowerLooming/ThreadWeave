@@ -220,6 +220,26 @@ def test_remember_team_prefers_aad_group_id(monkeypatch, tmp_path):
     ]
 
 
+def test_remember_team_skips_channel_ids_without_aad_group_id(
+    monkeypatch, tmp_path
+):
+    """team.id = channel id and NO aadGroupId: nothing verifiable to
+    record, so the seen store must stay clean (live 2026-08-16)."""
+    bot = make_bot(monkeypatch, tmp_path, FakeGraph())
+    bot._bot_id = ""
+
+    activity = SimpleNamespace(
+        channel_data={
+            "team": {
+                "id": "19:efe09cac35154697875c9325066e7a1b@thread.tacv2",
+                "name": "Retail General",
+            },
+        }
+    )
+    bot._remember_team(activity)
+    assert TeamSeenStore().all() == []
+
+
 def test_remember_team_ignores_activities_without_team(
     monkeypatch, tmp_path
 ):

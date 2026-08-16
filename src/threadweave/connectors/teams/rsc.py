@@ -42,6 +42,9 @@ _TEAM_GUID_RE = re.compile(
     r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
 )
 
+# Public alias for bot._remember_team's GUID guard.
+TEAM_GUID_RE = _TEAM_GUID_RE
+
 # RSC permissions the bot depends on for passive capture, by scope.
 EXPECTED_PERMISSIONS = {
     "channel": "ChannelMessage.Read.Group",
