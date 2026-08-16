@@ -306,6 +306,70 @@ def test_delta_pagination_follows_nextlink():
     assert len(calls) == 2
 
 
+def _delta_token_error():
+    import httpx
+
+    request = httpx.Request("GET", "https://g/delta")
+    response = httpx.Response(400, request=request)
+    return httpx.HTTPStatusError(
+        "Client error '400 Bad Request' for url 'https://g/delta' "
+        "(Parameter 'DeltaToken' not supported for this request.)",
+        request=request,
+        response=response,
+    )
+
+
+def test_delta_tolerates_zero_message_skiptoken_quirk():
+    """Live Graph quirk (2026-08-16): empty channels return a nextLink
+    with $skiptoken that Graph rejects with 400 'DeltaToken not
+    supported'. The client must return what it has without a deltaLink
+    and let the next poll re-prime, not raise and break the cycle."""
+    client = object.__new__(TeamsGraphClient)
+    pages = [
+        {"value": [], "@odata.nextLink": "https://g/delta?$skiptoken=xyz"},
+    ]
+    calls = []
+
+    async def fake_request_url(method, url):
+        calls.append(url)
+        if len(calls) == 1:
+            return pages.pop(0)
+        raise _delta_token_error()
+
+    client._request_url = fake_request_url
+
+    import asyncio
+
+    msgs, delta = asyncio.run(
+        client.get_channel_messages_delta("t", "c")
+    )
+    assert msgs == []
+    assert delta == ""
+    assert len(calls) == 2  # first page fetched, nextLink followed once
+
+
+def test_delta_raises_on_other_nextlink_errors():
+    """Only the DeltaToken quirk is tolerated; other failures propagate."""
+    client = object.__new__(TeamsGraphClient)
+
+    async def fake_request_url(method, url):
+        import httpx
+
+        request = httpx.Request("GET", url)
+        response = httpx.Response(500, request=request)
+        raise httpx.HTTPStatusError(
+            "Server error '500 Internal Server Error'", request=request,
+            response=response,
+        )
+
+    client._request_url = fake_request_url
+
+    import pytest
+
+    with pytest.raises(Exception):
+        asyncio.run(client.get_channel_messages_delta("t", "c"))
+
+
 def test_teams_watch_registered_as_daemon():
     assert "teams-watch" in DAEMONS
     assert DAEMONS["teams-watch"]["argv"][-2:] == ["teams", "watch"]

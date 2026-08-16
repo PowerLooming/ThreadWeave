@@ -40,6 +40,8 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from html.parser import HTMLParser
 
+import httpx
+
 from threadweave.connectors.sharepoint.watcher import GRAPH_API_BASE, GraphClient
 
 logger = logging.getLogger(__name__)
@@ -122,6 +124,14 @@ class TeamsGraphClient(GraphClient):
         Follows @odata.nextLink pages and returns (messages, deltaLink).
         The deltaLink is '' when Graph returned no token for this page
         (rare; treat as a transient state).
+
+        Graph quirk (live-verified 2026-08-16): for a channel with zero
+        message history, the first delta page is empty but carries a
+        @odata.nextLink with a $skiptoken. Following it fails with
+        400 "Parameter 'DeltaToken' not supported". The channel's delta
+        completes normally once the channel has at least one message, so
+        the quirk is tolerated: we return what we have with no deltaLink
+        and let the next poll re-prime.
         """
         url = delta_url or (
             f"{GRAPH_API_BASE}/teams/{team_id}/channels/{channel_id}/messages/delta"
@@ -129,7 +139,20 @@ class TeamsGraphClient(GraphClient):
         messages: list[dict] = []
         delta_link = ""
         while url:
-            data = await self._request_url("GET", url)
+            try:
+                data = await self._request_url("GET", url)
+            except httpx.HTTPStatusError as exc:
+                if (
+                    exc.response.status_code == 400
+                    and "DeltaToken" in str(exc)
+                ):
+                    logger.info(
+                        "delta nextLink unsupported for %s/%s (zero-message "
+                        "channel sync not ready); re-priming next cycle",
+                        team_id, channel_id,
+                    )
+                    break
+                raise
             messages.extend(data.get("value", []))
             url = data.get("@odata.nextLink", "")
             if data.get("@odata.deltaLink"):
