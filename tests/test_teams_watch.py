@@ -310,10 +310,15 @@ def _delta_token_error():
     import httpx
 
     request = httpx.Request("GET", "https://g/delta")
-    response = httpx.Response(400, request=request)
+    response = httpx.Response(
+        400, request=request,
+        json={"error": {
+            "code": "BadRequest",
+            "message": "Parameter 'DeltaToken' not supported for this request.",
+        }},
+    )
     return httpx.HTTPStatusError(
-        "Client error '400 Bad Request' for url 'https://g/delta' "
-        "(Parameter 'DeltaToken' not supported for this request.)",
+        "Client error '400 Bad Request' for url 'https://g/delta'",
         request=request,
         response=response,
     )

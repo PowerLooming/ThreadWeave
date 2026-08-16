@@ -46,6 +46,16 @@ from threadweave.connectors.sharepoint.watcher import GRAPH_API_BASE, GraphClien
 
 logger = logging.getLogger(__name__)
 
+
+def _is_deltatoken_quirk(response: httpx.Response) -> bool:
+    """True for Graph's zero-message delta quirk (400 with
+    "Parameter 'DeltaToken' not supported" in the error body)."""
+    try:
+        body = response.json()
+    except Exception:
+        return False
+    return "DeltaToken" in str(body.get("error", {}).get("message", ""))
+
 DEFAULT_INTERVAL = 300               # seconds between polls
 DEFAULT_STATE_FILE = "~/.threadweave/teams_delta.json"
 DEFAULT_MAX_MESSAGES = 100           # per-channel cap in backfill mode
@@ -142,9 +152,8 @@ class TeamsGraphClient(GraphClient):
             try:
                 data = await self._request_url("GET", url)
             except httpx.HTTPStatusError as exc:
-                if (
-                    exc.response.status_code == 400
-                    and "DeltaToken" in str(exc)
+                if exc.response.status_code == 400 and _is_deltatoken_quirk(
+                    exc.response
                 ):
                     logger.info(
                         "delta nextLink unsupported for %s/%s (zero-message "
