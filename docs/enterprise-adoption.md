@@ -104,6 +104,9 @@ bot is dark, and 1:1 chats are never covered by any bot mechanism.
       ref; channel refs never receive channel posts; email fallback
       delivered when TeamsActivity.Send is absent; delete command
       verified end to end. 202/204 empty-body Graph responses handled.
+      Org-wide RSC overwrote personal refs on every channel message,
+      silently disabling the DM leg; fixed by keeping personal refs
+      over channel updates (2eead78), re-verified with a live DM.
       Activity-feed leg pending TeamsActivity.Send grant.)
 - [x] Document the RSC consent step (Teams admin center, Manage apps,
       Permissions, Review permissions and consent) in the connector
