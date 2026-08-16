@@ -221,6 +221,8 @@ Required app permissions on the app registration (tenant admin consent,
 once):
 
 - `ChannelMessage.Read.All` — read channel messages in all teams
+- `Channel.ReadBasic.All` — enumerate a team's channels (list_channels;
+  Team.ReadBasic.All alone covers team-level reads, not the channel list)
 - `Team.ReadBasic.All` — enumerate teams and channels
 - `TeamsActivity.Send` — activity-feed capture notifications to authors
   who never talked to the bot (also needs `User.Read.All` for email to

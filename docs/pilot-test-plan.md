@@ -22,7 +22,8 @@ with real portal state:
 | Batch | Permission | Purpose | When |
 |---|---|---|---|
 | 1 | `ChannelMessage.Read.All` | teams-watch channel reads | Start of Phase 2 |
-| 1 | `Team.ReadBasic.All` | teams-watch team/channel enumeration | Start of Phase 2 |
+| 1 | `Channel.ReadBasic.All` | teams-watch channel enumeration (list_channels 403s without it) | Start of Phase 2 |
+| 1 | `Team.ReadBasic.All` | teams-watch team enumeration | Start of Phase 2 |
 | 1 | `User.Read.All` | email → AAD id and AAD id → email resolution | Start of Phase 2 |
 | 1 | `Mail.Send` | email fallback leg | Phase 3, test 3.3 |
 | 1 | `TeamsAppInstallation.ReadForTeam.All` | RSC probe verification call | Phase 1, test 1.3 |
