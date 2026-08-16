@@ -63,6 +63,28 @@ class TestDetectionEngine:
         result = detect(text)
         assert result.content_type == ContentType.DECISION
 
+    def test_decision_short_strong_cue_saves(self):
+        """A single explicit first-person decision cue must clear the
+        save threshold on its own (0.25 short-decision gap, live
+        2026-08-16)."""
+        text = "we decided to standardize on PostgreSQL for all new services"
+        result = detect(text)
+        assert result.content_type == ContentType.DECISION
+        assert result.confidence >= 0.40
+
+    def test_decision_strong_cue_bypasses_length_gate(self):
+        """Explicit decisions under 50 chars are decisions, not chat."""
+        text = "We decided to ship the Q3 pricing model next week"
+        assert len(text) < 50
+        result = detect(text)
+        assert result.content_type == ContentType.DECISION
+        assert result.confidence >= 0.40
+
+    def test_decision_bare_strong_cue_still_chat(self):
+        """'we decided to' with nothing after it is too short to save."""
+        result = detect("we decided to")
+        assert result.content_type == ContentType.CHAT
+
     # ── QUESTION detection ────────────────────────────────
 
     def test_question(self):

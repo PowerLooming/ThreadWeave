@@ -55,6 +55,16 @@ DECISION_PATTERNS = [
     r"(?:completed|finished|done)[,:;]?\s+(?:the\s+)?",
 ]
 
+# Explicit first-person decision statements. A single match is enough
+# on its own (0.40 = save threshold), because "we decided to X" is a
+# decision statement regardless of length or supporting context.
+# Closes the 0.25 short-decision gap (live 2026-08-16).
+STRONG_DECISION_PATTERNS = [
+    r"\bwe\s+(?:decided|decide|agreed|agree|chose|chosen|settled)\s+to\b",
+    r"\bwe\s+(?:are|will)['\u2019]?\s+(?:going\s+to\s+)?"
+    r"(?:go\s+with|use|switch\s+to|adopt|standardize\s+on|ship)\b",
+]
+
 ANSWER_PATTERNS = [
     r"(?:the\s+reason\s+(?:is|was|for)|because|this\s+is\s+because)",
     r"(?:you\s+(?:need\s+to|should|can|must|have\s+to))",
@@ -205,7 +215,10 @@ def detect(text: str, min_length: int = 50) -> DetectionResult:
     # A short text containing a credit card number is still PII.
     has_pii = any(re.search(p, text) for p in PII_PATTERNS)
 
-    if len(text) < min_length:
+    strong_decision = any(
+        re.search(p, text_lower) for p in STRONG_DECISION_PATTERNS
+    )
+    if len(text) < min_length and not (len(text) >= 20 and strong_decision):
         return DetectionResult(
             content_type=ContentType.CHAT,
             confidence=0.9,
@@ -220,6 +233,12 @@ def detect(text: str, min_length: int = 50) -> DetectionResult:
         if matches:
             score["decision"] += len(matches) * 0.25
             signals.append(f"decision: {matches[0][:40]}")
+
+    for pattern in STRONG_DECISION_PATTERNS:
+        matches = re.findall(pattern, text_lower)
+        if matches:
+            score["decision"] += len(matches) * 0.40
+            signals.append(f"strong_decision: {matches[0][:40]}")
 
     for pattern in ANSWER_PATTERNS:
         matches = re.findall(pattern, text_lower)
