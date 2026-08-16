@@ -59,7 +59,10 @@ def _is_deltatoken_quirk(response: httpx.Response) -> bool:
 DEFAULT_INTERVAL = 300               # seconds between polls
 DEFAULT_STATE_FILE = "~/.threadweave/teams_delta.json"
 DEFAULT_MAX_MESSAGES = 100           # per-channel cap in backfill mode
-MIN_TEXT_LENGTH = 50                 # below this no knowledge signal
+MIN_TEXT_LENGTH = 15                 # noise floor only ("+1", "ok");
+                                     # the central detector owns the real
+                                     # 50-char policy incl. the strong-cue
+                                     # bypass for short decisions
 MAX_TITLE_LENGTH = 80                # snippet used as entry title
 
 
@@ -345,6 +348,10 @@ class TeamsWatchDaemon:
         author_id = author.get("id", "") or author.get("email", "")
 
         text = html_to_text((msg.get("body") or {}).get("content", ""))
+        # Noise floor only ("+1", "ok"): the central detector owns the
+        # real 50-char policy incl. the strong-cue bypass for short
+        # decisions. A 50-char gate here dropped 48-char decisions
+        # before detection (live 2026-08-16).
         if len(text) < MIN_TEXT_LENGTH:
             result["skipped"] += 1
             self.stats["skipped"] += 1

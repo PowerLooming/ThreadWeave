@@ -186,6 +186,34 @@ async def test_skip_rules(tmp_path, monkeypatch, opted_out_author):
 
 
 @pytest.mark.asyncio
+async def test_short_decision_not_dropped_by_watcher(
+    tmp_path, monkeypatch
+):
+    """A 48-char explicit decision passes the watcher (only the noise
+    floor filters) and reaches the sink; the central detector decides
+    (live 2026-08-16: the 50-char watcher gate dropped these)."""
+    monkeypatch.setattr("threadweave.optout.OptOutStore", lambda: StubOptOut())
+    graph = FakeGraph()
+    graph.history = [
+        make_msg(
+            "short_decision",
+            text="We decided to review the pricing pages quarterly",
+            author_id="aad-user-1",
+        ),
+    ]
+    sink = FakeSink()
+    daemon = TeamsWatchDaemon(
+        graph, state_file=str(tmp_path / "state.json"), ingest=sink,
+        backfill=True,
+    )
+
+    res = await daemon.run_once()
+    assert res["skipped"] == 0
+    assert len(sink.payloads) == 1
+    assert sink.payloads[0]["metadata"]["source_file"] == "short_decision"
+
+
+@pytest.mark.asyncio
 async def test_metadata_mapping_and_html_strip(tmp_path, monkeypatch):
     monkeypatch.setattr("threadweave.optout.OptOutStore", lambda: StubOptOut())
     graph = FakeGraph()
