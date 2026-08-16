@@ -293,8 +293,9 @@ class ThreadWeaveTeamsBot(ActivityHandler if BOTBUILDER_AVAILABLE else object):
             "activityType": "systemDefault",
             "previewText": {
                 "content": (
-                    f"ThreadWeave saved your {notif.get('source', 'content')} "
-                    f"\"{title}\" (wing: {notif.get('wing', '')}). "
+                    f"ThreadWeave captured your Teams message "
+                    f"\"{title}\" (wing: {notif.get('wing', '')}, "
+                    f"room: {notif.get('room', '')}). "
                     f"Message the ThreadWeave bot: 'delete {title}' removes "
                     f"it, 'opt out' stops future captures."
                 )
@@ -383,16 +384,18 @@ class ThreadWeaveTeamsBot(ActivityHandler if BOTBUILDER_AVAILABLE else object):
         title = escape(notif.get("title") or "content")
         source = escape(notif.get("source") or "content")
         wing = escape(notif.get("wing") or "")
+        room = escape(notif.get("room") or "")
         body_html = (
-            f"<p>ThreadWeave saved your {source} &quot;{title}&quot; to "
-            f"the palace (wing: {wing}).</p>"
+            f"<p>ThreadWeave captured your Teams message "
+            f"&quot;{title}&quot; to the palace "
+            f"(wing: {wing}, room: {room}).</p>"
             f"<p>This is an automated capture notice. In Teams, message "
             f"the ThreadWeave bot: <b>delete {title}</b> removes the "
             f"entry, <b>opt out</b> stops future captures.</p>"
         )
         payload = {
             "message": {
-                "subject": f"ThreadWeave captured your {source}",
+                "subject": f"ThreadWeave captured your Teams message",
                 "body": {"contentType": "html", "content": body_html},
                 "toRecipients": [
                     {"emailAddress": {"address": author_email}}
@@ -632,11 +635,11 @@ class ThreadWeaveTeamsBot(ActivityHandler if BOTBUILDER_AVAILABLE else object):
 
             async def send_capture(turn_context) -> None:
                 await turn_context.send_activity(
-                    f"**Captured to the palace** — your "
-                    f"{notif.get('source', 'content')} "
+                    f"**Captured to the palace.** Your Teams message "
                     f"\"{notif.get('title', '')}\" was added "
-                    f"(wing: {notif.get('wing', '')}). "
-                    f"Say **delete {notif.get('title', '')}** to remove it, "
+                    f"(wing: {notif.get('wing', '')}, "
+                    f"room: {notif.get('room', '')}). "
+                    f"Reply **delete {notif.get('title', '')}** to remove it, "
                     f"or **opt out** to stop future captures."
                 )
 
