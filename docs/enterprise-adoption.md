@@ -86,31 +86,41 @@ only sees conversations it is installed into (@mention, DM, or
 RSC-consented teams/chats). Any team or chat where nobody installs the
 bot is dark, and 1:1 chats are never covered by any bot mechanism.
 
-- [~] Implement a `teams-watch` daemon: Graph app-only polling of
+- [x] Implement a `teams-watch` daemon: Graph app-only polling of
       channel messages via delta queries (`ChannelMessage.Read.All` +
-      `Team.ReadBasic.All`), same pull-only pattern as email-watch and
-      sharepoint-watch. No webhooks, no per-team installs.
-      (Built 2026-08-15: `threadweave teams watch`, prime/backfill
-      modes, delta-token state file, daemon registration, 9 tests.
-      Pending live verification against the pilot tenant.)
-- [~] Camera sign for passively captured authors: notification must
+      `Channel.ReadBasic.All` + `Team.ReadBasic.All`), same pull-only
+      pattern as email-watch and sharepoint-watch. No webhooks, no
+      per-team installs.
+      (Live-verified 2026-08-16 in the pilot tenant: captured decisions
+      from Sales West and Retail General, correct wing/room mapping,
+      delta state survives restarts. Graph quirks handled: channel
+      enumeration needs Channel.ReadBasic.All; zero-message channels
+      return a nextLink that Graph rejects with 400 "DeltaToken not
+      supported", tolerated and re-primed. 12 tests.)
+- [x] Camera sign for passively captured authors: notification must
       not depend on the author having talked to the bot (activity-feed
       notification via Graph `TeamsActivity.Send`, email fallback).
-      (Built 2026-08-15: personal DMs only for personal conversation
-      refs, Graph activity-feed fallback for passive authors, email
-      fallback via Graph sendMail for tenants that refuse
-      TeamsActivity.Send, retry-then-skip with stats. Pending live
-      verification.)
-- [~] Document the RSC consent step (Teams admin center, Manage apps,
+      (Live-verified 2026-08-16: personal DM for authors with a 1:1
+      ref; channel refs never receive channel posts; email fallback
+      delivered when TeamsActivity.Send is absent; delete command
+      verified end to end. 202/204 empty-body Graph responses handled.
+      Activity-feed leg pending TeamsActivity.Send grant.)
+- [x] Document the RSC consent step (Teams admin center, Manage apps,
       Permissions, Review permissions and consent) in the connector
       docs; add a startup probe that detects consent absence.
-      (Built 2026-08-15: consent section in m365-connectors.md with
-      click path and PowerShell alternative; bot probe via
-      /teams/{id}/permissionGrants at startup and on new teams,
-      rsc_status in /health, 11 tests. Pending live verification.)
-- [ ] Acceptance: a channel message in a team where the bot was never
+      (Live-verified 2026-08-16: probe tracks every observed team,
+      fires on first activity without a restart, verifies
+      ChannelMessage.Read.Group, exposes rsc_status in /health.
+      Consent proved org-wide: granted for teams where the app was
+      never installed. 17 tests.)
+- [x] Acceptance: a channel message in a team where the bot was never
       installed is captured within one poll interval, and its author
       receives a capture notification.
+      (Verified 2026-08-16: "We decided to switch the retail ordering
+      to supplier direct" posted in Retail General, captured in one
+      30s poll cycle with wing retail / room general, searchable,
+      DM notice delivered. Bot layer was in explicit mode, so the
+      capture was daemon-only.)
 
 ## Pilot conditions (running now)
 
