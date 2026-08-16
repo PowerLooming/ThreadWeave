@@ -96,6 +96,17 @@ class ConversationStore:
             except Exception:
                 pass  # best-effort reference capture
         with self._lock:
+            existing = self._data.get(person_id)
+            if existing:
+                existing_type = existing.get("conversation_type", "")
+                new_type = ref.get("conversation_type", "")
+                if existing_type == "personal" and new_type == "channel":
+                    # Org-wide RSC delivers every channel message, so
+                    # channel activities would constantly overwrite a
+                    # person's 1:1 ref and silently disable the DM
+                    # camera-sign leg (live 2026-08-16). A personal
+                    # ref is strictly better: keep it.
+                    return
             self._data[person_id] = ref
             self._save()
 

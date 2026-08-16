@@ -82,6 +82,61 @@ def test_conversation_store_roundtrip(tmp_path):
     assert s2.get("unknown") is None
 
 
+def test_channel_activity_never_overwrites_personal_ref(tmp_path):
+    """Org-wide RSC delivers every channel message: a channel activity
+    must not clobber a person's 1:1 ref or the DM camera-sign leg dies
+    silently (live 2026-08-16)."""
+    from types import SimpleNamespace
+
+    def activity(conv_type):
+        return SimpleNamespace(
+            id=f"act-{conv_type}",
+            conversation=SimpleNamespace(conversation_type=conv_type),
+            from_property=SimpleNamespace(id="29:user", aad_object_id=""),
+            recipient=SimpleNamespace(id="28:bot", name="ThreadWeaveBot"),
+        )
+
+    s = ConversationStore(path=str(tmp_path / "c.json"))
+    s.remember(
+        "aad-123", "personal-conv", "https://smba.example.com",
+        activity=activity("personal"),
+    )
+    s.remember(
+        "aad-123", "channel-conv", "https://smba.example.com",
+        activity=activity("channel"),
+    )
+    ref = s.get("aad-123")
+    assert ref["conversation_id"] == "personal-conv"
+    assert ref["conversation_type"] == "personal"
+
+
+def test_personal_activity_still_upgrades_channel_ref(tmp_path):
+    """The reverse direction IS an upgrade: a DM after channel traffic
+    must replace the channel ref."""
+    from types import SimpleNamespace
+
+    def activity(conv_type):
+        return SimpleNamespace(
+            id=f"act-{conv_type}",
+            conversation=SimpleNamespace(conversation_type=conv_type),
+            from_property=SimpleNamespace(id="29:user", aad_object_id=""),
+            recipient=SimpleNamespace(id="28:bot", name="ThreadWeaveBot"),
+        )
+
+    s = ConversationStore(path=str(tmp_path / "c.json"))
+    s.remember(
+        "aad-123", "channel-conv", "https://smba.example.com",
+        activity=activity("channel"),
+    )
+    s.remember(
+        "aad-123", "personal-conv", "https://smba.example.com",
+        activity=activity("personal"),
+    )
+    ref = s.get("aad-123")
+    assert ref["conversation_id"] == "personal-conv"
+    assert ref["conversation_type"] == "personal"
+
+
 def test_skipped_not_retried_and_counted(tmp_path):
     s = NotificationStore(db_path=str(tmp_path / "n.sqlite3"))
     s.enqueue("n1", "e1", "a@x.com", "T", "w", "r", "email", "now")
