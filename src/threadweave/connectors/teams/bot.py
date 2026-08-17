@@ -734,15 +734,24 @@ class ThreadWeaveTeamsBot(ActivityHandler if BOTBUILDER_AVAILABLE else object):
     ):
         """Send welcome message when bot is added to a team."""
         self._remember_team(turn_context.activity)
+        passive = self.mode in ("passive", "both")
+        capture_line = (
+            "I capture knowledge from this team automatically and send "
+            "the author a private notice each time (opt out anytime)."
+            if passive
+            else "I react when you @mention me, and the capture daemon "
+            "quietly saves knowledge with a private notice to the "
+            "author (opt out anytime)."
+        )
         for member in members_added:
             if member.id != turn_context.activity.recipient.id:
                 welcome = (
                     "**ThreadWeave is here!** I help capture organizational "
-                    "knowledge from your conversations. I listen passively "
-                    "and prompt when something looks worth saving. "
-                    "Nothing leaves this team without your approval.\n\n"
+                    "knowledge from your conversations. "
+                    f"{capture_line}\n\n"
                     "- Reply to a message: **@ThreadWeave save this**\n"
-                    "- Search: **@ThreadWeave search <query>**\n\n"
+                    "- Search: **@ThreadWeave search <query>**\n"
+                    "- Delete: **@ThreadWeave delete <topic>**\n\n"
                     "_On-premises. No data leaves your Microsoft 365 tenant._"
                 )
                 await turn_context.send_activity(welcome)
@@ -820,12 +829,15 @@ class ThreadWeaveTeamsBot(ActivityHandler if BOTBUILDER_AVAILABLE else object):
     async def _handle_privacy_command(
         self, turn_context: TurnContext, activity: Activity, text: str
     ) -> bool:
-        """Handle opt-out/opt-in/delete/status commands. Returns True if handled.
+        """Handle opt-out/opt-in/delete/status/search commands.
+
+        Returns True if handled.
 
         Commands (work via @mention or in a 1:1 DM):
           opt out              — stop harvesting my content
           opt in               — resume harvesting
           delete <topic>       — delete my entries matching <topic>
+          search <query>       — search the palace for matching entries
           status               — show whether I'm opted out + entry count
         """
         lower = text.lower()
@@ -873,11 +885,58 @@ class ThreadWeaveTeamsBot(ActivityHandler if BOTBUILDER_AVAILABLE else object):
             status = "opted OUT" if person.lower() in opted else "opted in"
             await turn_context.send_activity(
                 f"Privacy status: {status}. "
-                "Commands: 'opt out', 'opt in', 'delete <topic>', 'status'."
+                "Commands: 'opt out', 'opt in', 'delete <topic>', "
+                "'search <query>', 'status'."
             )
             return True
 
+        if lower.startswith("search"):
+            query = text[len("search"):].strip()
+            if not query:
+                await turn_context.send_activity(
+                    "What should I search for? Try 'search pricing model'."
+                )
+                return True
+            await self._handle_search_command(turn_context, query)
+            return True
+
         return False
+
+    async def _handle_search_command(
+        self, turn_context: TurnContext, query: str
+    ) -> None:
+        """Search the palace and reply with matching entries.
+
+        The API applies requester clearance, so confidential or
+        restricted entries never leak into a chat reply. Results are
+        capped at 8 for readability.
+        """
+        query = (query or "").strip()
+        if not query:
+            await turn_context.send_activity(
+                "What should I search for? Try 'search pricing model'."
+            )
+            return
+        results = await self._api_search(query)
+        if not results:
+            await turn_context.send_activity(
+                f"No palace entries matched '{query}'."
+            )
+            return
+
+        lines = [f"**{len(results[:8])} match(es) for '{query}':**"]
+        for i, r in enumerate(results[:8], 1):
+            title = (r.get("title") or "").strip() or "Untitled"
+            wing = r.get("wing") or ""
+            room = r.get("room") or ""
+            preview = (r.get("content_preview") or "").replace("\n", " ")[:90]
+            date = (r.get("created_at") or "")[:10]
+            lines.append(
+                f"{i}. **{title}** ({wing}/{room}, {date}) — {preview}"
+            )
+        if len(results) > 8:
+            lines.append(f"_(+{len(results) - 8} more — refine the query)_")
+        await turn_context.send_activity("\n".join(lines))
 
     async def _handle_delete_command(
         self, turn_context: TurnContext, person: str, topic: str
