@@ -226,11 +226,22 @@ once):
 - `Team.ReadBasic.All` — enumerate teams and channels
 - `TeamsActivity.Send` — activity-feed capture notifications to authors
   who never talked to the bot (also needs `User.Read.All` for email to
-  AAD id resolution)
+  AAD id resolution). **Must be granted on the BOT's own app
+  registration** (the AAD app backing the Teams app manifest), not on
+  the Graph daemon app: Graph only allows custom text notifications
+  from the app the recipient has installed, and any other sender
+  identity gets 403 "not authorized to generate custom text
+  notifications" (verified live 2026-08-17). The activity leg also
+  requires a Teams deep link (`teams.microsoft.com/l/...`) as the
+  topic webUrl, which the queue carries from the capture's
+  `message_url`.
 - `Mail.Send` — email fallback for capture notifications in tenants
   that refuse `TeamsActivity.Send`; needs `THREADWEAVE_NOTIFY_SENDER`
   set to a mailbox the app may send from. `User.Read.All` also covers
-  AAD id to email resolution for this path.
+  AAD id to email resolution for this path. The email leg only sends
+  to addresses that resolve to tenant users, so fake or external
+  authors never trigger NDRs or burn the tenant's external-recipient
+  quota.
 
 ```bash
 uv run python -m threadweave.cli teams watch \
