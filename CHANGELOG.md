@@ -6,6 +6,8 @@ uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.4.4] — 2026-08-17
+
 ### Added
 
 - **Org tracker** (`threadweave org sync`, `org-sync` daemon): polls teams and members from Graph and reconciles temporal person→team edges in the org model. Members who leave get their edges closed, so "who is in which team" stays current and historical. Feeds the dashboard Graph page and `/api/v1/org/people/{id}/team`. Requires `TeamMember.Read.All` (application) on the Graph app registration.
