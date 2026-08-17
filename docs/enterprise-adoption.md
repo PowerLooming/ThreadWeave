@@ -122,7 +122,12 @@ bot is dark, and 1:1 chats are never covered by any bot mechanism.
       fires on first activity without a restart, verifies
       ChannelMessage.Read.Group, exposes rsc_status in /health.
       Consent proved org-wide: granted for teams where the app was
-      never installed. 17 tests.)
+      never installed. 17 tests. Known state: U.S. Sales lost its
+      grant during the 2026-08-17 zombie-app cleanup (the grant lived
+      on the deleted duplicate app); no functional impact in explicit
+      mode, the daemon captures that team via Graph app permissions,
+      the probe flags the gap, and the install-time consent prompt
+      will restore it on the next reinstall.)
 - [x] Acceptance: a channel message in a team where the bot was never
       installed is captured within one poll interval, and its author
       receives a capture notification.
