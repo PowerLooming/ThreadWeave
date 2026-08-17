@@ -547,6 +547,7 @@ async def ingest_content(req: IngestRequest, request: Request):
                 room=entry["room"],
                 source=req.source,
                 created_at=entry["created_at"],
+                message_url=req.metadata.get("message_url", ""),
             )
     except Exception as exc:
         logger.warning("Notification enqueue failed: %s", exc)

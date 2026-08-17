@@ -284,12 +284,46 @@ class ThreadWeaveTeamsBot(ActivityHandler if BOTBUILDER_AVAILABLE else object):
                 notif.get("id"), notif.get("author_id"),
             )
             return False
-        graph = self._get_graph_client()
+        # Sender identity matters: Graph only allows custom text
+        # notifications from the app the recipient has installed, which
+        # is the Teams app backed by the bot's own registration
+        # (MICROSOFT_APP_ID). Calling as the Graph daemon app gets
+        # 403 "not authorized to generate custom text notifications"
+        # (live 2026-08-17). Use the bot identity when available.
+        bot_app_id = os.environ.get("MICROSOFT_APP_ID", "")
+        bot_secret = os.environ.get("MICROSOFT_APP_PASSWORD", "")
+        graph = None
+        if bot_app_id and bot_secret:
+            try:
+                from threadweave.connectors.sharepoint.watcher import (
+                    GraphClient,
+                )
+
+                graph = GraphClient(
+                    client_id=bot_app_id, client_secret=bot_secret
+                )
+            except Exception as exc:
+                logger.warning(
+                    "Bot-identity Graph client unavailable (%s); "
+                    "falling back to daemon identity", exc,
+                )
+        if graph is None:
+            graph = self._get_graph_client()
         if graph is None:
             return False
         title = notif.get("title") or "content"
+        # Graph requires a Teams deep link (teams.microsoft.com/l/...)
+        # when the topic source is text. Teams captures carry the real
+        # message link; other sources get a valid generic deep link.
+        web_url = notif.get("message_url") or (
+            "https://teams.microsoft.com/l/chat/0/0"
+        )
         payload = {
-            "topic": {"source": "text", "value": "ThreadWeave capture"},
+            "topic": {
+                "source": "text",
+                "value": "ThreadWeave capture",
+                "webUrl": web_url,
+            },
             "activityType": "systemDefault",
             "previewText": {
                 "content": (

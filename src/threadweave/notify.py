@@ -39,9 +39,16 @@ CREATE TABLE IF NOT EXISTS notifications (
     room TEXT DEFAULT '',
     source TEXT DEFAULT '',
     created_at TEXT,
+    message_url TEXT DEFAULT '',
     delivered INTEGER DEFAULT 0
 )
 """
+
+_MIGRATIONS = [
+    # message_url (deep link for the activity-feed notification topic;
+    # Graph requires a webUrl when topic source is text, live 2026-08-17)
+    "ALTER TABLE notifications ADD COLUMN message_url TEXT DEFAULT ''",
+]
 
 
 class NotificationStore:
@@ -63,6 +70,14 @@ class NotificationStore:
             conn.row_factory = sqlite3.Row
             conn.execute("PRAGMA journal_mode=WAL")
             conn.execute(_SCHEMA)
+            existing = {
+                r[1] for r in conn.execute("PRAGMA table_info(notifications)")
+            }
+            for stmt in _MIGRATIONS:
+                # "ALTER TABLE notifications ADD COLUMN <name> ..."
+                column = stmt.split()[5]
+                if column not in existing:
+                    conn.execute(stmt)
             conn.commit()
             self._db = conn
         except Exception as exc:
@@ -82,6 +97,7 @@ class NotificationStore:
         room: str = "",
         source: str = "",
         created_at: str = "",
+        message_url: str = "",
     ) -> bool:
         """Queue a notification. Returns False if already queued."""
         if self._db is None:
@@ -91,10 +107,10 @@ class NotificationStore:
                 cur = self._db.execute(
                     "INSERT OR IGNORE INTO notifications "
                     "(id, entry_id, author_id, title, wing, room, source, "
-                    " created_at, delivered) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0)",
+                    " created_at, message_url, delivered) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0)",
                     (notification_id, entry_id, author_id, title, wing,
-                     room, source, created_at),
+                     room, source, created_at, message_url),
                 )
                 self._db.commit()
             return cur.rowcount > 0
