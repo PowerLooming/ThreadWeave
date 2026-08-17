@@ -262,6 +262,21 @@ def cmd_teams_watch(args):
     asyncio.run(daemon.run())
 
 
+def cmd_org_sync(args):
+    """Continuously sync teams and members into the org model."""
+    import asyncio
+    from threadweave.orgsync import OrgSyncDaemon
+    from threadweave.connectors.sharepoint.watcher import GraphClient
+
+    graph = GraphClient()
+    daemon = OrgSyncDaemon(
+        graph=graph,
+        interval=args.interval,
+        api_base_url=args.api_url,
+    )
+    asyncio.run(daemon.run())
+
+
 # ── Daemon Management (packaging) ──────────────────────────────────
 
 def cmd_daemon_run(args):
@@ -629,7 +644,7 @@ def cmd_gws_onboard(args):
           f"{len(brief['predecessor_knowledge']) + len(brief['team_knowledge'])}")
 
 
-def main():
+def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="ThreadWeave — Organizational Memory System",
     )
@@ -833,6 +848,20 @@ def main():
         help="ThreadWeave API server URL (default: THREADWEAVE_API_URL "
              "or http://localhost:8000)")
 
+    org_sub = sub.add_parser(
+        "org", help="Org model: who is in which team (org tracker)")
+    org_cmds = org_sub.add_subparsers(dest="org_command")
+    p_org_sync = org_cmds.add_parser(
+        "sync", help="Continuously sync teams and members from Graph "
+                     "into the org model")
+    p_org_sync.add_argument("--interval", type=int, default=3600,
+                            help="Seconds between syncs (default 3600)")
+    p_org_sync.add_argument(
+        "--api-url",
+        default=os.environ.get("THREADWEAVE_API_URL", "http://localhost:8000"),
+        help="ThreadWeave API server URL (default: THREADWEAVE_API_URL "
+             "or http://localhost:8000)")
+
     p_d_run = daemon_sub.add_parser(
         "run", help="Run a daemon with its env file (used by services)")
     p_d_run.add_argument("name", choices=list(DAEMONS))
@@ -858,6 +887,11 @@ def main():
     p_d_config.add_argument("--show", action="store_true",
                             help="Show current values (secrets masked)")
 
+    return parser
+
+
+def main() -> None:
+    parser = build_parser()
     args = parser.parse_args()
 
     if args.command == "detect":
@@ -901,6 +935,11 @@ def main():
             cmd_graph_daemon(args)
         else:
             p_graph.print_help()
+    elif args.command == "org":
+        if args.org_command == "sync":
+            cmd_org_sync(args)
+        else:
+            org_sub.print_help()
     elif args.command == "gws":
         if args.gws_command == "check":
             cmd_gws_check(args)

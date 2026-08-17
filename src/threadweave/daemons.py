@@ -87,6 +87,14 @@ DAEMONS: dict[str, dict] = {
             "THREADWEAVE_API_URL": "http://localhost:8000",
         },
     },
+    "org-sync": {
+        "description": "Org tracker: keep team membership current (who is where)",
+        "argv": [sys.executable, "-m", "threadweave.cli", "org", "sync"],
+        "env_defaults": {
+            "THREADWEAVE_DAEMON_INTERVAL": "3600",
+            "THREADWEAVE_API_URL": "http://localhost:8000",
+        },
+    },
 }
 
 WINDOWS_TASK_PREFIX = "ThreadWeave-"
@@ -157,6 +165,12 @@ def build_argv(name: str) -> list[str]:
         api_url = env.get("THREADWEAVE_API_URL", "")
         if api_url:
             argv += ["--api-url", api_url]
+    elif name == "org-sync":
+        argv += ["--interval",
+                 env.get("THREADWEAVE_DAEMON_INTERVAL", "3600")]
+        api_url = env.get("THREADWEAVE_API_URL", "")
+        if api_url:
+            argv += ["--api-url", api_url]
     return argv
 
 
@@ -213,12 +227,20 @@ def run_daemon(name: str) -> int:
         from threadweave.cli import cmd_teams_watch
         args = SimpleNamespace(
             interval=int(env.get("THREADWEAVE_DAEMON_INTERVAL", "300")),
-            api_url=env.get("THREADWEAVE_API_URL", "http://localhost:8000"),
             backfill=env.get("THREADWEAVE_TEAMS_BACKFILL", "0") == "1",
-            max_messages=int(env.get("THREADWEAVE_TEAMS_MAX_MESSAGES", "100")),
+            max_messages=int(
+                env.get("THREADWEAVE_TEAMS_MAX_MESSAGES", "100")),
             team=env.get("THREADWEAVE_TEAMS_FILTER", ""),
+            api_url=env.get("THREADWEAVE_API_URL", "http://localhost:8000"),
         )
         cmd_teams_watch(args)
+    elif name == "org-sync":
+        from threadweave.cli import cmd_org_sync
+        args = SimpleNamespace(
+            interval=int(env.get("THREADWEAVE_DAEMON_INTERVAL", "3600")),
+            api_url=env.get("THREADWEAVE_API_URL", "http://localhost:8000"),
+        )
+        cmd_org_sync(args)
     return 0
 
 

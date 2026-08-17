@@ -242,6 +242,20 @@ once):
   to addresses that resolve to tenant users, so fake or external
   authors never trigger NDRs or burn the tenant's external-recipient
   quota.
+- `TeamMember.Read.All` — org tracker (`org-sync` daemon): read each
+  team's member list so the org model knows who is in which team.
+  The org model records temporal person→team edges and closes them
+  when people leave; see the Graph page on the dashboard.
+
+### Org tracker (org-sync)
+
+`threadweave org sync` polls the tenant's teams (`Team.ReadBasic.All`)
+and their members (`TeamMember.Read.All`), then posts each team's
+membership snapshot to `POST /api/v1/org/sync` for temporal
+reconciliation in the org model. Idempotent, pull-only, no webhooks.
+Registered as the `org-sync` daemon (default interval 3600 s). The
+resulting person→team edges feed the dashboard's Graph page and the
+`/api/v1/org/people/{id}/team` resolution endpoint.
 
 ```bash
 uv run python -m threadweave.cli teams watch \

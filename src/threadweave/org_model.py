@@ -195,6 +195,60 @@ class OrgModel:
 
         return rel
 
+    def sync_team_membership(
+        self,
+        team_id: str,
+        member_ids: list[str],
+        valid_from: str,
+    ) -> dict:
+        """Reconcile a team's membership from a directory snapshot.
+
+        Adds ``member_of`` edges (with person entities) for members
+        not yet tracked, and closes edges (valid_to) for members who
+        are no longer in the team. Idempotent: safe to run every sync
+        cycle. Returns {'added', 'closed', 'members'}.
+
+        This is what makes the org tracker a tracker: without the
+        closure step, people who leave a team would be shown as
+        members forever (the temporal model only tells the truth when
+        edges are closed on departure).
+        """
+        current = set(member_ids)
+        active = [
+            rel for rel in self._relationships
+            if rel.relation == "member_of" and rel.target == team_id
+            and not rel.valid_to
+        ]
+        active_sources = {rel.source for rel in active}
+
+        added = 0
+        for person in sorted(current - active_sources):
+            self.add_entity(person, person, "person")
+            self.add_relationship(
+                person, "member_of", team_id, valid_from=valid_from
+            )
+            added += 1
+
+        closed = 0
+        for rel in active:
+            if rel.source in current:
+                continue
+            rel.valid_to = valid_from
+            if self._kg:
+                try:
+                    self._kg.invalidate(
+                        subject=rel.source, predicate="member_of",
+                        obj=team_id, ended=valid_from,
+                    )
+                except Exception as e:
+                    logger.warning(
+                        "Failed to close KG triple for %s -[member_of]-> "
+                        "%s: %s", rel.source, team_id, e,
+                    )
+            closed += 1
+
+        return {"added": added, "closed": closed, "members": len(current)}
+
     # ── Queries ──────────────────────────────────────────────────
 
     def get_team(self, person_id: str, as_of: Optional[str] = None) -> Optional[str]:
@@ -229,7 +283,11 @@ class OrgModel:
     def _get_team_in_memory(
         self, person_id: str, as_of: Optional[str] = None
     ) -> Optional[str]:
-        """In-memory fallback: find the most recent team membership."""
+        """In-memory fallback: find the most recent team membership.
+
+        valid_to is exclusive: an edge closed on date X is no longer
+        active as of X (the person left before X).
+        """
         if as_of is None:
             as_of = datetime.now().isoformat()[:10]
 
@@ -239,7 +297,7 @@ class OrgModel:
                 continue
             if rel.valid_from > as_of:
                 continue
-            if rel.valid_to and rel.valid_to < as_of:
+            if rel.valid_to and rel.valid_to <= as_of:
                 continue
             if best is None or rel.valid_from > best.valid_from:
                 best = rel

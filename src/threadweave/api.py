@@ -254,6 +254,23 @@ class OrgRelationshipRequest(BaseModel):
     valid_to: Optional[str] = None
 
 
+class OrgMember(BaseModel):
+    """A person as seen by the directory sync (Graph team members)."""
+
+    id: str
+    name: str = ""
+    email: str = ""
+
+
+class OrgSyncRequest(BaseModel):
+    """A team's membership snapshot for reconciliation."""
+
+    team_id: str
+    team_name: str = ""
+    members: list[OrgMember] = []
+    valid_from: str = ""
+
+
 class OrgMembershipResponse(BaseModel):
     person_id: str
     team: Optional[str]
@@ -1086,6 +1103,29 @@ async def add_org_relationship(req: OrgRelationshipRequest):
         valid_from=req.valid_from, valid_to=req.valid_to,
     )
     return {"status": "created", "relationship": str(rel)}
+
+
+@app.post("/api/v1/org/sync", status_code=200)
+async def sync_org(req: OrgSyncRequest):
+    """Reconcile one team's membership from a directory snapshot.
+
+    Idempotent: the org-sync daemon posts each team's current member
+    list on every cycle; members who left get their edges closed.
+    """
+    _org_model.add_entity(
+        req.team_id, req.team_name or req.team_id, "team"
+    )
+    for member in req.members:
+        _org_model.add_entity(
+            member.id,
+            member.name or member.email or member.id,
+            "person",
+        )
+    valid_from = req.valid_from or datetime.now(timezone.utc).date().isoformat()
+    result = _org_model.sync_team_membership(
+        req.team_id, [m.id for m in req.members], valid_from
+    )
+    return {"team_id": req.team_id, "status": "synced", **result}
 
 
 @app.get("/api/v1/org/people/{person_id}/team")
