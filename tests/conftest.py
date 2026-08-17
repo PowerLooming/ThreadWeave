@@ -20,6 +20,14 @@ os.environ["THREADWEAVE_AUDIT_DB"] = os.path.join(_audit_tmp, "audit.sqlite3")
 _entry_tmp = tempfile.mkdtemp(prefix="threadweave-entry-test-")
 os.environ["THREADWEAVE_ENTRY_DB"] = os.path.join(_entry_tmp, "entries.sqlite3")
 
+# Isolate the notification queue: without this, test ingests enqueue
+# capture notifications into the LIVE ~/.threadweave queue, and a
+# running bot emails the fake test authors (live incident 2026-08-16:
+# tenant external-recipient quota exhausted by a@x.com NDRs).
+os.environ["THREADWEAVE_NOTIFY_DB"] = os.path.join(
+    _entry_tmp, "notifications.sqlite3"
+)
+
 
 @pytest.fixture
 def sample_threadweave_entry():

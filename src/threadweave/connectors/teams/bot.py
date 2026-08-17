@@ -379,6 +379,30 @@ class ThreadWeaveTeamsBot(ActivityHandler if BOTBUILDER_AVAILABLE else object):
         if graph is None:
             return False
 
+        # Recipient guard: only send when the address belongs to a
+        # tenant user. Sending to anything else produces NDRs into the
+        # sender mailbox and burns the tenant's external-recipient
+        # quota (live incident 2026-08-16 with fake test authors).
+        try:
+            from urllib.parse import quote
+
+            lookup = await graph._request(
+                "GET",
+                f"/users?$filter=mail eq '{quote(author_email)}'&$select=id",
+            )
+            if not lookup.get("value"):
+                logger.info(
+                    "Email notification skipped for %s: '%s' is not a "
+                    "tenant user",
+                    notif.get("id"), author_email,
+                )
+                return False
+        except Exception as exc:
+            logger.warning(
+                "Tenant lookup for %s failed: %s", author_email, exc
+            )
+            return False
+
         from html import escape
 
         title = escape(notif.get("title") or "content")

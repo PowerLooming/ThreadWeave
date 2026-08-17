@@ -147,6 +147,59 @@ def test_skipped_not_retried_and_counted(tmp_path):
     assert s.count_skipped() == 1
 
 
+# ---- Email leg tenant-recipient guard ----
+
+
+class FakeGraphForEmail:
+    def __init__(self, tenant_match=True):
+        self.tenant_match = tenant_match
+        self.calls = []
+
+    async def _request(self, method, url, **kwargs):
+        self.calls.append((method, url))
+        if "filter=mail" in url:
+            return {"value": [{"id": "uid-1"}] if self.tenant_match else []}
+        return {}
+
+
+def make_email_bot(graph, monkeypatch):
+    from threadweave.connectors.teams.bot import ThreadWeaveTeamsBot
+
+    bot = ThreadWeaveTeamsBot(adapter=None)
+    bot._notify_email_enabled = True
+    bot._notify_sender = "admin@tenant.onmicrosoft.com"
+    monkeypatch.setattr(bot, "_get_graph_client", lambda: graph)
+    return bot
+
+
+@pytest.mark.asyncio
+async def test_email_leg_skips_non_tenant_recipients(monkeypatch):
+    """Fake/external addresses must never be emailed: NDRs and quota
+    burn (live incident 2026-08-16)."""
+    graph = FakeGraphForEmail(tenant_match=False)
+    bot = make_email_bot(graph, monkeypatch)
+    notif = {"id": "n1", "title": "T", "wing": "w", "room": "r",
+             "source": "teams"}
+
+    ok = await bot._send_email_notification(notif, "a@x.com")
+    assert ok is False
+    assert not any("sendMail" in c[1] for c in graph.calls)
+
+
+@pytest.mark.asyncio
+async def test_email_leg_sends_to_tenant_recipients(monkeypatch):
+    graph = FakeGraphForEmail(tenant_match=True)
+    bot = make_email_bot(graph, monkeypatch)
+    notif = {"id": "n1", "title": "T", "wing": "w", "room": "r",
+             "source": "teams"}
+
+    ok = await bot._send_email_notification(
+        notif, "harald@tenant.onmicrosoft.com"
+    )
+    assert ok is True
+    assert any("sendMail" in c[1] for c in graph.calls)
+
+
 # ---- Bot delivery loop (real ThreadWeaveTeamsBot, faked IO) ----
 
 
