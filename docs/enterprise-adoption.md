@@ -107,7 +107,14 @@ bot is dark, and 1:1 chats are never covered by any bot mechanism.
       Org-wide RSC overwrote personal refs on every channel message,
       silently disabling the DM leg; fixed by keeping personal refs
       over channel updates (2eead78), re-verified with a live DM.
-      Activity-feed leg pending TeamsActivity.Send grant.)
+      Activity-feed leg verified end to end 2026-08-17: delivered to
+      a test author's Teams activity feed with zero emails, after
+      fixing the sender identity (must be the bot app, not the daemon
+      app), the deep-link topic webUrl, and the systemDefaultText
+      template parameter; recipients without the app installed are
+      refused by Graph and fall back to email by design. Grant
+      TeamsActivity.Send on the BOT app registration, and keep one
+      Teams app per AAD app in the catalog.)
 - [x] Document the RSC consent step (Teams admin center, Manage apps,
       Permissions, Review permissions and consent) in the connector
       docs; add a startup probe that detects consent absence.
