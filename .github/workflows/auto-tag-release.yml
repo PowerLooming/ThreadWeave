@@ -71,7 +71,9 @@ jobs:
         if: steps.code.outputs.has_code == 'true' && steps.manual.outputs.manual == 'false'
         run: |
           python - <<'EOF'
+          import datetime
           import re
+
           path = "pyproject.toml"
           text = open(path, encoding="utf-8").read()
           new_text, n = re.subn(
@@ -82,12 +84,63 @@ jobs:
           if n != 1:
               raise SystemExit("could not bump version in pyproject.toml")
           open(path, "w", encoding="utf-8").write(new_text)
+          version = re.search(
+              r'^version = "([^"]+)"', new_text, re.M
+          ).group(1)
+
+          # Sync every version source so the drift-guard tests pass
+          # after the bump (pyproject alone used to leave api.py,
+          # changelog, and the health test behind, forcing a manual
+          # follow-up commit on every auto-release).
+
+          api_path = "src/threadweave/api.py"
+          api_text = open(api_path, encoding="utf-8").read()
+          api_text, n = re.subn(
+              r'version="\d+\.\d+\.\d+"', f'version="{version}"', api_text
+          )
+          if n != 2:
+              raise SystemExit(f"expected 2 version literals in api.py, found {n}")
+          open(api_path, "w", encoding="utf-8").write(api_text)
+
+          test_path = "tests/test_api.py"
+          test_text = open(test_path, encoding="utf-8").read()
+          test_text, n = re.subn(
+              r'assert data\["version"\] == "\d+\.\d+\.\d+"',
+              f'assert data["version"] == "{version}"', test_text,
+          )
+          if n != 1:
+              raise SystemExit(f"expected 1 version assertion in test_api.py, found {n}")
+          open(test_path, "w", encoding="utf-8").write(test_text)
+
+          changelog_path = "CHANGELOG.md"
+          changelog = open(changelog_path, encoding="utf-8").read()
+          marker = "## [Unreleased]"
+          if marker not in changelog:
+              raise SystemExit("CHANGELOG.md has no [Unreleased] section")
+          head, rest = changelog.split(marker, 1)
+          # Everything between Unreleased and the next release heading
+          # becomes the new release's content; Unreleased starts empty.
+          match = re.search(r"\n## \[", rest)
+          if match:
+              unreleased_content = rest[: match.start()].rstrip("\n")
+              tail = rest[match.start() :]
+          else:
+              unreleased_content = rest.rstrip("\n")
+              tail = ""
+          release_heading = (
+              f"## [Unreleased]\n\n"
+              f"## [{version}] — {datetime.date.today().isoformat()}\n\n"
+              f"{unreleased_content.strip()}\n\n"
+          )
+          open(changelog_path, "w", encoding="utf-8").write(
+              head + release_heading + tail.lstrip("\n")
+          )
           EOF
           VERSION=$(grep -m1 '^version = ' pyproject.toml | sed 's/^version = "\(.*\)"/\1/')
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add pyproject.toml
+          git add pyproject.toml src/threadweave/api.py tests/test_api.py CHANGELOG.md
           # [skip ci] prevents this commit from re-triggering the
           # workflow (otherwise the bump itself looks like a code
           # change and the version would increment forever)
