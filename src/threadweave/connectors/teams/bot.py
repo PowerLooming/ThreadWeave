@@ -275,8 +275,14 @@ class ThreadWeaveTeamsBot(ActivityHandler if BOTBUILDER_AVAILABLE else object):
         """Activity-feed notification via Graph (TeamsActivity.Send).
 
         The camera sign for passively captured authors who never talked
-        to the bot. Requires the AZURE_* app registration to hold
-        TeamsActivity.Send (application). Returns False on failure.
+        to the bot. Graph only delivers to recipients who have the app
+        installed in their personal scope (custom text notifications
+        are refused otherwise, 403, live 2026-08-17); everyone else is
+        covered by the email fallback. Authenticates as the bot's own
+        registration (MICROSOFT_APP_ID), the identity of the Teams app
+        recipients have installed; any other sender app gets 403.
+        Requires TeamsActivity.Send granted on the BOT app
+        registration. Returns False on failure.
         """
         if not aad_id:
             logger.warning(
@@ -318,6 +324,12 @@ class ThreadWeaveTeamsBot(ActivityHandler if BOTBUILDER_AVAILABLE else object):
         web_url = notif.get("message_url") or (
             "https://teams.microsoft.com/l/chat/0/0"
         )
+        template_parameters = [
+            {
+                "name": "systemDefaultText",
+                "value": "Captured to the palace",
+            },
+        ]
         payload = {
             "topic": {
                 "source": "text",
@@ -334,9 +346,7 @@ class ThreadWeaveTeamsBot(ActivityHandler if BOTBUILDER_AVAILABLE else object):
                     f"it, 'opt out' stops future captures."
                 )
             },
-            "templateParameters": [
-                {"name": "title", "value": "Captured to the palace"},
-            ],
+            "templateParameters": template_parameters,
         }
         try:
             await graph._request(
