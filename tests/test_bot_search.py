@@ -85,3 +85,44 @@ def test_search_command_requires_query(monkeypatch):
 
     assert "What should I search for?" in ctx.sent[0]
     assert bot._queries == []
+
+
+def test_strip_mention_variants():
+    from threadweave.connectors.teams.bot import ThreadWeaveTeamsBot
+
+    assert ThreadWeaveTeamsBot._strip_mention(
+        "@ThreadWeave search postgresql"
+    ) == "search postgresql"
+    assert ThreadWeaveTeamsBot._strip_mention(
+        "<at>ThreadWeave</at> search postgresql"
+    ) == "search postgresql"
+    assert ThreadWeaveTeamsBot._strip_mention(
+        "search postgresql"
+    ) == "search postgresql"
+    assert ThreadWeaveTeamsBot._strip_mention(
+        "@threadweave status"
+    ) == "status"
+
+
+@pytest.mark.asyncio
+async def test_search_command_works_with_mention_prefix():
+    """Channel/group-chat mentions arrive with the @name in the text;
+    the parser must not depend on the prefix (live 2026-08-17)."""
+    from types import SimpleNamespace
+
+    bot = SearchBot(results=[
+        {"title": "PostgreSQL store", "wing": "engineering",
+         "room": "decision", "content_preview": "We decided...",
+         "created_at": "2026-08-07T21:46:51+00:00"},
+    ])
+    ctx = FakeTurnContext()
+    activity = SimpleNamespace(
+        from_property=SimpleNamespace(id="u1", aad_object_id="u1"),
+    )
+
+    handled = await bot._handle_privacy_command(
+        ctx, activity, "@ThreadWeave search postgresql"
+    )
+    assert handled is True
+    assert bot._queries == ["postgresql"]
+    assert "PostgreSQL store" in ctx.sent[0]

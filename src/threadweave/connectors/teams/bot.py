@@ -826,6 +826,24 @@ class ThreadWeaveTeamsBot(ActivityHandler if BOTBUILDER_AVAILABLE else object):
 
     # ---- Privacy commands ("camera sign" layer) ----
 
+    @staticmethod
+    def _strip_mention(text: str) -> str:
+        """Remove the bot's name from incoming text.
+
+        Teams includes the @mention in activity.text for channel and
+        group-chat messages ("@ThreadWeave search x"), and the
+        framework may pass it as plain text or <at> markup. Command
+        parsing must not depend on the prefix (live 2026-08-17: search
+        was silently ignored in channels).
+        """
+        import re
+
+        cleaned = re.sub(
+            r"(?i)@?\s*<at>\s*threadweave\s*</at>|@\s*threadweave\b",
+            "", text,
+        )
+        return cleaned.strip()
+
     async def _handle_privacy_command(
         self, turn_context: TurnContext, activity: Activity, text: str
     ) -> bool:
@@ -840,6 +858,7 @@ class ThreadWeaveTeamsBot(ActivityHandler if BOTBUILDER_AVAILABLE else object):
           search <query>       — search the palace for matching entries
           status               — show whether I'm opted out + entry count
         """
+        text = self._strip_mention(text)
         lower = text.lower()
         person = self._person_identity(activity)
         if not person:
