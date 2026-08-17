@@ -223,7 +223,12 @@ class OrgModel:
 
         added = 0
         for person in sorted(current - active_sources):
-            self.add_entity(person, person, "person")
+            # Only create the entity if missing: the caller (API sync)
+            # already registered it with its display name, and
+            # re-adding with name=id would clobber it (live 2026-08-17:
+            # graph showed GUID labels for every person).
+            if person not in self._entities:
+                self.add_entity(person, person, "person")
             self.add_relationship(
                 person, "member_of", team_id, valid_from=valid_from
             )

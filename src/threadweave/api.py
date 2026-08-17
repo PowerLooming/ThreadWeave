@@ -259,7 +259,7 @@ class OrgMember(BaseModel):
 
     id: str
     name: str = ""
-    email: str = ""
+    email: Optional[str] = ""  # members without a mailbox send null
 
 
 class OrgSyncRequest(BaseModel):

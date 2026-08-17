@@ -64,10 +64,13 @@ class OrgSyncDaemon:
         return data.get("value", [])
 
     async def list_members(self, team_id: str) -> list[dict]:
+        # No $select: userId/email live on the derived
+        # aadUserConversationMember type and OData rejects them in
+        # $select against the base conversationMember collection
+        # (400, live 2026-08-17).
         data = await self.graph._request_url(
             "GET",
-            f"{GRAPH_API_BASE}/teams/{team_id}/members"
-            "?$select=userId,displayName,email",
+            f"{GRAPH_API_BASE}/teams/{team_id}/members",
         )
         return data.get("value", [])
 
@@ -84,8 +87,8 @@ class OrgSyncDaemon:
             "members": [
                 {
                     "id": m.get("userId") or m.get("id") or "",
-                    "name": m.get("displayName", ""),
-                    "email": m.get("email", ""),
+                    "name": m.get("displayName") or "",
+                    "email": m.get("email") or "",
                 }
                 for m in members
                 if m.get("userId") or m.get("id")

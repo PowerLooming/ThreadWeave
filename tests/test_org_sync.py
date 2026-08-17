@@ -41,6 +41,16 @@ def test_sync_team_membership_idempotent():
     assert len(model.relationships) == 1
 
 
+def test_sync_preserves_display_names():
+    """The API registers members with display names; reconciliation
+    must not clobber them with the id (live 2026-08-17: the graph
+    showed GUID labels for every person)."""
+    model = OrgModel()
+    model.add_entity("alice", "Alice Wilber", "person")
+    model.sync_team_membership("team-1", ["alice"], "2026-08-01")
+    assert model.entities["alice"].name == "Alice Wilber"
+
+
 # ---- API endpoint ----
 
 def test_org_sync_endpoint_and_resolution():
