@@ -298,6 +298,61 @@ class TestLLMDetectorMocked:
         result = await detector.detect("ok thanks, sounds good!")
         assert result.content_type == ContentType.CHAT
 
+    def test_ollama_resolve_url_strips_v1(self):
+        config = LLMConfig(
+            provider="ollama", base_url="http://localhost:11434/v1", model="qwen3.5:9b"
+        )
+        d = LLMDetector(config)
+        assert d._resolve_url() == "http://localhost:11434/api/chat"
+
+    def test_ollama_resolve_url_without_v1(self):
+        config = LLMConfig(
+            provider="ollama", base_url="http://localhost:11434", model="qwen3.5:9b"
+        )
+        d = LLMDetector(config)
+        assert d._resolve_url() == "http://localhost:11434/api/chat"
+
+    @pytest.mark.asyncio
+    async def test_classify_via_ollama_native_endpoint(self):
+        import json
+
+        detector = self.make_detector(
+            provider="ollama",
+            base_url="http://localhost:11434/v1",
+            model="qwen3.5:9b",
+        )
+        inner = {
+            "content_type": "decision",
+            "confidence": 0.95,
+            "entities": [],
+            "has_pii": False,
+            "suggested_title": "Decision: use Postgres",
+            "suggested_scope": "team",
+            "reasoning": "Explicit decision.",
+        }
+        native = {
+            "message": {"content": json.dumps(inner)},
+            "prompt_eval_count": 200,
+            "eval_count": 50,
+            "done": True,
+        }
+        detector._client = _make_mock_client(native)
+
+        result = await detector.detect(
+            "We decided to use PostgreSQL for the new service layer "
+            "because it offers better transactional support than MongoDB."
+        )
+
+        assert result.content_type == ContentType.DECISION
+        assert result.confidence == 0.95
+        call = detector._client.post.call_args
+        url, kwargs = call.args[0], call.kwargs
+        assert url.endswith("/api/chat")
+        payload = kwargs["json"]
+        assert payload["think"] is False
+        assert payload["stream"] is False
+        assert payload["options"]["num_predict"] == 500
+
     @pytest.mark.asyncio
     async def test_classify_with_pii(self):
         detector = self.make_detector()

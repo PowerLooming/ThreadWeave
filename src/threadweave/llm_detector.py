@@ -215,12 +215,14 @@ class LLMDetector:
             return regex_detect(text, min_length)
         return asyncio.run(self.detect(text, min_length))
 
-    async def is_worth_saving(self, text: str) -> tuple[bool, DetectionResult]:
-        """Async version of is_worth_saving."""
+    async def is_worth_saving(
+        self, text: str, threshold: float = 0.40
+    ) -> tuple[bool, DetectionResult]:
+        """Async version of is_worth_saving (threshold tunable)."""
         result = await self.detect(text)
         should = (
             result.content_type in (ContentType.ANSWER, ContentType.DECISION)
-            and result.confidence >= 0.40  # match regex threshold
+            and result.confidence >= threshold  # match regex threshold
         )
         return should, result
 
@@ -247,7 +249,15 @@ class LLMDetector:
         return self._client
 
     def _resolve_url(self) -> str:
-        """Resolve the chat/completions endpoint from config."""
+        """Resolve the chat endpoint from config (per-provider)."""
+        if self.config.provider == "ollama":
+            # Ollama native /api/chat. Accept the OpenAI-compat base URL
+            # (…/v1) and strip the /v1 to reach the host root, since the
+            # native endpoint lives under /api/chat, not /v1/chat/completions.
+            base = (self.config.base_url or "http://localhost:11434").rstrip("/")
+            if base.endswith("/v1"):
+                base = base[:-3]
+            return f"{base}/api/chat"
         if self.config.base_url:
             base = self.config.base_url.rstrip("/")
         elif self.config.provider == "anthropic":
@@ -258,19 +268,38 @@ class LLMDetector:
 
     async def _classify_via_llm(self, text: str) -> DetectionResult:
         url = self._resolve_url()
-        payload = {
-            "model": self.config.model,
-            "messages": [
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": f"Classify this text:\n\n{text}"},
-            ],
-            "max_tokens": self.config.max_tokens,
-            "temperature": self.config.temperature,
-        }
-        # response_format is OpenAI-specific; Ollama/vLLM may not support it.
-        # The prompt already mandates JSON-only output, so this is optional.
-        if self.config.provider not in ("ollama",):
-            payload["response_format"] = {"type": "json_object"}
+        messages = [
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": f"Classify this text:\n\n{text}"},
+        ]
+        is_ollama = self.config.provider == "ollama"
+
+        if is_ollama:
+            # Native Ollama endpoint. `think: false` forces a direct answer so
+            # "thinking" models (qwen3.5, gemma4) put the JSON in
+            # message.content instead of a separate reasoning field. The
+            # OpenAI-compat /v1/chat/completions endpoint ignores `think`.
+            payload = {
+                "model": self.config.model,
+                "messages": messages,
+                "stream": False,
+                "think": False,
+                "options": {
+                    "temperature": self.config.temperature,
+                    "num_predict": self.config.max_tokens,
+                },
+            }
+        else:
+            payload = {
+                "model": self.config.model,
+                "messages": messages,
+                "max_tokens": self.config.max_tokens,
+                "temperature": self.config.temperature,
+            }
+            # response_format is OpenAI-specific; Ollama/vLLM may not support
+            # it. The prompt already mandates JSON-only output.
+            if self.config.provider not in ("ollama",):
+                payload["response_format"] = {"type": "json_object"}
 
         client = await self._get_client()
 
@@ -280,10 +309,17 @@ class LLMDetector:
                 resp = await client.post(url, json=payload)
                 resp.raise_for_status()
                 data = resp.json()
-                content = data["choices"][0]["message"]["content"]
+                if is_ollama:
+                    content = data["message"]["content"]
+                    prompt_tokens = data.get("prompt_eval_count", 0)
+                    completion_tokens = data.get("eval_count", 0)
+                else:
+                    content = data["choices"][0]["message"]["content"]
+                    prompt_tokens = data.get("usage", {}).get("prompt_tokens", 0)
+                    completion_tokens = data.get("usage", {}).get(
+                        "completion_tokens", 0
+                    )
                 # Rough token estimate from prompt + response
-                prompt_tokens = data.get("usage", {}).get("prompt_tokens", 0)
-                completion_tokens = data.get("usage", {}).get("completion_tokens", 0)
                 self._stats["tokens_approx"] += prompt_tokens + completion_tokens
                 parsed = self._parse_json_response(content)
                 return self._to_detection_result(parsed)

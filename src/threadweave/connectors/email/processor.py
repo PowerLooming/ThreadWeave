@@ -16,14 +16,13 @@ Pipeline:
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import os
 import re
 from datetime import datetime, timezone
 from typing import Optional
 
-from threadweave.detector import is_worth_saving, DetectionResult
+from threadweave.detector import is_worth_saving_async, DetectionResult
 from threadweave.connectors.email.watcher import (
     EmailMessage,
     EmailThread,
@@ -39,8 +38,13 @@ REPLY_HEADER_PATTERNS = [
     re.compile(r"^>+.*$", re.MULTILINE),
 ]
 
-EMAIL_MIN_CONFIDENCE = 0.20
-MIN_BODY_LENGTH = 100
+EMAIL_MIN_CONFIDENCE = 0.40   # save threshold (ANSWER/DECISION confidence >= this)
+MIN_BODY_LENGTH = 100          # skip bodies shorter than this (chars)
+
+# Env overrides so the save threshold and body-length floor are tunable
+# without a code edit (pilot calibration).
+_ENV_MIN_CONFIDENCE = "THREADWEAVE_EMAIL_MIN_CONFIDENCE"
+_ENV_MIN_BODY_LENGTH = "THREADWEAVE_EMAIL_MIN_BODY_LENGTH"
 
 
 from dataclasses import dataclass, field
@@ -65,11 +69,19 @@ class EmailProcessor:
     def __init__(
         self,
         mempalace_palace_path: str = "~/.mempalace/palace",
-        min_confidence: float = EMAIL_MIN_CONFIDENCE,
+        min_confidence: float | None = None,
+        min_body_length: int | None = None,
         graph_client=None,
     ):
         self.palace_path = os.path.expanduser(mempalace_palace_path)
-        self.min_confidence = min_confidence
+        self.min_confidence = (
+            min_confidence if min_confidence is not None
+            else float(os.environ.get(_ENV_MIN_CONFIDENCE, EMAIL_MIN_CONFIDENCE))
+        )
+        self.min_body_length = (
+            min_body_length if min_body_length is not None
+            else int(os.environ.get(_ENV_MIN_BODY_LENGTH, MIN_BODY_LENGTH))
+        )
         # Optional Graph client for sender -> department -> wing mapping.
         # Without it, all email lands in the "email" wing (fallback).
         self.graph = graph_client
@@ -84,7 +96,7 @@ class EmailProcessor:
     async def process_message(self, email: EmailMessage) -> ProcessedEmail:
         """Process a single email message."""
         text = self._extract_body(email)
-        if len(text) < MIN_BODY_LENGTH:
+        if len(text) < self.min_body_length:
             self.stats["skipped"] += 1
             return ProcessedEmail(
                 source="single",
@@ -113,7 +125,7 @@ class EmailProcessor:
             if body.strip():
                 parts.append(body)
         full_text = "\n\n---\n\n".join(parts)
-        if len(full_text) < MIN_BODY_LENGTH:
+        if len(full_text) < self.min_body_length:
             self.stats["skipped"] += 1
             return ProcessedEmail(
                 source="thread", conversation_id=thread.conversation_id,
@@ -140,7 +152,9 @@ class EmailProcessor:
             participants=participants or [email.sender_email],
             text_content=text, word_count=len(text.split()),
         )
-        should_save, detection = await asyncio.to_thread(is_worth_saving, text)
+        should_save, detection = await is_worth_saving_async(
+            text, self.min_confidence
+        )
         result.detection = detection
         result.should_save = should_save
         if not should_save or detection.confidence < self.min_confidence:

@@ -1,4 +1,78 @@
-# Pilot Test Plan — Teams passive capture (Gate 6)
+# Pilot Test Plan — ThreadWeave pilot
+
+The pilot opens with a single-user email harvest to populate the server
+and calibrate the save threshold, then proceeds to the Teams passive
+capture work (Gate 6).
+
+## Phase 0: single-user email harvest (threshold calibration)
+
+Goal: harvest ONE pilot user's mailbox, populate the server, and tune the
+save threshold before broadening to more users or Teams.
+
+### What runs
+
+- `email-watch` daemon polls one mailbox via Graph, classifies each
+  thread, and POSTs surviving knowledge to `/api/v1/ingest`.
+- Detection engine: LLM when configured (multilingual, e.g. Norwegian),
+  regex otherwise (deterministic, free, English-only classification).
+  Configure the LLM with `THREADWEAVE_LLM_API_KEY` /
+  `THREADWEAVE_LLM_BASE_URL` / `THREADWEAVE_LLM_MODEL`.
+- Two tunable knobs (env vars, no code edit):
+  - `THREADWEAVE_EMAIL_MIN_CONFIDENCE` (default 0.40) — save threshold.
+    Lower = save more (noisier); higher = save less (leaner).
+  - `THREADWEAVE_EMAIL_MIN_BODY_LENGTH` (default 100) — skip bodies
+    shorter than this many characters.
+
+### Mailbox
+
+Point the daemon at the pilot user (currently the service account
+`Admin@lqdx.onmicrosoft.com`; swap for the real participant):
+
+```bash
+uv run python -m threadweave.cli daemon config email-watch \
+  --set THREADWEAVE_EMAIL_MAILBOX=<pilot user UPN>
+```
+
+### Run the harvest
+
+```bash
+uv run python -m threadweave.cli serve &
+uv run python -m threadweave.cli daemon run email-watch
+```
+
+Watch the per-poll summary line:
+`fetched=N processed=N submitted=N skipped=N errors=N`
+
+### Inspect what landed
+
+```bash
+uv run python -m threadweave.cli search "<known topic>"
+curl http://localhost:8000/api/v1/entries
+```
+
+Check wing/room placement (sender department → wing via Graph).
+
+### Tune the threshold
+
+For each candidate email that was skipped but should have saved, lower
+`THREADWEAVE_EMAIL_MIN_CONFIDENCE`; for each that saved but is noise,
+raise it. Tune `THREADWEAVE_EMAIL_MIN_BODY_LENGTH` the same way.
+
+```bash
+uv run python -m threadweave.cli daemon config email-watch \
+  --set THREADWEAVE_EMAIL_MIN_CONFIDENCE=0.30
+uv run python -m threadweave.cli daemon config email-watch \
+  --set THREADWEAVE_EMAIL_MIN_BODY_LENGTH=80
+```
+
+Restart the daemon after each change and re-check submitted/skipped.
+
+Pass: the server holds a representative set of that user's real knowledge
+emails, the submitted/skipped ratio looks sane, and a deliberate noise
+email (newsletter, "thanks", short ack) is skipped while a genuine
+decision/explanation email is captured.
+
+## Teams passive capture (Gate 6)
 
 Covers the three built pieces on branch `teams-watch-daemon`:
 

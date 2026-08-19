@@ -389,16 +389,20 @@ def _suggest_title(text: str, content_type: ContentType) -> str:
     return ""
 
 
-def is_worth_saving(text: str) -> tuple[bool, DetectionResult]:
+def is_worth_saving(
+    text: str, threshold: float = 0.40
+) -> tuple[bool, DetectionResult]:
     """Quick check: should this text be offered for saving?
 
     Returns (should_prompt, result).
-    Only returns True for ANSWER and DECISION types with high confidence.
+    Only returns True for ANSWER and DECISION types with confidence at or
+    above ``threshold`` (default 0.40). The threshold is tunable so pilots
+    can calibrate save/ignore precision without code edits.
     """
     result = detect(text)
     should_prompt = (
         result.content_type in (ContentType.ANSWER, ContentType.DECISION)
-        and result.confidence >= 0.40
+        and result.confidence >= threshold
     )
     return should_prompt, result
 
@@ -427,13 +431,20 @@ async def detect_async(text: str, min_length: int = 50) -> DetectionResult:
     return detect(text, min_length)
 
 
-async def is_worth_saving_async(text: str) -> tuple[bool, DetectionResult]:
-    """Async version of is_worth_saving()."""
+async def is_worth_saving_async(
+    text: str, threshold: float = 0.40
+) -> tuple[bool, DetectionResult]:
+    """Async version of is_worth_saving() — LLM first, regex fallback.
+
+    Uses the LLMDetector (multilingual) when a key/base URL is configured,
+    otherwise falls back to the regex classifier. The same ``threshold``
+    applies either way, so tuning is consistent across engines.
+    """
     try:
         from threadweave.llm_detector import get_llm_detector
         llm = get_llm_detector()
         if llm is not None:
-            return await llm.is_worth_saving(text)
+            return await llm.is_worth_saving(text, threshold=threshold)
     except Exception:
         pass
-    return is_worth_saving(text)
+    return is_worth_saving(text, threshold=threshold)
