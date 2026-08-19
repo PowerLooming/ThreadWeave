@@ -487,6 +487,33 @@ class TestSearchMempalaceMetadata:
         ids = [x["id"] for x in results]
         assert len(ids) == len(set(ids)), f"Duplicate IDs in results: {ids}"
 
+    def test_mempalace_results_actually_serve_search(self, monkeypatch, tmp_path):
+        """With MemPalace available, results must come from the hybrid path.
+
+        Regression: `tenants` was assigned after the MemPalace block, so
+        every MemPalace-backed search hit UnboundLocalError and silently
+        fell back to keyword matching. This test fails before the fix
+        because the result would carry source=in_memory.
+        """
+        self._use_temp_palace(monkeypatch, tmp_path)
+        resp = client.post("/api/v1/entries", json={
+            "content": "The sensor fusion team agreed on a Kalman filter for attitude estimation.",
+            "wing": "engineering",
+            "room": "decisions",
+            "tenant_id": "default",
+        })
+        assert resp.status_code == 201
+
+        r = client.post("/api/v1/search", json={
+            "query": "Kalman filter attitude", "tenant_id": "default",
+        })
+        assert r.status_code == 200
+        results = r.json()["results"]
+        assert results, "search returned nothing"
+        assert any(
+            x["source"] == "mempalace" for x in results
+        ), f"MemPalace never served results (fell back to keyword?): {results}"
+
     def test_tenant_scoping_applies_to_mempalace_results(self, monkeypatch, tmp_path):
         self._use_temp_palace(monkeypatch, tmp_path)
         resp = client.post("/api/v1/entries", json={

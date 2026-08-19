@@ -38,6 +38,32 @@ REPLY_HEADER_PATTERNS = [
     re.compile(r"^>+.*$", re.MULTILINE),
 ]
 
+# NDR / bounce detection. Undeliverable notifications are system noise,
+# not organizational knowledge: the bot's notification emails bounce
+# back as "Undeliverable:" NDRs when the recipient has no mailbox or the
+# app isn't installed. They also embed the original message's raw
+# headers, which trips the conservative PII patterns (Exchange
+# anti-spam ARA tokens like 23010399003 match the Nordic personal-ID
+# shape 6+5 digits) and rejects the whole thread. Skip them early.
+BOUNCE_SUBJECT_PATTERNS = [
+    re.compile(r"^undeliverable:", re.IGNORECASE),
+    re.compile(r"^delivery (?:status )?notification", re.IGNORECASE),
+    re.compile(r"^mail delivery (?:failed|failure)", re.IGNORECASE),
+    re.compile(r"^delivery has failed", re.IGNORECASE),
+    re.compile(r"^returned mail", re.IGNORECASE),
+    re.compile(r"^failure notice", re.IGNORECASE),
+    re.compile(r"^non[- ]?deliverable", re.IGNORECASE),
+    re.compile(r"^message delivery failure", re.IGNORECASE),
+]
+BOUNCE_BODY_MARKERS = [
+    "diagnostic-code",
+    "final-recipient",
+    "x-failed-recipients",
+    "delivery has failed",
+    "could not be delivered",
+    "your message wasn't delivered",
+]
+
 EMAIL_MIN_CONFIDENCE = 0.40   # save threshold (ANSWER/DECISION confidence >= this)
 MIN_BODY_LENGTH = 100          # skip bodies shorter than this (chars)
 
@@ -95,6 +121,16 @@ class EmailProcessor:
 
     async def process_message(self, email: EmailMessage) -> ProcessedEmail:
         """Process a single email message."""
+        if self._is_bounce(email):
+            self.stats["skipped"] += 1
+            return ProcessedEmail(
+                source="single",
+                conversation_id=email.conversation_id,
+                subject=email.subject,
+                participants=[email.sender_email] + email.recipients,
+                text_content="",
+                word_count=0,
+            )
         text = self._extract_body(email)
         if len(text) < self.min_body_length:
             self.stats["skipped"] += 1
@@ -118,6 +154,16 @@ class EmailProcessor:
             return ProcessedEmail(
                 source="thread", conversation_id=thread.conversation_id,
                 subject=thread.subject, participants=[], text_content="", word_count=0,
+            )
+        # An NDR in the thread means the whole exchange bounced; skip it
+        # rather than extracting quoted headers that trip PII patterns.
+        if any(self._is_bounce(m) for m in thread.messages):
+            self.stats["skipped"] += 1
+            return ProcessedEmail(
+                source="thread", conversation_id=thread.conversation_id,
+                subject=thread.subject,
+                participants=self._thread_participants(thread),
+                text_content="", word_count=0,
             )
         parts = []
         for msg in thread.messages:
@@ -176,6 +222,21 @@ class EmailProcessor:
             logger.error("Failed to save to MemPalace: %s", e)
             result.errors.append(str(e))
         return result
+
+    def _is_bounce(self, email: EmailMessage) -> bool:
+        """True for undeliverable/NDR notifications (system noise).
+
+        Checks the subject first (cheap); falls back to body markers for
+        bounces with a generic subject. NDR bodies embed the original
+        message's raw headers, whose Exchange anti-spam tokens (e.g.
+        23010399003) look like Nordic personal IDs and trip the PII gate.
+        """
+        subject = (getattr(email, "subject", "") or "").strip()
+        if any(p.search(subject) for p in BOUNCE_SUBJECT_PATTERNS):
+            return True
+        body = self._extract_body(email)
+        lowered = body[:4000].lower()
+        return any(marker in lowered for marker in BOUNCE_BODY_MARKERS)
 
     def _extract_body(self, email: EmailMessage) -> str:
         if email.body_text:

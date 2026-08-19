@@ -959,6 +959,12 @@ async def search(req: SearchRequest, request: Request):
         role=req.requester_role or "readwrite",
     )
 
+    # Tenant scoping: a tenant key must not see other tenants' entries.
+    # Defined BEFORE the MemPalace block — the hybrid path references it
+    # (fixed: it was assigned after, so every MemPalace-backed search hit
+    # UnboundLocalError and silently fell back to keyword matching).
+    tenants = [req.tenant_id] if req.tenant_id != "default" else None
+
     # ── 1. MemPalace hybrid search ──
     if _mempalace_available:
         try:
@@ -968,15 +974,20 @@ async def search(req: SearchRequest, request: Request):
                 room=req.room,
                 limit=req.limit * 2,  # Fetch extra to account for filtering
             )
+            # Build into locals and commit only on full success: a mid-loop
+            # exception must not leave seen_ids polluted (that would starve
+            # the keyword fallback below into returning empty results).
+            mp_ids: set[str] = set()
+            mp_hits: list[dict] = []
             for mr in mp_results:
-                if mr.drawer_id in seen_ids:
+                if mr.drawer_id in seen_ids or mr.drawer_id in mp_ids:
                     continue
                 # Tenant scoping: skip results from other tenants. Entries
                 # without a tenant_id predate the field and stay visible.
                 if tenants and (mr.tenant_id or "default") not in tenants:
                     continue
-                seen_ids.add(mr.drawer_id)
-                results.append({
+                mp_ids.add(mr.drawer_id)
+                mp_hits.append({
                     "id": mr.drawer_id,
                     "title": "",
                     "wing": mr.wing,
@@ -984,20 +995,21 @@ async def search(req: SearchRequest, request: Request):
                     "content_preview": mr.content[:200],
                     "created_at": mr.created_at,
                     "author_team": mr.wing,
-                    "author_id": mr.author_id or "",
+                    "author_id": getattr(mr, "author_id", "") or "",
                     "version_of": getattr(mr, "version_of", "") or "",
                     "relevance_score": round(mr.similarity, 3),
                     "bm25_score": mr.bm25_score,
                     "source": "mempalace",
                     "sensitivity": mr.sensitivity or "internal",
                 })
+            seen_ids.update(mp_ids)
+            results.extend(mp_hits)
         except Exception as exc:
             logger.warning(
                 "MemPalace search failed, falling back to keyword: %s", exc
             )
 
     # ── 2. Keyword fallback (in-memory store) ──
-    tenants = [req.tenant_id] if req.tenant_id != "default" else None
 
     for entry_id, entry in _memory_store.items():
         if entry_id in seen_ids:
