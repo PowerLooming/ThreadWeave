@@ -21,6 +21,9 @@ env/
 .pytest_cache/
 .coverage
 htmlcov/
+tests/assets/
+# Stray ffmpeg output artifact (video processor)
+-version
 
 # OS
 .DS_Store
