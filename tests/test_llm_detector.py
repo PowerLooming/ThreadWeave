@@ -79,6 +79,31 @@ def _make_mock_client(response_dict: dict) -> MagicMock:
 # ── JSON Parsing ───────────────────────────────────────────────
 
 
+class TestEffectiveMinLength:
+    """CJK text packs more meaning per char: short CJK sentences must
+    still route to the LLM, not the English-only regex (fixed 2026-08-19).
+    """
+
+    def test_latin_text_keeps_default_floor(self):
+        assert LLMDetector._effective_min_length(
+            "We decided to use PostgreSQL.", 50
+        ) == 50
+
+    def test_cjk_text_lowers_floor(self):
+        # 41-char Japanese decision — below 50, must still hit the LLM
+        jp = "認証サービスのデータベースとしてPostgreSQLを使用することを決定しました。"
+        assert LLMDetector._effective_min_length(jp, 50) == 10
+
+    def test_cjk_threshold_needs_three_chars(self):
+        assert LLMDetector._effective_min_length("ok", 50) == 50
+        assert LLMDetector._effective_min_length("好的", 50) == 50
+        assert LLMDetector._effective_min_length("決定しました", 50) == 10
+
+    def test_hangul_and_kana_count_as_cjk(self):
+        ko = "우리는 PostgreSQL을 사용하기로 결정했습니다."
+        assert LLMDetector._effective_min_length(ko, 50) == 10
+
+
 class TestJSONParsing:
     """Unit tests for _parse_json_response."""
 

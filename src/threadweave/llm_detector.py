@@ -39,6 +39,20 @@ from threadweave.detector import (
 )
 
 
+def _is_cjk_char(ch: str) -> bool:
+    """True for CJK Unified Ideographs, kana, and hangul syllables.
+
+    Used to lower the LLM routing length floor for CJK text (see
+    LLMDetector._effective_min_length).
+    """
+    cp = ord(ch)
+    return (
+        0x4E00 <= cp <= 0x9FFF      # CJK Unified Ideographs
+        or 0x3040 <= cp <= 0x30FF   # Hiragana + Katakana
+        or 0xAC00 <= cp <= 0xD7AF   # Hangul syllables
+    )
+
+
 # ── Prompt ────────────────────────────────────────────────────
 # Kept as a module-level string so it's easy to review, edit, and
 # version-control without digging through code.
@@ -184,9 +198,25 @@ class LLMDetector:
         """LLM is configured (has API key and/or local base URL)."""
         return bool(self.config.api_key or self.config.base_url)
 
+    @staticmethod
+    def _effective_min_length(text: str, min_length: int) -> int:
+        """Language-aware length floor for LLM routing.
+
+        CJK (Han, kana, hangul) packs far more meaning per character than
+        Latin scripts: a 30-char Japanese decision is informationally a
+        full sentence, but the default 50-char floor would route it to the
+        English-only regex (which classifies all non-English as chat) and
+        the LLM would never see it. When the text contains CJK, drop the
+        floor so short-but-complete CJK decisions reach the LLM.
+        """
+        cjk = sum(1 for ch in text if _is_cjk_char(ch))
+        if cjk >= 3:
+            return 10  # 3+ CJK chars can already be a complete sentence
+        return max(min_length, LLMConfig().min_content_length)
+
     async def detect(self, text: str, min_length: int = 50) -> DetectionResult:
         """Classify text. LLM if available and text long enough; regex otherwise."""
-        if len(text) < min_length or len(text) < self.config.min_content_length:
+        if len(text) < self._effective_min_length(text, min_length):
             return regex_detect(text, min_length)
 
         if not self.available:
