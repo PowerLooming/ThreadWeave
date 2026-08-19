@@ -6,6 +6,10 @@ uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.4.5] — 2026-08-19
+
+
+
 ## [0.4.4] — 2026-08-17
 
 ### Added
