@@ -620,7 +620,10 @@ async def list_tenant_entries(tenant_id: str, request: Request):
 
 @app.post("/api/v1/detect", response_model=DetectResponse)
 async def detect_content(req: DetectRequest):
-    should_save, result = is_worth_saving(req.text)
+    # LLM-first (multilingual) with regex fallback — must mirror the
+    # ingest pipeline, not the sync regex classifier, or non-English
+    # text reports chat here while ingest saves it (fixed 2026-08-19).
+    should_save, result = await is_worth_saving_async(req.text)
     return DetectResponse(
         should_save=should_save,
         content_type=result.content_type.value,
