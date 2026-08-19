@@ -18,7 +18,7 @@ from typing import Optional
 
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import Response
+from fastapi.responses import JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -163,6 +163,7 @@ class IngestResponse(BaseModel):
     suggested_scope: str
     deduplicated: bool = False
     detector: str = "regex"  # "llm" or "regex"
+    has_gossip: bool = False
 
 
 # Existing models (kept for backward compatibility)
@@ -182,6 +183,7 @@ class DetectResponse(BaseModel):
     suggested_scope: str
     suggested_title: str
     has_pii: bool
+    has_gossip: bool = False
 
 
 class SaveRequest(BaseModel):
@@ -469,6 +471,23 @@ async def ingest_content(req: IngestRequest, request: Request):
             detector=detector_mode,
         )
 
+    # 3b. Gossip gate — personal attacks / hearsay are never knowledge,
+    # even on explicit save. Rejects before the store is touched.
+    if result.has_gossip:
+        metrics.record_ingest(rejected_gossip=True)
+        return IngestResponse(
+            id="rejected_gossip",
+            should_save=False,
+            content_type=result.content_type.value,
+            confidence=result.confidence,
+            signals=signals + ["gossip_rejected"],
+            has_pii=result.has_pii,
+            has_gossip=True,
+            suggested_title=result.suggested_title,
+            suggested_scope=result.suggested_scope,
+            detector=detector_mode,
+        )
+
     # 4. Check if worth saving
     if not should_save:
         metrics.record_ingest(skipped=True)
@@ -648,6 +667,19 @@ async def save_entry(req: SaveRequest, request: Request):
     entry_id = uuid.uuid4().hex
     now = datetime.now(timezone.utc).isoformat()
     det_result = detect(req.content)
+
+    # Gossip gate — personal attacks / hearsay are never storable, even
+    # through the explicit-save fallback (the bot's consent override must
+    # not bypass this; gossip is not organizational knowledge, ever).
+    if det_result.has_gossip:
+        return JSONResponse(
+            status_code=422,
+            content={
+                "detail": "This content looks like gossip or a personal attack "
+                          "and cannot be saved.",
+                "code": "rejected_gossip",
+            },
+        )
 
     # Sensitivity detection — user override or auto-detect
     if req.sensitivity:

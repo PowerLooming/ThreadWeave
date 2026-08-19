@@ -34,12 +34,17 @@ try:
 except ImportError:
     BOTBUILDER_AVAILABLE = False
 
-from threadweave.detector import is_worth_saving, DetectionResult
+from threadweave.detector import is_worth_saving_async, DetectionResult
 
 logger = logging.getLogger(__name__)
 
 MIN_CONFIDENCE = 0.25
 MAX_TEXT_LENGTH = 8000
+
+
+class GossipRejectedError(Exception):
+    """Raised when the API rejects content as gossip / personal attack."""
+
 
 EXPLICIT_TRIGGERS = [
     "remember this", "save this", "threadweave save",
@@ -1060,9 +1065,7 @@ class ThreadWeaveTeamsBot(ActivityHandler if BOTBUILDER_AVAILABLE else object):
         if len(text) > MAX_TEXT_LENGTH:
             text = text[:MAX_TEXT_LENGTH]
 
-        should_save, result = await asyncio.to_thread(
-            is_worth_saving, text
-        )
+        should_save, result = await is_worth_saving_async(text)
         self.stats["detected"] += 1
         logger.info(
             "Passive: type=%s conf=%.2f should_save=%s len=%d text=%r",
@@ -1088,14 +1091,26 @@ class ThreadWeaveTeamsBot(ActivityHandler if BOTBUILDER_AVAILABLE else object):
         self, turn_context: TurnContext, activity: Activity, text: str
     ):
         """Handle explicit save request (@ThreadWeave save this)."""
-        should_save, result = await asyncio.to_thread(
-            is_worth_saving, text
-        )
+        # LLM-first detection (multilingual, gossip-aware), regex fallback
+        # — mirrors the ingest pipeline. The old sync regex call here
+        # misclassified non-English text and had no gossip flag.
+        should_save, result = await is_worth_saving_async(text)
         logger.info(
-            "Explicit: type=%s conf=%.2f should_save=%s len=%d text=%r",
+            "Explicit: type=%s conf=%.2f should_save=%s gossip=%s len=%d text=%r",
             result.content_type.value, result.confidence, should_save,
-            len(text), text[:80],
+            result.has_gossip, len(text), text[:80],
         )
+
+        # Gossip / personal attacks are never savable — refuse up front
+        # instead of offering a Save card for content the API will reject.
+        if result.has_gossip:
+            await turn_context.send_activity(
+                "That looks like gossip or a personal attack, so I can't "
+                "save it. I only store knowledge: decisions, answers, and "
+                "workplace information."
+            )
+            return
+
         fallback = activity.id or "msg"
         entry_id = f"explicit_{fallback}"
 
@@ -1169,6 +1184,13 @@ class ThreadWeaveTeamsBot(ActivityHandler if BOTBUILDER_AVAILABLE else object):
             ctype = saved.get("content_type", "unknown")
             await turn_context.send_activity(
                 f"Saved! '{title}' [{ctype}] ID: {saved.get('id', '?')}"
+            )
+        except GossipRejectedError:
+            logger.info("Explicit save rejected as gossip by the API")
+            await turn_context.send_activity(
+                "That looks like gossip or a personal attack, so I can't "
+                "save it. I only store knowledge: decisions, answers, and "
+                "workplace information."
             )
         except Exception as e:
             logger.error("Failed to save entry: %s", e)
@@ -1258,6 +1280,8 @@ class ThreadWeaveTeamsBot(ActivityHandler if BOTBUILDER_AVAILABLE else object):
                         "tenant_id": "default",
                     },
                 )
+                if resp.status_code == 422 and resp.json().get("code") == "rejected_gossip":
+                    raise GossipRejectedError()
                 resp.raise_for_status()
                 return resp.json()
 

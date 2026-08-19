@@ -39,20 +39,6 @@ from threadweave.detector import (
 )
 
 
-def _is_cjk_char(ch: str) -> bool:
-    """True for CJK Unified Ideographs, kana, and hangul syllables.
-
-    Used to lower the LLM routing length floor for CJK text (see
-    LLMDetector._effective_min_length).
-    """
-    cp = ord(ch)
-    return (
-        0x4E00 <= cp <= 0x9FFF      # CJK Unified Ideographs
-        or 0x3040 <= cp <= 0x30FF   # Hiragana + Katakana
-        or 0xAC00 <= cp <= 0xD7AF   # Hangul syllables
-    )
-
-
 # ── Prompt ────────────────────────────────────────────────────
 # Kept as a module-level string so it's easy to review, edit, and
 # version-control without digging through code.
@@ -70,6 +56,7 @@ Return ONLY a valid JSON object — no markdown fences, no extra text:
   "should_save": true | false,
   "entities": [{"type": "technology"|"person"|"organization"|"system","value":"name"}],
   "has_pii": true | false,
+  "has_gossip": true | false,
   "suggested_title": "short descriptive title (5-10 words, max 100 chars)",
   "suggested_scope": "team" | "department" | "organization",
   "reasoning": "one sentence explaining the classification (max 120 chars)"
@@ -109,6 +96,22 @@ PII RULES (professional context):
   - Customer/partner company names in B2B communication
   - Public professional names and titles
   - Norwegian org numbers (organisasjonsnummer — 9 digits, public record)
+
+GOSSIP RULES — content about people that must NEVER be stored:
+* has_gossip TRUE: personal insults or attacks ("X is an idiot", "Patty
+  is a bitch"), hearsay/rumor about a person ("I heard that X...",
+  "apparently X is..."), relationship gossip (affairs, cheating,
+  secret dating), office gossip with no work relevance, BACKTALK and
+  contempt toward a specific person ("the boss can go screw himself",
+  "I hate working with X"), mockery that targets a person ("X is the
+  human error message").
+* has_gossip FALSE — these are NOT gossip: professional criticism of
+  work output ("the PR has bugs", "this design is weak"), technical
+  discussion, negative statements about systems or code, feedback
+  about deliverables, venting about work/situations ("this project is
+  a nightmare", "the requirements keep changing"), self-deprecation
+  ("I'm such an idiot, forgot to push"), light humor about things.
+  Criticism of WORK is fine; attacks on PEOPLE are gossip.
 
 CONFIDENCE GUIDELINES:
 * 0.9+  = crystal-clear signal, no ambiguity.
@@ -202,16 +205,17 @@ class LLMDetector:
     def _effective_min_length(text: str, min_length: int) -> int:
         """Language-aware length floor for LLM routing.
 
-        CJK (Han, kana, hangul) packs far more meaning per character than
-        Latin scripts: a 30-char Japanese decision is informationally a
-        full sentence, but the default 50-char floor would route it to the
-        English-only regex (which classifies all non-English as chat) and
-        the LLM would never see it. When the text contains CJK, drop the
-        floor so short-but-complete CJK decisions reach the LLM.
+        The regex classifier is English-only. CJK and accented Latin
+        (æ, ø, å, ü, é, ...) pack more meaning per character and are
+        unreadable to it anyway: a 38-char Norwegian gossip sentence
+        would be routed to regex (which classifies all non-English as
+        chat) and the LLM would never see it. Any non-ASCII text gets
+        the low floor so short-but-complete non-English content reaches
+        the LLM; pure-ASCII keeps the default floor (regex stays cheap
+        for "ok", "thanks").
         """
-        cjk = sum(1 for ch in text if _is_cjk_char(ch))
-        if cjk >= 3:
-            return 10  # 3+ CJK chars can already be a complete sentence
+        if any(ord(ch) > 0x7F for ch in text):
+            return 10
         return max(min_length, LLMConfig().min_content_length)
 
     async def detect(self, text: str, min_length: int = 50) -> DetectionResult:
@@ -418,6 +422,7 @@ class LLMDetector:
             suggested_scope=scope,
             suggested_title=str(parsed.get("suggested_title", ""))[:100],
             has_pii=bool(parsed.get("has_pii", False)),
+            has_gossip=bool(parsed.get("has_gossip", False)),
         )
 
 

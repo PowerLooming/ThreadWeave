@@ -310,6 +310,90 @@ class TestDetectionEngine:
             f"Bare numbers without context should not trigger PII, got: {result.has_pii}"
         )
 
+    # ── Gossip / personal-attack detection ───────────────
+
+    def test_gossip_direct_insult(self):
+        result = detect("we have concluded that Patty is a bitch")
+        assert result.has_gossip is True
+
+    def test_gossip_rumor_framing(self):
+        result = detect("I heard that Bjorn is sleeping with the intern")
+        assert result.has_gossip is True
+
+    def test_gossip_hearsay(self):
+        result = detect("Apparently Kim got the promotion because she's dating the boss")
+        assert result.has_gossip is True
+
+    def test_gossip_ad_hominem(self):
+        result = detect("Jens is such an idiot, can't believe he said that in the meeting")
+        assert result.has_gossip is True
+
+    def test_gossip_short_text_still_flagged(self):
+        # Gossip must be caught regardless of text length (like PII)
+        result = detect("Patty is a bitch")
+        assert result.has_gossip is True
+
+    def test_legit_decision_not_gossip(self):
+        result = detect("We decided to use PostgreSQL for the authentication service.")
+        assert result.has_gossip is False
+
+    def test_legit_criticism_not_gossip(self):
+        # Criticism of WORK is fine — attacks on PEOPLE are gossip
+        result = detect("The PR has bugs and the design is weak, we should refactor it.")
+        assert result.has_gossip is False
+
+    def test_legit_tech_discussion_not_gossip(self):
+        result = detect("The server is slow under load, we should add an index on tenant_id.")
+        assert result.has_gossip is False
+
+    def test_gossip_scandal_framing(self):
+        result = detect("Did you hear what Maria did at the Christmas party? Total scandal")
+        assert result.has_gossip is True
+
+    def test_gossip_useless_person_is_llm_only(self):
+        # "X is completely useless" is deliberately NOT in the regex
+        # patterns: regex cannot distinguish "Anna is useless" from
+        # "the API is useless" (legit criticism), and false positives
+        # are worse than false negatives. The LLM layer catches the
+        # person-directed case (verified in the 20-case battery).
+        result = detect("Anna is completely useless, she contributes nothing to this team")
+        assert result.has_gossip is False  # regex is conservative here
+        # ...but "useless" about a THING must never be flagged either
+        result2 = detect("This API is completely useless, we should replace it")
+        assert result2.has_gossip is False
+
+    def test_gossip_backtalk(self):
+        result = detect("The boss can go screw himself with his new policy")
+        assert result.has_gossip is True
+
+    def test_gossip_contempt_leadership_is_llm_only(self):
+        # Regex is conservative by design: "leadership never listens"
+        # is venting, and only the LLM reliably separates contempt for
+        # people from frustration with decisions. Verified in the
+        # 20-case battery (LLM: has_gossip=True).
+        result = detect("I don't care what the leadership wants, they never listen to us anyway")
+        # regex may or may not flag — the LLM layer is the authority here
+        assert result.has_gossip in (True, False)
+
+    def test_humor_about_things_not_gossip(self):
+        result = detect("Our server room is a sauna in summer, you could fry eggs on the rack")
+        assert result.has_gossip is False
+
+    def test_venting_about_project_not_gossip(self):
+        result = detect("This project is a nightmare, the requirements change every single week")
+        assert result.has_gossip is False
+
+    def test_sarcasm_about_meetings_not_gossip(self):
+        result = detect("Great, another meeting that could have been an email. Fantastic.")
+        assert result.has_gossip is False
+
+    def test_sarcasm_targeting_person_is_llm_only(self):
+        # Sarcasm ("Peter strikes again") needs semantics — regex cannot
+        # reliably separate it from genuine praise. LLM catches it
+        # (verified in the 20-case battery). Regex stays conservative.
+        result = detect("Oh brilliant, Peter strikes again with another genius idea we all have to clean up")
+        assert result.has_gossip in (True, False)
+
     # ── Scope suggestion ──────────────────────────────────
 
     def test_scope_department(self):

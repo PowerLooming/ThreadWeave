@@ -347,6 +347,48 @@ class TestIngestPipeline:
         })
         assert resp.status_code == 422
 
+    def test_ingest_gossip_rejected(self):
+        """Gossip / personal attacks must be rejected, never stored."""
+        resp = client.post("/api/v1/ingest", json={
+            "content": "we have concluded that Patty is a bitch",
+            "source": "teams",
+        })
+        assert resp.status_code == 201
+        data = resp.json()
+        assert data["id"] == "rejected_gossip"
+        assert data["should_save"] is False
+        assert data["has_gossip"] is True
+
+    def test_ingest_rumor_rejected(self):
+        """Hearsay/rumor framing must be rejected too."""
+        resp = client.post("/api/v1/ingest", json={
+            "content": "I heard that Bjorn is sleeping with the intern",
+            "source": "teams",
+        })
+        assert resp.status_code == 201
+        data = resp.json()
+        assert data["id"] == "rejected_gossip"
+
+    def test_save_endpoint_rejects_gossip(self):
+        """The explicit-save fallback endpoint must refuse gossip (422),
+        so the bot's consent override cannot bypass the gate."""
+        resp = client.post("/api/v1/entries", json={
+            "content": "Kim is such an idiot, cant believe she said that",
+            "wing": "engineering",
+            "room": "general",
+        })
+        assert resp.status_code == 422
+        assert resp.json()["code"] == "rejected_gossip"
+
+    def test_save_endpoint_accepts_legit_content(self):
+        """Normal knowledge still saves through the explicit endpoint."""
+        resp = client.post("/api/v1/entries", json={
+            "content": "We decided to use PostgreSQL for the authentication service.",
+            "wing": "engineering",
+            "room": "general",
+        })
+        assert resp.status_code == 201
+
     def test_ingest_with_metadata(self):
         """Metadata should be accepted and stored."""
         resp = client.post("/api/v1/ingest", json={

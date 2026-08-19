@@ -33,6 +33,7 @@ class DetectionResult:
     suggested_scope: str = "team"  # team, department, organization
     suggested_title: str = ""
     has_pii: bool = False
+    has_gossip: bool = False
 
 
 # ── Signal patterns ──────────────────────────────────────────────
@@ -187,6 +188,31 @@ PII_PATTERNS: list[str] = [
     r'health\s+(?:record|condition|history))\b',
 ]
 
+# ── Gossip / personal-attack detection ────────────────────────
+# Gossip, personal insults, and ad-hominem content are NOT
+# organizational knowledge and must never be stored — even on an
+# explicit save. Patterns are conservative (false positives reject
+# content, same design principle as PII).
+
+GOSSIP_PATTERNS: list[str] = [
+    # Direct insults / ad hominem
+    r"(?i)\b(?:bitch|bastard|asshole|idiot|moron|jerk|dick|cunt|whore|slut|"
+    r"fuck(?:er|ing|ed)?|stupid|dumb|loser|pathetic|scumbag|piece\s+of\s+shit)\b",
+    # "X is a ..." + negative trait about a person
+    r"(?i)\b(?:is|are|was|were|being)\s+(?:a\s+|an\s+)?(?:bitch|bastard|asshole|"
+    r"idiot|moron|jerk|dick|cunt|whore|slut|loser|scumbag|piece\s+of\s+shit)\b",
+    # He said / she said gossip framing
+    r"(?i)\b(?:heard|hearsay|rumou?r|gossip)\b",
+    r"(?i)\b(?:did\s+you\s+hear|have\s+you\s+heard|word\s+(?:on\s+the\s+street|around\s+the\s+office))\b",
+    r"(?i)\b(?:apparently|allegedly|supposedly|reportedly)\s+",
+    r"(?i)\b(?:everyone\s+knows|between\s+you\s+and\s+me|off\s+the\s+record)\b",
+    r"(?i)\b(?:sleeping\s+with|having\s+an?\s+affair|cheating\s+on|dating\s+secretly)\b",
+    # Backtalk / contempt toward a person
+    r"(?i)\b(?:go\s+screw|screw\s+(?:himself|herself|you|them|the)\w*|"
+    r"can\s+go\s+(?:to\s+hell|fuck\s+himself|fuck\s+herself))\b",
+    r"(?i)\b(?:can'?t\s+stand|hate(?:s)?|despise(?:s)?|can'?t\s+believe)\s+\w+\b",
+]
+
 # ── Technologies to detect ───────────────────────────────────────
 
 KNOWN_TECHS = [
@@ -215,6 +241,9 @@ def detect(text: str, min_length: int = 50) -> DetectionResult:
     # A short text containing a credit card number is still PII.
     has_pii = any(re.search(p, text) for p in PII_PATTERNS)
 
+    # Gossip check — personal attacks and hearsay are never knowledge.
+    has_gossip = any(re.search(p, text) for p in GOSSIP_PATTERNS)
+
     strong_decision = any(
         re.search(p, text_lower) for p in STRONG_DECISION_PATTERNS
     )
@@ -224,6 +253,7 @@ def detect(text: str, min_length: int = 50) -> DetectionResult:
             confidence=0.9,
             signals=["too_short"],
             has_pii=has_pii,
+            has_gossip=has_gossip,
         )
 
     # ── Score each category ──────────────────────────────────
@@ -292,6 +322,7 @@ def detect(text: str, min_length: int = 50) -> DetectionResult:
             suggested_scope="team",
             suggested_title="",
             has_pii=False,
+            has_gossip=has_gossip,
         )
     elif external_matches >= 1:
         # Weak signal — penalize but don't fully override
@@ -334,6 +365,7 @@ def detect(text: str, min_length: int = 50) -> DetectionResult:
             signals=["no_strong_signal"],
             entities=entities,
             has_pii=has_pii,
+            has_gossip=has_gossip,
         )
 
     scope = "team"
@@ -352,6 +384,7 @@ def detect(text: str, min_length: int = 50) -> DetectionResult:
         suggested_scope=scope,
         suggested_title=title,
         has_pii=has_pii,
+        has_gossip=has_gossip,
     )
 
 
