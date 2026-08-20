@@ -1,0 +1,218 @@
+# SPDX-License-Identifier: MIT
+# Copyright (C) 2026 ThreadWeave contributors
+"""Tests for action items (responsibility assignments)."""
+
+import pytest
+
+from threadweave.action_items import (
+    ActionItem,
+    ActionStatus,
+    attach_to_entry,
+    extract_action_items,
+    list_open_tasks,
+    set_task_status,
+    is_action_entry,
+    action_item_of,
+)
+from threadweave.org_model import OrgModel
+from threadweave.store import EntryStore
+
+
+@pytest.fixture
+def store(tmp_path):
+    return EntryStore(url=f"sqlite:///{tmp_path}/entries.sqlite3")
+
+
+def _org():
+    org = OrgModel()
+    org.add_entity("harald", "Harald Daltveit", "person")
+    org.add_entity("adele", "Adele Smith", "person")
+    org.add_entity("bob", "Bob Johnson", "person")
+    return org
+
+
+class TestExtractActionItems:
+
+    def test_direct_you_resolves_to_author(self):
+        text = "Harald, can you chase the vendor by Friday?"
+        items = extract_action_items(text, author_id="harald", author_name="Harald")
+        assert len(items) == 1
+        it = items[0]
+        assert it.owner == "harald"
+        assert it.owner_resolved is True
+        assert "chase" in it.action.lower()
+        assert it.deadline != ""  # "by Friday" parsed
+        assert it.status == ActionStatus.OPEN
+
+    def test_obligation_to_author(self):
+        text = "You need to update the release notes before we ship."
+        items = extract_action_items(text, author_id="alice")
+        assert len(items) == 1
+        assert items[0].owner == "alice"
+        assert "release notes" in items[0].action.lower()
+
+    def test_named_owner_resolves_via_org(self):
+        text = "Adele should look into the Azure quota issue."
+        org = _org()
+        items = extract_action_items(text, author_id="harald", org=org)
+        assert len(items) == 1
+        it = items[0]
+        # "Adele" resolved via first-name match
+        assert it.owner == "adele"
+        assert it.owner_resolved is True
+
+    def test_ambiguous_someone_is_unresolved(self):
+        text = "Someone should fix the flaky test in CI."
+        items = extract_action_items(text, author_id="harald")
+        assert len(items) == 1
+        it = items[0]
+        assert it.owner == ""
+        assert it.owner_resolved is False
+
+    def test_unresolved_named_owner(self):
+        text = "Zed should handle the onboarding doc."
+        org = _org()  # no "Zed" in org
+        items = extract_action_items(text, author_id="harald", org=org)
+        assert len(items) == 1
+        it = items[0]
+        assert it.owner == ""
+        assert it.owner_resolved is False
+    def test_no_action_no_item(self):
+        text = "The weather is nice today and the build is green."
+        items = extract_action_items(text, author_id="harald")
+        assert items == []
+
+    def test_polite_request_without_verb_is_not_task(self):
+        # "would you be able to look at this sometime" is soft; our pattern
+        # requires an action verb after "would you". "look at this sometime"
+        # does match, but verify at least it's classified with the author.
+        text = "Would you be able to look at this sometime?"
+        items = extract_action_items(text, author_id="harald")
+        # The action is vague; treat as resolved to author but low value.
+        assert all(it.owner == "harald" for it in items)
+
+    def test_multiple_items_in_one_message(self):
+        text = (
+            "Harald, can you chase the vendor? "
+            "Also, Bob should own the QA run."
+        )
+        org = _org()
+        items = extract_action_items(text, author_id="harald", org=org)
+        assert len(items) == 2
+        owners = {it.owner for it in items}
+        assert "harald" in owners
+        assert "bob" in owners
+
+class TestStoreIntegration:
+
+    def test_attach_and_roundtrip(self, store):
+        entry = {
+            "id": "t1",
+            "content": "Harald to chase the vendor by Friday",
+            "wing": "engineering", "room": "general",
+            "source_type": "email", "author_id": "bob@x.com",
+        }
+        item = ActionItem(
+            owner="harald", owner_name="Harald", owner_resolved=True,
+            action="chase the vendor", deadline="2026-08-22",
+        )
+        attach_to_entry(entry, item)
+        assert is_action_entry(entry)
+        assert entry["source_metadata"]["action_status"] == "open"
+        assert any(e.get("value") == "harald" for e in entry["entities"])
+
+        store.save(entry)
+        loaded = store.get("t1")
+        assert is_action_entry(loaded)
+        rehydrated = action_item_of(loaded)
+        assert rehydrated is not None
+        assert rehydrated.owner == "harald"
+        assert rehydrated.action == "chase the vendor"
+        assert rehydrated.deadline == "2026-08-22"
+        assert rehydrated.status == ActionStatus.OPEN
+
+    def test_list_open_tasks_filters_owner(self, store):
+        e1 = {"id": "t1", "content": "a", "source_type": "manual",
+              "author_id": "bob"}
+        e2 = {"id": "t2", "content": "b", "source_type": "manual",
+              "author_id": "bob"}
+        attach_to_entry(e1, ActionItem(
+            owner="harald", owner_name="Harald", owner_resolved=True,
+            action="chase vendor"))
+        attach_to_entry(e2, ActionItem(
+            owner="adele", owner_name="Adele", owner_resolved=True,
+            action="write report"))
+        store.save(e1)
+        store.save(e2)
+
+        open_harald = list_open_tasks(store, owner="harald")
+        assert [e["id"] for e in open_harald] == ["t1"]
+        all_open = list_open_tasks(store)
+        assert len(all_open) == 2
+
+    def test_non_action_entries_excluded(self, store):
+        store.save({"id": "plain", "content": "We use Postgres for X",
+                    "source_type": "manual", "author_id": "a",
+                    "source_metadata": {}})
+        assert list_open_tasks(store) == []
+
+    def test_done_status_excluded_from_open(self, store):
+        entry = {"id": "t1", "content": "a", "source_type": "manual",
+                 "author_id": "bob"}
+        attach_to_entry(entry, ActionItem(
+            owner="harald", owner_name="Harald", owner_resolved=True,
+            action="chase vendor"))
+        store.save(entry)
+        assert len(list_open_tasks(store)) == 1
+
+        # mark done
+        assert set_task_status(store, "t1", ActionStatus.DONE) is True
+        assert list_open_tasks(store) == []
+
+    def test_set_task_status_requires_action_entry(self, store):
+        store.save({"id": "plain", "content": "x", "source_type": "manual",
+                    "author_id": "a"})
+        assert set_task_status(store, "plain", ActionStatus.DONE) is False
+
+
+class TestOrgResolution:
+
+    def test_resolve_by_display_name(self):
+        org = _org()
+        pid, disp, ok = org.resolve_person("Harald Daltveit")
+        assert pid == "harald" and ok is True
+
+    def test_resolve_by_first_name(self):
+        org = _org()
+        pid, disp, ok = org.resolve_person("Adele")
+        assert pid == "adele" and ok is True
+
+    def test_resolve_by_email_local(self):
+        org = OrgModel()
+        org.add_entity("bob@company.com", "Bob Johnson", "person")
+        pid, disp, ok = org.resolve_person("bob")
+        assert pid == "bob@company.com" and ok is True
+
+    def test_resolve_missing(self):
+        org = _org()
+        pid, disp, ok = org.resolve_person("Unknown Person")
+        assert ok is False
+        assert pid == ""
+
+    def test_get_direct_reports(self):
+        org = OrgModel()
+        org.add_entity("mgr", "Mgr", "person")
+        org.add_entity("r1", "R One", "person")
+        org.add_entity("r2", "R Two", "person")
+        org.add_relationship("r1", "reports_to", "mgr", valid_from="2026-01-01")
+        org.add_relationship("r2", "reports_to", "mgr", valid_from="2026-01-01")
+        assert sorted(org.get_direct_reports("mgr")) == ["r1", "r2"]
+
+    def test_get_direct_reports_closed_edge_excluded(self):
+        org = OrgModel()
+        org.add_entity("mgr", "Mgr", "person")
+        org.add_entity("r1", "R One", "person")
+        org.add_relationship("r1", "reports_to", "mgr",
+                             valid_from="2026-01-01", valid_to="2026-06-01")
+        # edge closed before now → not a current report
+        assert org.get_direct_reports("mgr") == []

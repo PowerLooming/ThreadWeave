@@ -6,6 +6,20 @@ uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **Action items (Phase 1)** — responsibility assignments embedded in captured
+  content are now detected, stored, and listable as tasks. `extract_action_items()`
+  recognizes direct assignments ("can you X"), delegation to a named person
+  ("Bob should own X"), ownership obligations, and ambiguous owners ("someone
+  should X", saved but never listed). Owner resolution maps "you" to the message
+  author and named owners against the org model (`OrgModel.resolve_person`).
+  Tasks are stored as ordinary entries via `source_metadata`, so they inherit
+  search, confidentiality, and opt-out. CLI: `threadweave tasks list [--owner]`,
+  `tasks team [--manager]`, `tasks done <id>`, `tasks undone <id>`. Status is a
+  three-state enum (open / suggested_done / done); completion detection is
+  Phase 3.
+
 ## [0.4.6] — 2026-08-19
 
 

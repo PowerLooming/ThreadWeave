@@ -355,6 +355,79 @@ class OrgModel:
 
         return sorted(members)
 
+    def resolve_person(self, name: str) -> tuple[str, str, bool]:
+        """Resolve a display name / mention to a person entity.
+
+        Matching (in order):
+        1. Exact entity-id match (an id or email local-part as the key).
+        2. Case-insensitive display-name match.
+        3. First-name match against a display name.
+        4. Email local-part match.
+
+        Returns (person_id, display_name, resolved). If nothing resolves,
+        returns ("", name, False).
+        """
+        if not name:
+            return "", "", False
+        target = name.strip().lower()
+        if not target:
+            return "", "", False
+
+        # 1. Exact id
+        ent = self._entities.get(name)
+        if ent:
+            return ent.id, ent.name or ent.id, True
+
+        # 2. Display-name match
+        for eid, e in self._entities.items():
+            if e.entity_type != "person":
+                continue
+            disp = (e.name or "").strip().lower()
+            if disp and disp == target:
+                return eid, e.name, True
+
+        # 3. First-name match
+        first = name.strip().split()[0].lower()
+        for eid, e in self._entities.items():
+            if e.entity_type != "person":
+                continue
+            disp = (e.name or "").strip()
+            if disp and disp.split()[0].lower() == first:
+                return eid, e.name, True
+
+        # 4. Email local-part
+        local = name.strip().split("@")[0].lower()
+        for eid, e in self._entities.items():
+            if e.entity_type != "person":
+                continue
+            e_local = str(eid).split("@")[0].lower()
+            if e_local == local:
+                return eid, e.name or eid, True
+
+        return "", name, False
+
+    def get_direct_reports(
+        self, manager_id: str, as_of: Optional[str] = None
+    ) -> list[str]:
+        """Get the direct reports of a manager (one level).
+
+        Returns person entity IDs whose active `reports_to` edge targets
+        ``manager_id`` at the given point in time.
+        """
+        if as_of is None:
+            as_of = datetime.now().isoformat()[:10]
+
+        reports: set[str] = set()
+        for rel in self._relationships:
+            if rel.relation != "reports_to" or rel.target != manager_id:
+                continue
+            if rel.valid_from > as_of:
+                continue
+            if rel.valid_to and rel.valid_to < as_of:
+                continue
+            reports.add(rel.source)
+        return sorted(reports)
+
     def get_chain_of_command(
         self, entity_id: str, as_of: Optional[str] = None
     ) -> list[str]:
