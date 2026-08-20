@@ -143,8 +143,18 @@ COMPLETION_VERBS = (
     r"implemented|fixed|merged|patched"
 )
 COMPLETION_PATTERNS = [
+    # "I've/we've <verb> <object>", "I/we already <verb> <object>"
     (rf"\b(?:i['\u2019]?ve|we['\u2019]?ve|i\s+have|we\s+have|already)\s+"
      rf"(?:{COMPLETION_VERBS})\s+(?P<act>[a-z0-9][a-z0-9\s,.;'\-]{{3,}})\b",
+     "completion"),
+    # "<object> is/are done/complete/finished/closed"
+    (r"\b(?P<act>[a-z0-9][a-z0-9\s,.;'\-]{3,})\s+"
+     r"(?:is|are)\s+(?:done|complete|completed|finished|closed|handled|wrapped)\b",
+     "completion"),
+    # bare past-tense first person: "I chased the vendor", "we finished the report"
+    (r"\b(?:i|we)\s+(?:chased|finished|completed|closed|handled|resolved|"
+     r"followed\s+up\s+on|took\s+care\s+of|implemented|fixed|merged|patched|wrapped\s+up)\s+"
+     r"(?P<act>[a-z0-9][a-z0-9\s,.;'\-]{3,})\b",
      "completion"),
 ]
 
@@ -420,3 +430,119 @@ def set_task_status(store, entry_id: str, status: ActionStatus) -> bool:
     md["action_status"] = status.value
     store.save(entry)
     return True
+
+
+# ── Completion detection (Phase 3) ────────────────────────────────
+# Assignment detection finds a task; completion detection must LINK a
+# "done" statement back to a specific open task. A wrong link silently
+# erases a real commitment, so the match must never be silent: detected
+# completion sets SUGGESTED_DONE (never DONE), which the owner confirms.
+
+# Completion verbs normalized: infinitive/past forms map to a canonical
+# action token so "chase the vendor" matches "I chased the vendor".
+_COMPLETION_VERB_ALIASES = {
+    "done": "do", "did": "do", "finished": "finish", "completed": "complete",
+    "closed": "close", "wrapped": "wrap", "handled": "handle",
+    "resolved": "resolve", "chased": "chase", "implemented": "implement",
+    "fixed": "fix", "merged": "merge", "patched": "patch",
+    "followed": "follow", "took": "take",
+}
+
+# Completion signal prefixes: "I've/we've <verb>", "I/we already <verb>",
+# "<x> is done/complete".
+
+
+def _normalize_action(action: str) -> str:
+    """Normalize an action phrase to a token set for correlation.
+
+    Lowercases, strips punctuation, maps completion verbs to their
+    canonical form, and drops stop words so "chase the vendor" and
+    "I chased the vendor" share tokens.
+    """
+    import re as _re
+
+    stop = {"the", "a", "an", "to", "of", "on", "for", "and", "with"}
+    toks = []
+    for w in _re.split(r"[^a-z']+", action.lower()):
+        if not w:
+            continue
+        w = _COMPLETION_VERB_ALIASES.get(w, w)
+        if w in stop:
+            continue
+        toks.append(w)
+    return set(toks)
+
+
+def _completion_overlap(open_action: str, completion_action: str) -> bool:
+    """True when a completion statement plausibly refers to an open task.
+
+    Requires at least one shared content token (after verb normalization
+    and stop-word removal) to avoid correlating unrelated tasks.
+    """
+    a = _normalize_action(open_action)
+    b = _normalize_action(completion_action)
+    if not a or not b:
+        return False
+    shared = a & b
+    return bool(shared)
+
+
+def extract_completion_signal(text: str) -> str | None:
+    """Return the action phrase from a completion statement, or None.
+
+    Detects past-tense/result language ("I've chased the vendor",
+    "we finished the report", "already resolved"). Returns only the
+    verb phrase; correlation to a specific open task happens separately
+    so a false-positive signal can't change anything on its own.
+    """
+    low = text.lower()
+    for pattern, _kind in COMPLETION_PATTERNS:
+        for m in re.finditer(pattern, low):
+            act = _clean_action(m.groupdict().get("act", ""))
+            if act:
+                return act
+    return None
+
+
+def suggest_done(
+    store,
+    completion_text: str,
+    author_id: str = "",
+    min_confidence: float = 0.5,
+) -> list[dict]:
+    """Correlate a completion statement to open tasks and suggest done.
+
+    For every open action item owned by ``author_id`` whose stored action
+    overlaps the completion signal, set the item to SUGGESTED_DONE and
+    return the list of affected entries. Never sets DONE directly.
+
+    Returns the list of entries transitioned to SUGGESTED_DONE.
+    """
+    signal = extract_completion_signal(completion_text)
+    if not signal:
+        return []
+    affected = []
+    for entry in list_open_tasks(store, owner=author_id):
+        md = entry.get("source_metadata") or {}
+        stored_action = md.get("action", "") or entry.get("content", "")
+        if _completion_overlap(stored_action, signal):
+            md["action_status"] = ActionStatus.SUGGESTED_DONE.value
+            md["action_suggested_at"] = datetime.now().isoformat()
+            store.save(entry)
+            affected.append(entry)
+    return affected
+
+
+def list_pending_tasks(store, owner: str = "") -> list[dict]:
+    """Return SUGGESTED_DONE action items (awaiting confirmation)."""
+    result = []
+    for entry in store.load_all():
+        md = entry.get("source_metadata") or {}
+        if not md.get("action_item"):
+            continue
+        if md.get("action_status") != ActionStatus.SUGGESTED_DONE.value:
+            continue
+        if owner and md.get("action_owner") != owner:
+            continue
+        result.append(entry)
+    return result

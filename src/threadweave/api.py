@@ -497,6 +497,47 @@ async def ingest_content(req: IngestRequest, request: Request):
         it.owner_resolved and it.owner and it.confidence >= 0.55
         for it in action_items
     )
+
+    # Completion detection — when the author reports a task as done
+    # ("I've chased the vendor"), correlate it to their open tasks and
+    # set SUGGESTED_DONE (never DONE directly). This must run BEFORE the
+    # not_saved return: a bare completion statement may not itself be a
+    # knowledge entry, but it still closes the loop on an open task.
+    # The owner confirms via the bot ("tasks done 1" / "tasks not done 1").
+    suggested_entries: list[dict] = []
+    try:
+        from threadweave.action_items import suggest_done
+
+        author = req.metadata.get("author_id") or req.metadata.get(
+            "email_sender", ""
+        )
+        if author:
+            suggested_entries = suggest_done(
+                get_entry_store(), req.content, author_id=author
+            )
+            # Queue a confirmation notification to the assignee for each
+            # suggested task ("Looks like X is done?").
+            for task_entry in suggested_entries:
+                suggestion_id = hashlib.sha256(
+                    f"{task_entry['id']}:suggest".encode()
+                ).hexdigest()[:16]
+                get_notification_store().enqueue(
+                    notification_id=suggestion_id,
+                    entry_id=task_entry["id"],
+                    author_id=author,
+                    title=(task_entry.get("source_metadata") or {}).get(
+                        "action", task_entry.get("content", "")
+                    ),
+                    wing=task_entry.get("wing", ""),
+                    room=task_entry.get("room", ""),
+                    source=req.source,
+                    created_at=task_entry.get("created_at", ""),
+                    message_url=req.metadata.get("message_url", ""),
+                    kind="task_suggest",
+                )
+    except Exception as exc:
+        logger.warning("Completion detection failed for ingest: %s", exc)
+
     if not should_save and not force_save:
         metrics.record_ingest(skipped=True)
         return IngestResponse(
@@ -951,7 +992,12 @@ async def list_tasks(owner: str = "", status: str = "open"):
             continue
         md = entry.get("source_metadata") or {}
         st = md.get("action_status", "open")
-        if status not in ("all", st):
+        if status == "pending_open":
+            # open + suggested_done (the "actionable" view the bot uses for
+            # done/not-done confirmation commands)
+            if st not in ("open", "suggested_done"):
+                continue
+        elif status not in ("all", st):
             continue
         if owner_l:
             oid = (md.get("action_owner") or "").lower()

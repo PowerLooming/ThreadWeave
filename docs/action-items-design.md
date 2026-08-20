@@ -454,9 +454,13 @@ named owner resolves to itself when no org directory is available. *Remaining
 in Phase 2:* pilot with a real user (Harald) to calibrate precision of the
 responsibility patterns.
 
-**Phase 3 — Completion detection.** Correlate "done" statements to open
-tasks, set `SUGGESTED_DONE`, and DM the owner for confirmation. `tasks done`
-confirms, `tasks not done` rejects. Highest-precision signals only.
+**Phase 3 — Completion detection.** ✅ Shipped (this commit). When a person
+reports a task as done ("I've chased the vendor", "the QA run is done"),
+the ingest pipeline correlates the statement to their open tasks (verb +
+object overlap after normalization) and sets `SUGGESTED_DONE`, never `DONE`.
+The assignee gets a "Looks like X is done? Reply 'tasks done 1' to confirm"
+DM (kind=task_suggest). `tasks done` confirms, `tasks not done` rejects.
+A false-positive correlation can never silently erase a commitment.
 
 **Phase 4 — Multilingual + LLM.** Extend `llm_detector` prompt to emit
 `action_items`; verify across languages.

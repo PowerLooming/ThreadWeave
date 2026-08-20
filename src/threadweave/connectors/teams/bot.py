@@ -710,6 +710,14 @@ class ThreadWeaveTeamsBot(ActivityHandler if BOTBUILDER_AVAILABLE else object):
                         f"**tasks not done 1** if it's not yet."
                     )
                     return
+                if notif.get("kind") == "task_suggest":
+                    action = notif.get("title") or "this task"
+                    await turn_context.send_activity(
+                        f"**Looks like \"{action}\" is done?** "
+                        f"Reply **tasks done 1** to confirm, or "
+                        f"**tasks not done 1** if it's not yet finished."
+                    )
+                    return
                 await turn_context.send_activity(
                     f"**Captured to the palace.** Your Teams message "
                     f"\"{notif.get('title', '')}\" was added "
@@ -1086,7 +1094,9 @@ class ThreadWeaveTeamsBot(ActivityHandler if BOTBUILDER_AVAILABLE else object):
                 "'my tasks'."
             )
             return
-        data = await self._api_get(f"/api/v1/tasks?owner={person}")
+        data = await self._api_get(
+            f"/api/v1/tasks?owner={person}&status=pending_open"
+        )
         tasks = (data or {}).get("tasks", []) if data else []
         if n > len(tasks):
             await turn_context.send_activity(

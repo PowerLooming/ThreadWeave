@@ -88,7 +88,7 @@ def test_my_tasks_empty():
 
 def test_tasks_done_marks_nth():
     bot = TaskBot(scripted={"get": {
-        "/api/v1/tasks?owner=caller-123": TASKS_PAYLOAD,
+        "/api/v1/tasks?owner=caller-123&status=pending_open": TASKS_PAYLOAD,
     }})
     ctx = FakeTurnContext()
     handled = _run(bot._handle_tasks_command(ctx, FakeActivity(), "tasks done 2"))
@@ -107,7 +107,7 @@ def test_tasks_done_without_index_prompts():
 
 def test_tasks_not_done_reopens():
     bot = TaskBot(scripted={"get": {
-        "/api/v1/tasks?owner=caller-123": TASKS_PAYLOAD,
+        "/api/v1/tasks?owner=caller-123&status=pending_open": TASKS_PAYLOAD,
     }})
     ctx = FakeTurnContext()
     handled = _run(bot._handle_tasks_command(ctx, FakeActivity(), "tasks not done 1"))

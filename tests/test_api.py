@@ -673,4 +673,68 @@ class TestActionItemEndpoints:
         assert task_notifs[0]["author_id"] == "harald"
         assert task_notifs[0]["entry_id"] == eid
 
+    def test_ingest_completion_sets_suggested_done(self):
+        """A 'done' statement from the assignee suggests the task is done."""
+        from threadweave.notify import get_notification_store
+
+        before = {n["id"] for n in
+                  get_notification_store().pending(limit=100)}
+        # 1. assign harald a task (unique content to avoid dedup with other tests)
+        task_id = self._ingest_assignment(
+            "Harald should chase the Phase3 vendor by Friday.",
+            author="boss@x.com",
+        )
+        # open
+        r = client.get("/api/v1/tasks", params={"owner": "harald"})
+        assert any(t["id"] == task_id and t["status"] == "open"
+                   for t in r.json()["tasks"])
+
+        # 2. harald reports completion
+        c = client.post("/api/v1/ingest", json={
+            "content": "I've chased the vendor now.",
+            "source": "teams",
+            "metadata": {"author_id": "harald"},
+        })
+        assert c.status_code == 201
+
+        # task now suggested_done, not open
+        r = client.get("/api/v1/tasks", params={"owner": "harald"})
+        assert all(t["id"] != task_id for t in r.json()["tasks"])
+        r = client.get("/api/v1/tasks", params={"owner": "harald",
+                                                "status": "suggested_done"})
+        assert any(t["id"] == task_id for t in r.json()["tasks"])
+
+        # a task_suggest confirmation notification was queued to harald
+        # for the suggested task(s) (the shared entry store may hold other
+        # matching tasks from earlier tests, so assert the suggestion
+        # notification is addressed to harald and refers to a suggested task)
+        pending = get_notification_store().pending(limit=100)
+        new = [n for n in pending if n["id"] not in before]
+        suggests = [n for n in new if n.get("kind") == "task_suggest"]
+        assert suggests, "expected a task_suggest confirmation notification"
+        assert suggests[0]["author_id"] == "harald"
+
+        # 3. confirm → done
+        r = client.post(f"/api/v1/tasks/{task_id}/done")
+        assert r.status_code == 200
+        r = client.get("/api/v1/tasks", params={"owner": "harald",
+                                                "status": "done"})
+        assert any(t["id"] == task_id for t in r.json()["tasks"])
+
+    def test_ingest_completion_no_match_changes_nothing(self):
+        """An unrelated completion from the assignee leaves open tasks open."""
+        task_id = self._ingest_assignment(
+            "Harald should chase the vendor.",
+            author="boss@x.com",
+        )
+        c = client.post("/api/v1/ingest", json={
+            "content": "I've finished the coffee now.",
+            "source": "teams",
+            "metadata": {"author_id": "harald"},
+        })
+        assert c.status_code == 201
+        r = client.get("/api/v1/tasks", params={"owner": "harald"})
+        assert any(t["id"] == task_id and t["status"] == "open"
+                   for t in r.json()["tasks"])
+
 

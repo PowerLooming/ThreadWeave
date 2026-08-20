@@ -13,6 +13,9 @@ from threadweave.action_items import (
     set_task_status,
     is_action_entry,
     action_item_of,
+    extract_completion_signal,
+    suggest_done,
+    list_pending_tasks,
 )
 from threadweave.org_model import OrgModel
 from threadweave.store import EntryStore
@@ -216,3 +219,85 @@ class TestOrgResolution:
                              valid_from="2026-01-01", valid_to="2026-06-01")
         # edge closed before now → not a current report
         assert org.get_direct_reports("mgr") == []
+
+
+class TestCompletionDetection:
+    """Phase 3: detect 'done' statements and correlate to open tasks."""
+
+    def _open_task(self, store, eid, owner, action):
+        entry = {"id": eid, "content": action, "source_type": "manual",
+                 "author_id": "boss", "source_metadata": {}}
+        attach_to_entry(entry, ActionItem(
+            owner=owner, owner_name=owner, owner_resolved=True, action=action))
+        store.save(entry)
+        return entry
+
+    def test_extract_completion_signal_ive(self):
+        assert extract_completion_signal(
+            "I've chased the vendor now.") is not None
+
+    def test_extract_completion_signal_object_is_done(self):
+        assert extract_completion_signal(
+            "The QA run is done.") is not None
+
+    def test_extract_completion_signal_bare_past(self):
+        assert extract_completion_signal(
+            "I fixed the flaky test.") is not None
+
+    def test_no_completion_signal_for_plain(self):
+        assert extract_completion_signal(
+            "The weather is nice today.") is None
+
+    def test_suggest_done_correlates_to_owner(self, store):
+        self._open_task(store, "t1", "harald", "chase the vendor")
+        self._open_task(store, "t2", "adele", "write the report")
+        affected = suggest_done(
+            store, "I've chased the vendor now.", author_id="harald")
+        # only harald's task is suggested; adele's untouched
+        assert [e["id"] for e in affected] == ["t1"]
+        assert list_pending_tasks(store, owner="harald")[0]["id"] == "t1"
+        assert list_open_tasks(store, owner="harald") == []
+        # adele's task is still open
+        assert list_open_tasks(store, owner="adele")[0]["id"] == "t2"
+
+    def test_suggest_done_sets_suggested_not_done(self, store):
+        self._open_task(store, "t1", "harald", "chase the vendor")
+        suggest_done(store, "I've chased the vendor now.", author_id="harald")
+        md = store.get("t1")["source_metadata"]
+        assert md["action_status"] == ActionStatus.SUGGESTED_DONE.value
+        # must not be DONE — owner confirms
+        assert md["action_status"] != ActionStatus.DONE.value
+
+    def test_suggest_done_no_match_changes_nothing(self, store):
+        self._open_task(store, "t1", "harald", "chase the vendor")
+        # unrelated completion → no match
+        affected = suggest_done(
+            store, "I've finished the coffee.", author_id="harald")
+        assert affected == []
+        assert list_open_tasks(store, owner="harald")[0]["id"] == "t1"
+
+    def test_suggest_done_other_author_untouched(self, store):
+        self._open_task(store, "t1", "harald", "chase the vendor")
+        # adele reports completion, not harald → harald's task unchanged
+        affected = suggest_done(
+            store, "I've chased the vendor now.", author_id="adele")
+        assert affected == []
+        assert list_open_tasks(store, owner="harald")[0]["id"] == "t1"
+
+    def test_confirm_done_transitions_suggested_to_done(self, store):
+        self._open_task(store, "t1", "harald", "chase the vendor")
+        suggest_done(store, "I've chased the vendor now.", author_id="harald")
+        # owner confirms → DONE
+        assert set_task_status(store, "t1", ActionStatus.DONE) is True
+        md = store.get("t1")["source_metadata"]
+        assert md["action_status"] == ActionStatus.DONE.value
+
+    def test_reject_not_done_returns_to_open(self, store):
+        self._open_task(store, "t1", "harald", "chase the vendor")
+        suggest_done(store, "I've chased the vendor now.", author_id="harald")
+        assert list_pending_tasks(store, owner="harald")
+        # owner rejects → back to OPEN
+        assert set_task_status(store, "t1", ActionStatus.OPEN) is True
+        assert list_open_tasks(store, owner="harald")[0]["id"] == "t1"
+        assert list_pending_tasks(store, owner="harald") == []
+
