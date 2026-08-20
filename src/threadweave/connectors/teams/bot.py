@@ -702,6 +702,14 @@ class ThreadWeaveTeamsBot(ActivityHandler if BOTBUILDER_AVAILABLE else object):
             )
 
             async def send_capture(turn_context) -> None:
+                if notif.get("kind") == "task":
+                    action = notif.get("title") or "this"
+                    await turn_context.send_activity(
+                        f"**Noted.** You were assigned: \"{action}\". "
+                        f"Reply **tasks done 1** when it's finished, or "
+                        f"**tasks not done 1** if it's not yet."
+                    )
+                    return
                 await turn_context.send_activity(
                     f"**Captured to the palace.** Your Teams message "
                     f"\"{notif.get('title', '')}\" was added "
@@ -808,6 +816,11 @@ class ThreadWeaveTeamsBot(ActivityHandler if BOTBUILDER_AVAILABLE else object):
         # Privacy commands — the "camera sign" layer. Work when mentioned
         # OR in a 1:1 DM with the bot.
         handled = await self._handle_privacy_command(turn_context, activity, text)
+        if handled:
+            return
+
+        # Action-item (task) commands — also work when mentioned or in a DM.
+        handled = await self._handle_tasks_command(turn_context, activity, text)
         if handled:
             return
 
@@ -981,6 +994,147 @@ class ThreadWeaveTeamsBot(ActivityHandler if BOTBUILDER_AVAILABLE else object):
             f"Deleted {deleted} of {len(mine)} matching entries. "
             "Deletions are permanent and audited."
         )
+
+    async def _handle_tasks_command(
+        self, turn_context: TurnContext, activity: Activity, text: str
+    ) -> bool:
+        """Handle action-item commands (my tasks / tasks for / done / undone).
+
+        Returns True if handled.
+
+        Commands (via @mention or 1:1 DM):
+          my tasks              — list the caller's open action items
+          tasks for <name>      — list open action items for a named person
+          tasks done <n>        — mark the nth listed open item as done
+          tasks not done <n>    — reopen the nth listed item (suggested->open)
+          tasks search <query>  — search action-item entries
+        """
+        text = self._strip_mention(text)
+        lower = text.lower().strip()
+        person = self._person_identity(activity)
+        if not person:
+            return False
+
+        # "my tasks" — also accept bare "tasks" as shorthand.
+        if lower in ("my tasks", "tasks", "my tasks?"):
+            await self._reply_tasks(turn_context, person)
+            return True
+
+        if lower.startswith("tasks for "):
+            name = text[len("tasks for "):].strip()
+            if not name:
+                await turn_context.send_activity(
+                    "Who? Try 'tasks for <name>', e.g. 'tasks for Adele'."
+                )
+            else:
+                await self._reply_tasks(turn_context, name)
+            return True
+
+        if lower.startswith("tasks done"):
+            n = self._parse_task_index(text, "done")
+            await self._set_task_indexed(turn_context, person, n, done=True)
+            return True
+
+        if lower.startswith("tasks not done"):
+            n = self._parse_task_index(text, "not done")
+            await self._set_task_indexed(turn_context, person, n, done=False)
+            return True
+
+        if lower.startswith("tasks search"):
+            query = text.split("search", 1)[1].strip() if "search" in text else ""
+            await self._reply_tasks_search(turn_context, person, query)
+            return True
+
+        return False
+
+    @staticmethod
+    def _parse_task_index(text: str, keyword: str) -> int | None:
+        """Extract the nth index from a 'tasks done <n>' command."""
+        rest = text.split(keyword, 1)[1].strip() if keyword in text else ""
+        try:
+            return int(rest)
+        except (ValueError, TypeError):
+            return None
+
+    async def _reply_tasks(
+        self, turn_context: TurnContext, owner: str
+    ) -> None:
+        """List open action items for an owner (id or name)."""
+        data = await self._api_get(f"/api/v1/tasks?owner={owner}")
+        tasks = (data or {}).get("tasks", []) if data else []
+        if not tasks:
+            await turn_context.send_activity(
+                f"No open action items for '{owner}'."
+            )
+            return
+        lines = [f"**{len(tasks)} open action item(s) for {owner}:**"]
+        for i, t in enumerate(tasks, 1):
+            action = (t.get("action") or t.get("content") or "").strip()
+            deadline = t.get("deadline", "")
+            dl = f"  [by {deadline}]" if deadline else ""
+            lines.append(f"{i}. {action}{dl}")
+        await turn_context.send_activity("\n".join(lines))
+
+    async def _set_task_indexed(
+        self, turn_context: TurnContext, person: str, n: int | None, done: bool
+    ) -> None:
+        """Mark the nth open task for the caller as done (or reopen it)."""
+        if n is None or n < 1:
+            verb = "done" if done else "not done"
+            await turn_context.send_activity(
+                f"Which one? Try 'tasks {verb} <n>' using a number from "
+                "'my tasks'."
+            )
+            return
+        data = await self._api_get(f"/api/v1/tasks?owner={person}")
+        tasks = (data or {}).get("tasks", []) if data else []
+        if n > len(tasks):
+            await turn_context.send_activity(
+                f"You have {len(tasks)} open action item(s), not {n}."
+            )
+            return
+        target = tasks[n - 1]
+        eid = target.get("id", "")
+        if done:
+            await self._api_post(f"/api/v1/tasks/{eid}/done", {})
+            await turn_context.send_activity(
+                f"Marked done: {target.get('action') or target.get('content')}"
+            )
+        else:
+            await self._api_post(f"/api/v1/tasks/{eid}/undone", {})
+            await turn_context.send_activity(
+                f"Reopened: {target.get('action') or target.get('content')}"
+            )
+
+    async def _reply_tasks_search(
+        self, turn_context: TurnContext, person: str, query: str
+    ) -> None:
+        """Search action-item entries (across owners) for a query."""
+        if not query:
+            await turn_context.send_activity(
+                "What should I search for? Try 'tasks search vendor'."
+            )
+            return
+        data = await self._api_get("/api/v1/tasks?status=all")
+        tasks = (data or {}).get("tasks", []) if data else []
+        q = query.lower()
+        matches = [
+            t for t in tasks
+            if q in (t.get("action") or "").lower()
+            or q in (t.get("content") or "").lower()
+            or q in (t.get("owner_name") or "").lower()
+        ]
+        if not matches:
+            await turn_context.send_activity(
+                f"No action items matched '{query}'."
+            )
+            return
+        lines = [f"**{len(matches)} action item(s) matching '{query}':**"]
+        for i, t in enumerate(matches, 1):
+            action = (t.get("action") or t.get("content") or "").strip()
+            owner = t.get("owner_name") or t.get("owner") or "(unresolved)"
+            lines.append(f"{i}. [{owner}] {action}")
+        await turn_context.send_activity("\n".join(lines))
 
     @staticmethod
     def _person_identity(activity: Activity) -> str:

@@ -230,8 +230,16 @@ def _resolve_named_owner(name: str, org) -> tuple[str, str, bool]:
     """Resolve a capitalized name against the org model.
 
     Returns (owner_id, display_name, resolved).
+
+    When no org model is available, a concrete (non-pronoun) name
+    resolves to itself: owner = the name, display = the name, resolved
+    = True. This makes named assignments actionable (listable and
+    notifiable) even without an org directory; the org model only adds
+    disambiguation to a canonical person id when present.
     """
     if org is None:
+        if name and name.lower() not in _NON_PERSON_OWNERS:
+            return name.lower(), name, True
         return "", name, False
     try:
         return org.resolve_person(name)

@@ -365,6 +365,25 @@ async def get_metrics_prometheus():
 # ---- INGEST — Central Pipeline ----
 
 
+def _extract_action_items(content: str, meta: dict) -> list:
+    """Extract action items from content for the ingest pipeline.
+
+    ``you`` resolves to the message author (from metadata). Named-owner
+    resolution against the org model is a later phase; here owners are
+    resolved only to the author, so explicit named owners are captured
+    with owner_resolved=False unless they match the author.
+    """
+    try:
+        from threadweave.action_items import extract_action_items
+
+        author = meta.get("author_id") or meta.get("email_sender", "")
+        return extract_action_items(
+            content, author_id=author, org=None, author_name=author
+        )
+    except Exception:
+        return []
+
+
 @app.post("/api/v1/ingest", response_model=IngestResponse, status_code=201)
 @track_latency(metrics.ingest_latency)
 async def ingest_content(req: IngestRequest, request: Request):
@@ -469,8 +488,16 @@ async def ingest_content(req: IngestRequest, request: Request):
             detector=detector_mode,
         )
 
-    # 4. Check if worth saving
-    if not should_save:
+    # 4. Check if worth saving. An entry is still saved when it contains a
+    #    high-confidence resolved action item, even if the base classification
+    #    wouldn't otherwise meet the knowledge threshold — assignments are
+    #    captured regardless of whether the message is a knowledge entry.
+    action_items = _extract_action_items(req.content, req.metadata)
+    force_save = any(
+        it.owner_resolved and it.owner and it.confidence >= 0.55
+        for it in action_items
+    )
+    if not should_save and not force_save:
         metrics.record_ingest(skipped=True)
         return IngestResponse(
             id="not_saved",
@@ -531,6 +558,40 @@ async def ingest_content(req: IngestRequest, request: Request):
         "client_id": req.metadata.get("client_id"),
         "allowed_people": req.metadata.get("allowed_people", []),
     }
+
+    # Action-item capture — attach detected responsibility assignments to
+    # the entry and queue a task notification to the assignee for each
+    # high-confidence resolved item (Phase 2). The assignee's opt-out is
+    # respected: an opted-out person is never notified about a task.
+    try:
+        from threadweave.action_items import attach_to_entry
+
+        for it in action_items:
+            attach_to_entry(entry, it)
+            if (
+                it.owner_resolved
+                and it.owner
+                and it.confidence >= 0.55
+                and not optout.is_opted_out(it.owner)
+            ):
+                task_notif_id = hashlib.sha256(
+                    f"{entry_id}:task:{it.owner}:{it.action}".encode()
+                ).hexdigest()[:16]
+                get_notification_store().enqueue(
+                    notification_id=task_notif_id,
+                    entry_id=entry_id,
+                    author_id=it.owner,
+                    title=it.action,
+                    wing=entry["wing"],
+                    room=entry["room"],
+                    source=req.source,
+                    created_at=entry["created_at"],
+                    message_url=req.metadata.get("message_url", ""),
+                    kind="task",
+                )
+    except Exception as exc:
+        logger.warning("Action-item capture failed for ingest %s: %s",
+                       entry_id, exc)
 
     # Mark as seen only after the entry is actually stored
     _dedup_hashes.add(content_hash)
@@ -865,6 +926,73 @@ async def notifications_stats():
     return {"pending": store.count(delivered_only=False),
             "delivered": store.count(delivered_only=True),
             "skipped": store.count_skipped()}
+
+
+# ---- Action items (tasks) ----
+
+@app.get("/api/v1/tasks")
+async def list_tasks(owner: str = "", status: str = "open"):
+    """List action-item entries, optionally filtered by owner or status.
+
+    ``owner`` matches the resolved owner id OR the owner display name
+    (case-insensitive), so the Teams bot can answer both ``my tasks``
+    (owner = the caller's AAD id) and ``tasks for Adele`` (owner = a
+    name) without needing org resolution on its side.
+
+    ``status``: open (default), done, suggested_done, all.
+    """
+    from threadweave.action_items import is_action_entry
+
+    status = (status or "open").lower()
+    owner_l = owner.strip().lower()
+    result = []
+    for entry in get_entry_store().load_all():
+        if not is_action_entry(entry):
+            continue
+        md = entry.get("source_metadata") or {}
+        st = md.get("action_status", "open")
+        if status not in ("all", st):
+            continue
+        if owner_l:
+            oid = (md.get("action_owner") or "").lower()
+            oname = (md.get("action_owner_name") or "").lower()
+            if oid != owner_l and oname != owner_l:
+                continue
+        result.append({
+            "id": entry["id"],
+            "content": entry.get("content", ""),
+            "action": md.get("action", ""),
+            "owner": md.get("action_owner", ""),
+            "owner_name": md.get("action_owner_name", ""),
+            "owner_resolved": bool(md.get("action_owner_resolved", False)),
+            "deadline": md.get("action_deadline", ""),
+            "status": st,
+            "confidence": md.get("action_confidence", 0.5),
+            "created_at": entry.get("created_at", ""),
+        })
+    # Newest first
+    result.sort(key=lambda r: r.get("created_at", ""), reverse=True)
+    return {"tasks": result}
+
+
+@app.post("/api/v1/tasks/{entry_id}/done")
+async def task_done(entry_id: str):
+    """Mark an action-item entry as done."""
+    from threadweave.action_items import ActionStatus, set_task_status
+
+    if not set_task_status(get_entry_store(), entry_id, ActionStatus.DONE):
+        raise HTTPException(status_code=404, detail="Action item not found")
+    return {"id": entry_id, "status": "done"}
+
+
+@app.post("/api/v1/tasks/{entry_id}/undone")
+async def task_undone(entry_id: str):
+    """Reopen an action-item entry (done or suggested_done -> open)."""
+    from threadweave.action_items import ActionStatus, set_task_status
+
+    if not set_task_status(get_entry_store(), entry_id, ActionStatus.OPEN):
+        raise HTTPException(status_code=404, detail="Action item not found")
+    return {"id": entry_id, "status": "open"}
 
 
 # ---- Entry version chain ----

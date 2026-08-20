@@ -440,13 +440,19 @@ Reuse the existing conftest isolation conventions (dedicated
 
 ## 12. Rollout phases
 
-**Phase 1 — Capture (core).** `ActionItem` dataclass, `extract_action_items`
-regex engine, owner resolution, entry storage via `source_metadata`, CLI
-`tasks list`/`tasks done`. Tests as above.
+**Phase 1 — Capture (core).** ✅ Shipped (commit 0227b87). `ActionItem`
+dataclass, `extract_action_items` regex engine, owner resolution, entry
+storage via `source_metadata`, CLI `tasks list`/`tasks done`. 
 
-**Phase 2 — Bot surface.** Teams `tasks` command group + notification DM at
-capture time ("Noted: ... say 'tasks done 1' when done"). Pilot with a real
-user (Harald) to calibrate precision of the responsibility patterns.
+**Phase 2 — Bot surface.** ✅ Shipped (this commit). Teams `tasks` command
+group (`my tasks`, `tasks for <name>`, `tasks done <n>`, `tasks not done
+<n>`, `tasks search`), API endpoints (`GET /api/v1/tasks`,
+`POST /api/v1/tasks/{id}/done`, `/undone`), and a capture-time task
+notification DM to the assignee. Assignments embedded in content now force
+a save even when the message is not otherwise knowledge-worthy. A concrete
+named owner resolves to itself when no org directory is available. *Remaining
+in Phase 2:* pilot with a real user (Harald) to calibrate precision of the
+responsibility patterns.
 
 **Phase 3 — Completion detection.** Correlate "done" statements to open
 tasks, set `SUGGESTED_DONE`, and DM the owner for confirmation. `tasks done`

@@ -19,6 +19,18 @@ uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `tasks team [--manager]`, `tasks done <id>`, `tasks undone <id>`. Status is a
   three-state enum (open / suggested_done / done); completion detection is
   Phase 3.
+- **Action items (Phase 2 — bot surface)** — the Teams bot answers task
+  commands via @mention or 1:1 DM: `my tasks`, `tasks for <name>`,
+  `tasks done <n>`, `tasks not done <n>`, `tasks search <query>`, backed by
+  new API endpoints `GET /api/v1/tasks`, `POST /api/v1/tasks/{id}/done`,
+  `POST /api/v1/tasks/{id}/undone`. Assignments embedded in ingested content
+  are now captured even when the message is not otherwise knowledge-worthy:
+  a high-confidence resolved assignment forces the entry to save and queues
+  a task notification (kind=task) to the assignee, so they get a
+  "Noted: you were assigned ... reply 'tasks done 1' when finished" DM
+  (respecting the assignee's opt-out). A concrete named owner resolves to
+  itself when no org directory is available, making named assignments
+  actionable without org resolution.
 
 ## [0.4.6] — 2026-08-19
 

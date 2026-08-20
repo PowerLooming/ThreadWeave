@@ -581,3 +581,96 @@ class TestSearchMempalaceMetadata:
         results = r.json()["results"]
         assert any(x["id"] == entry_id for x in results)
 
+
+class TestActionItemEndpoints:
+    """Action-item (task) endpoints: list, done, undone."""
+
+    @pytest.fixture(autouse=True)
+    def _isolate_notify_store(self, tmp_path, monkeypatch):
+        """Give each test a fresh notification DB so action-item task
+        notifications don't leak into other tests (the shared notify
+        singleton would otherwise pollute test_notifications.py)."""
+        import threadweave.notify as notify_mod
+
+        monkeypatch.setenv(
+            "THREADWEAVE_NOTIFY_DB",
+            str(tmp_path / "notifications.sqlite3"),
+        )
+        notify_mod._store = None
+        yield
+        notify_mod._store = None
+
+    def _ingest_assignment(self, content, author="boss@x.com"):
+        resp = client.post("/api/v1/ingest", json={
+            "content": content,
+            "source": "teams",
+            "metadata": {"author_id": author},
+        })
+        assert resp.status_code == 201
+        return resp.json()["id"]
+
+    def test_list_tasks_by_owner(self):
+        eid = self._ingest_assignment(
+            "Adele should look into the Azure quota issue."
+        )
+        # owner matching by name works without org resolution on the bot side
+        r = client.get("/api/v1/tasks", params={"owner": "Adele"})
+        assert r.status_code == 200
+        ids = [t["id"] for t in r.json()["tasks"]]
+        assert eid in ids
+
+    def test_list_tasks_empty(self):
+        r = client.get("/api/v1/tasks", params={"owner": "nobody@x.com"})
+        assert r.status_code == 200
+        assert r.json()["tasks"] == []
+
+    def test_task_done_and_undone(self):
+        eid = self._ingest_assignment(
+            "Harald should chase the vendor by Friday."
+        )
+        # open by default
+        r = client.get("/api/v1/tasks", params={"owner": "harald"})
+        assert any(t["id"] == eid and t["status"] == "open"
+                   for t in r.json()["tasks"])
+
+        # mark done → no longer open
+        r = client.post(f"/api/v1/tasks/{eid}/done")
+        assert r.status_code == 200
+        r = client.get("/api/v1/tasks", params={"owner": "harald"})
+        assert all(t["id"] != eid for t in r.json()["tasks"])
+
+        # done filter shows it
+        r = client.get("/api/v1/tasks", params={"owner": "harald",
+                                                "status": "done"})
+        assert any(t["id"] == eid for t in r.json()["tasks"])
+
+        # undone → open again
+        r = client.post(f"/api/v1/tasks/{eid}/undone")
+        assert r.status_code == 200
+        r = client.get("/api/v1/tasks", params={"owner": "harald"})
+        assert any(t["id"] == eid for t in r.json()["tasks"])
+
+    def test_task_done_missing_404(self):
+        r = client.post("/api/v1/tasks/does-not-exist/done")
+        assert r.status_code == 404
+
+    def test_ingest_queues_task_notification_to_assignee(self):
+        """A high-confidence resolved assignment notifies the assignee."""
+        from threadweave.notify import get_notification_store
+
+        # Ensure a clean store snapshot of pending before this ingest
+        before = {n["id"] for n in
+                  get_notification_store().pending(limit=100)}
+        eid = self._ingest_assignment(
+            "Harald should follow up on the vendor invoice.",
+            author="boss@x.com",
+        )
+        pending = get_notification_store().pending(limit=100)
+        new = [n for n in pending if n["id"] not in before]
+        task_notifs = [n for n in new if n.get("kind") == "task"]
+        assert task_notifs, "expected a task notification for the assignee"
+        # Notification is addressed to the assignee (Harald), not the author
+        assert task_notifs[0]["author_id"] == "harald"
+        assert task_notifs[0]["entry_id"] == eid
+
+

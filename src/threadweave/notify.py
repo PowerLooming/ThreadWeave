@@ -40,6 +40,7 @@ CREATE TABLE IF NOT EXISTS notifications (
     source TEXT DEFAULT '',
     created_at TEXT,
     message_url TEXT DEFAULT '',
+    kind TEXT DEFAULT '',
     delivered INTEGER DEFAULT 0
 )
 """
@@ -48,6 +49,9 @@ _MIGRATIONS = [
     # message_url (deep link for the activity-feed notification topic;
     # Graph requires a webUrl when topic source is text, live 2026-08-17)
     "ALTER TABLE notifications ADD COLUMN message_url TEXT DEFAULT ''",
+    # kind — differentiates capture notifications from action-item (task)
+    # notifications so the bot can render task-specific DM text.
+    "ALTER TABLE notifications ADD COLUMN kind TEXT DEFAULT ''",
 ]
 
 
@@ -98,6 +102,7 @@ class NotificationStore:
         source: str = "",
         created_at: str = "",
         message_url: str = "",
+        kind: str = "",
     ) -> bool:
         """Queue a notification. Returns False if already queued."""
         if self._db is None:
@@ -107,10 +112,10 @@ class NotificationStore:
                 cur = self._db.execute(
                     "INSERT OR IGNORE INTO notifications "
                     "(id, entry_id, author_id, title, wing, room, source, "
-                    " created_at, message_url, delivered) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0)",
+                    " created_at, message_url, kind, delivered) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)",
                     (notification_id, entry_id, author_id, title, wing,
-                     room, source, created_at, message_url),
+                     room, source, created_at, message_url, kind),
                 )
                 self._db.commit()
             return cur.rowcount > 0
