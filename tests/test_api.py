@@ -589,3 +589,43 @@ class TestSearchMempalaceMetadata:
         results = r.json()["results"]
         assert any(x["id"] == entry_id for x in results)
 
+    def test_delete_removes_from_mempalace(self, monkeypatch, tmp_path):
+        """Deleting an entry must also remove its MemPalace drawer.
+
+        Regression (2026-08-20): delete_entry removed from the memory and
+        SQLite stores but NOT MemPalace, so deleted entries kept
+        surfacing in hybrid search (source=mempalace) — a privacy leak
+        for the bot's delete command.
+        """
+        self._use_temp_palace(monkeypatch, tmp_path)
+        resp = client.post("/api/v1/entries", json={
+            "content": (
+                "We decided to host the pilot dashboard on the internal "
+                "application server to keep latency under two seconds."
+            ),
+            "wing": "engineering",
+            "room": "infra",
+            "tenant_id": "default",
+        })
+        assert resp.status_code == 201
+        entry_id = resp.json()["id"]
+
+        # Confirmed searchable via MemPalace before deletion
+        r = client.post("/api/v1/search", json={
+            "query": "pilot dashboard latency", "tenant_id": "default",
+        })
+        assert any(x["id"] == entry_id for x in r.json()["results"])
+
+        # Delete via the API (admin role bypasses author scoping)
+        d = client.delete(f"/api/v1/entries/{entry_id}?person_id=admin&role=admin")
+        assert d.status_code == 204
+
+        # Gone from memory store AND the MemPalace index
+        r = client.post("/api/v1/search", json={
+            "query": "pilot dashboard latency", "tenant_id": "default",
+        })
+        results = r.json()["results"]
+        assert all(
+            x["id"] != entry_id for x in results
+        ), f"deleted entry still searchable: {results}"
+

@@ -853,6 +853,15 @@ async def delete_entry(
         get_entry_store().delete(entry_id)
     except Exception:
         pass
+    # Semantic store: without this, the deleted entry keeps surfacing in
+    # hybrid search via the MemPalace vector index (fixed 2026-08-20).
+    if _mempalace_available:
+        try:
+            _mempalace.delete_drawer(entry_id)
+        except Exception as exc:
+            logger.warning(
+                "MemPalace delete failed for entry %s: %s", entry_id, exc
+            )
     return Response(status_code=204)
 
 
