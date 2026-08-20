@@ -492,6 +492,22 @@ async def ingest_content(req: IngestRequest, request: Request):
     # Sensitivity detection
     sens = detect_sensitivity(req.content)
 
+    # Sensitivity override: a connector (e.g. the Teams watcher for a
+    # private channel) may pin the entry's sensitivity via metadata.
+    # Validate the value; fall back to auto-detection otherwise.
+    override = (req.metadata.get("sensitivity") or "").strip()
+    if override:
+        try:
+            effective_sensitivity = SensitivityLevel(override).value
+        except ValueError:
+            logger.warning(
+                "Ignoring invalid sensitivity override %r for %s",
+                override, req.source,
+            )
+            effective_sensitivity = sens.suggested_level.value
+    else:
+        effective_sensitivity = sens.suggested_level.value
+
     entry = {
         "id": entry_id,
         "content": req.content,
@@ -511,7 +527,7 @@ async def ingest_content(req: IngestRequest, request: Request):
         "has_pii": result.has_pii,
         "tenant_id": req.tenant_id,
         "source_metadata": req.metadata,
-        "sensitivity": sens.suggested_level.value,
+        "sensitivity": effective_sensitivity,
         "client_id": req.metadata.get("client_id"),
         "allowed_people": req.metadata.get("allowed_people", []),
     }
@@ -976,6 +992,9 @@ async def search(req: SearchRequest, request: Request):
                 if tenants and (mr.tenant_id or "default") not in tenants:
                     continue
                 seen_ids.add(mr.drawer_id)
+                # Pull private-channel scoping from the source entry so the
+                # strict gate fires on MemPalace search hits too.
+                _src = _memory_store.get(mr.drawer_id, {})
                 results.append({
                     "id": mr.drawer_id,
                     "title": "",
@@ -990,6 +1009,8 @@ async def search(req: SearchRequest, request: Request):
                     "bm25_score": mr.bm25_score,
                     "source": "mempalace",
                     "sensitivity": mr.sensitivity or "internal",
+                    "source_metadata": _src.get("source_metadata", {}),
+                    "allowed_people": _src.get("allowed_people", []),
                 })
         except Exception as exc:
             logger.warning(
@@ -1034,6 +1055,11 @@ async def search(req: SearchRequest, request: Request):
                 "content_type": entry.get("content_type", "unknown"),
                 "source": "in_memory",
                 "sensitivity": entry.get("sensitivity", "internal"),
+                # Private-channel scoping must survive into filter_results,
+                # or the strict gate never fires on search (the leak this
+                # feature exists to stop).
+                "source_metadata": entry.get("source_metadata", {}),
+                "allowed_people": entry.get("allowed_people", []),
             })
 
     # ── 3. Confidentiality filtering ──

@@ -78,6 +78,13 @@ class ChannelInfo:
     team_name: str
     id: str
     display_name: str
+    membership_type: str = "standard"
+    """Graph channel membershipType: standard | private | shared.
+
+    A private channel is its own isolated access group: content captured
+    from it must stay visible only to that channel's members, not the
+    whole department team. (KM management-channel requirement.)
+    """
 
 
 class _TextExtractor(HTMLParser):
@@ -122,9 +129,31 @@ class TeamsGraphClient(GraphClient):
                 team_name="",
                 id=item["id"],
                 display_name=item.get("displayName", ""),
+                membership_type=item.get("membershipType", "standard"),
             )
             for item in data.get("value", [])
         ]
+
+    async def get_channel_members(self, team_id: str, channel_id: str) -> list[str]:
+        """List the user identifiers who are members of a channel.
+
+        Returns AAD user object IDs (``userId``) for each member. Used to
+        scope content captured from a private channel to exactly its own
+        members. Raises on failure so the caller can decide fail-closed.
+
+        Requires the ``ChannelMember.Read.All`` application permission
+        (not covered by ChannelMessage.Read.All / Team.ReadBasic.All).
+        """
+        data = await self._request(
+            "GET",
+            f"/teams/{team_id}/channels/{channel_id}/members",
+        )
+        member_ids = []
+        for item in data.get("value", []):
+            user = item.get("userId") or ""
+            email = item.get("email") or ""
+            member_ids.append(user or email)
+        return [m for m in member_ids if m]
 
     async def get_channel_messages_delta(
         self,
@@ -211,6 +240,7 @@ class TeamsWatchDaemon:
         self.team_filter = (team_filter or "").strip().lower()
         self.ingest = ingest  # test injection point
         self._state: dict[str, str] = {}
+        self._members_cache: dict[str, list[str]] = {}
         self._load_state()
         self.stats = {
             "polls": 0,
@@ -334,6 +364,39 @@ class TeamsWatchDaemon:
         if delta_link:
             self._state[key] = delta_link
 
+    async def _channel_scope(
+        self, channel: ChannelInfo
+    ) -> tuple[str, list[str]]:
+        """Resolve the confidentiality scoping for a channel.
+
+        Returns ``(sensitivity, allowed_people)``. For a private channel
+        the content is RESTRICTED to the channel's own members (its access
+        group inside Teams), so it is invisible to the rest of the
+        department team. Standard channels remain at default (internal).
+
+        Member lookup is cached per channel; a failure to resolve members
+        fails CLOSED (empty allowlist → no non-admin can see it) rather
+        than leaking the private dialog to the whole team.
+        """
+        if channel.membership_type != "private":
+            return "internal", []
+        key = f"{channel.team_id}/{channel.id}"
+        members = self._members_cache.get(key)
+        if members is None:
+            try:
+                members = await self.graph.get_channel_members(
+                    channel.team_id, channel.id
+                )
+            except Exception as e:
+                logger.error(
+                    "failed to resolve members for private channel %s: %s "
+                    "(failing closed: content restricted to nobody)",
+                    key, e,
+                )
+                members = []
+            self._members_cache[key] = members
+        return "restricted", members
+
     async def _process_message(
         self, channel: ChannelInfo, msg: dict, result: dict
     ) -> None:
@@ -361,6 +424,11 @@ class TeamsWatchDaemon:
         if not title:
             title = " ".join(text.split())[:MAX_TITLE_LENGTH]
 
+        # Private channels carry their own access group: tag the entry as
+        # RESTRICTED to the channel's members so it never leaks to the
+        # rest of the department team. (KM management-channel requirement.)
+        sensitivity, allowed_people = await self._channel_scope(channel)
+
         payload = {
             "content": text,
             "source": "teams",
@@ -373,6 +441,9 @@ class TeamsWatchDaemon:
                 "source_file": msg.get("id", ""),
                 "message_url": msg.get("webUrl", ""),
                 "created_at": msg.get("createdDateTime", ""),
+                "private_channel": channel.membership_type == "private",
+                "sensitivity": sensitivity,
+                "allowed_people": allowed_people,
             },
         }
 

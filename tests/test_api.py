@@ -366,6 +366,67 @@ class TestIngestPipeline:
         assert data["should_save"] is True
         assert data["content_type"] == "decision"
 
+    def test_private_channel_isolated_end_to_end(self):
+        """End-to-end: a private-channel message is stored but only its
+        members can retrieve it via direct access AND search.
+
+        This is the KM management-channel requirement. A non-member (even
+        with admin clearance) must not see it through any retrieval path.
+        """
+        ingest = client.post("/api/v1/ingest", json={
+            "content": (
+                "We have decided to freeze headcount across the department "
+                "for FY26 and halt all hiring until the Q2 review, and this "
+                "management decision is now finalized and documented."
+            ),
+            "source": "teams",
+            "tenant_id": "acme-corp",
+            "metadata": {
+                "wing": "dept-team",
+                "room": "management",
+                "private_channel": True,
+                "sensitivity": "restricted",
+                "allowed_people": ["mgmt-user-1", "mgmt-user-2"],
+            },
+        })
+        assert ingest.status_code == 201
+        entry_id = ingest.json()["id"]
+
+        # Direct access: member sees it, non-member (even admin) is denied.
+        member_get = client.get(
+            f"/api/v1/entries/{entry_id}",
+            params={"person_id": "mgmt-user-1"},
+        )
+        assert member_get.status_code == 200
+
+        nonmember_get = client.get(
+            f"/api/v1/entries/{entry_id}",
+            params={"person_id": "sysadmin", "role": "admin"},
+        )
+        assert nonmember_get.status_code == 403
+
+        # Search: member sees the hit, non-member does not.
+        member_search = client.post("/api/v1/search", json={
+            "query": "headcount freeze",
+            "tenant_id": "acme-corp",
+            "requester_team": "mgmt-user-1",
+        })
+        assert member_search.status_code == 200
+        assert any(
+            r["id"] == entry_id for r in member_search.json()["results"]
+        )
+
+        nonmember_search = client.post("/api/v1/search", json={
+            "query": "headcount freeze",
+            "tenant_id": "acme-corp",
+            "requester_team": "sysadmin",
+            "requester_role": "admin",
+        })
+        assert nonmember_search.status_code == 200
+        assert not any(
+            r["id"] == entry_id for r in nonmember_search.json()["results"]
+        )
+
 
 class TestMemPalaceSearch:
     """Tests for hybrid search (MemPalace semantic + keyword fallback)."""
