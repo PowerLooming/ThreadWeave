@@ -6,6 +6,8 @@ uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.4.7] — 2026-08-23
+
 ### Added
 
 - **Action items (Phase 1)** — responsibility assignments embedded in captured
