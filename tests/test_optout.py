@@ -24,11 +24,11 @@ def fresh_optout(tmp_path, monkeypatch):
 
 def test_opt_out_and_in_roundtrip():
     store = OptOutStore()
-    assert store.opt_out("AdeleV@lqdx.onmicrosoft.com") is True
-    assert store.is_opted_out("adelev@lqdx.onmicrosoft.com")  # case-insensitive
-    assert store.opt_out("AdeleV@lqdx.onmicrosoft.com") is False  # already out
-    assert store.opt_in("ADELEV@lqdx.onmicrosoft.com") is True
-    assert not store.is_opted_out("adelev@lqdx.onmicrosoft.com")
+    assert store.opt_out("AdeleV@acme.onmicrosoft.com") is True
+    assert store.is_opted_out("adelev@acme.onmicrosoft.com")  # case-insensitive
+    assert store.opt_out("AdeleV@acme.onmicrosoft.com") is False  # already out
+    assert store.opt_in("ADELEV@acme.onmicrosoft.com") is True
+    assert not store.is_opted_out("adelev@acme.onmicrosoft.com")
 
 
 def test_optout_store_persists(tmp_path):

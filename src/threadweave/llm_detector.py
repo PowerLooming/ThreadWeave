@@ -86,7 +86,7 @@ PII RULES (professional context):
   passport numbers (not passport mentions in travel context), personal
   home addresses, salary/compensation figures for individuals.
 * FALSE — these are NOT PII:
-  - Organization names, company names, brand names (e.g. "Kongsberg
+  - Organization names, company names, brand names (e.g. "Nordvik
     Maritime", "Equinor", "Microsoft" — these are public entities)
   - Generic roles ("the CEO said", "our CTO decided")
   - Work email addresses in an internal context (alice@company.com

@@ -54,14 +54,14 @@ def test_survives_restart(tmp_path):
     """New store instance on the same DB file = the palace survived."""
     url = f"sqlite:///{tmp_path}/entries.sqlite3"
     EntryStore(url=url).save(_entry("e1"))
-    EntryStore(url=url).save(_entry("e2", tenant="lqdx", wing="Retail"))
+    EntryStore(url=url).save(_entry("e2", tenant="acme", wing="Retail"))
 
     restarted = EntryStore(url=url)
     entries = restarted.load_all()
     assert len(entries) == 2
     by_id = {e["id"]: e for e in entries}
     assert by_id["e1"]["tenant_id"] == "default"
-    assert by_id["e2"]["tenant_id"] == "lqdx"
+    assert by_id["e2"]["tenant_id"] == "acme"
     assert by_id["e2"]["wing"] == "Retail"
 
 
@@ -122,7 +122,7 @@ def test_postgres_save_load_delete():
 
     s = EntryStore(url=TEST_POSTGRES_URL, table_name="test_entries_pg")
     s.save(_entry("pg1"))
-    s.save(_entry("pg2", tenant="lqdx", wing="Retail"))
+    s.save(_entry("pg2", tenant="acme", wing="Retail"))
     assert s.count() == 2
 
     by_id = {e["id"]: e for e in s.load_all()}
