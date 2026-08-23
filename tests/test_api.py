@@ -347,6 +347,48 @@ class TestIngestPipeline:
         })
         assert resp.status_code == 422
 
+    def test_ingest_gossip_rejected(self):
+        """Gossip / personal attacks must be rejected, never stored."""
+        resp = client.post("/api/v1/ingest", json={
+            "content": "we have concluded that Patty is a bitch",
+            "source": "teams",
+        })
+        assert resp.status_code == 201
+        data = resp.json()
+        assert data["id"] == "rejected_gossip"
+        assert data["should_save"] is False
+        assert data["has_gossip"] is True
+
+    def test_ingest_rumor_rejected(self):
+        """Hearsay/rumor framing must be rejected too."""
+        resp = client.post("/api/v1/ingest", json={
+            "content": "I heard that Bjorn is sleeping with the intern",
+            "source": "teams",
+        })
+        assert resp.status_code == 201
+        data = resp.json()
+        assert data["id"] == "rejected_gossip"
+
+    def test_save_endpoint_rejects_gossip(self):
+        """The explicit-save fallback endpoint must refuse gossip (422),
+        so the bot's consent override cannot bypass the gate."""
+        resp = client.post("/api/v1/entries", json={
+            "content": "Kim is such an idiot, cant believe she said that",
+            "wing": "engineering",
+            "room": "general",
+        })
+        assert resp.status_code == 422
+        assert resp.json()["code"] == "rejected_gossip"
+
+    def test_save_endpoint_accepts_legit_content(self):
+        """Normal knowledge still saves through the explicit endpoint."""
+        resp = client.post("/api/v1/entries", json={
+            "content": "We decided to use PostgreSQL for the authentication service.",
+            "wing": "engineering",
+            "room": "general",
+        })
+        assert resp.status_code == 201
+
     def test_ingest_with_metadata(self):
         """Metadata should be accepted and stored."""
         resp = client.post("/api/v1/ingest", json={
@@ -487,6 +529,33 @@ class TestSearchMempalaceMetadata:
         ids = [x["id"] for x in results]
         assert len(ids) == len(set(ids)), f"Duplicate IDs in results: {ids}"
 
+    def test_mempalace_results_actually_serve_search(self, monkeypatch, tmp_path):
+        """With MemPalace available, results must come from the hybrid path.
+
+        Regression: `tenants` was assigned after the MemPalace block, so
+        every MemPalace-backed search hit UnboundLocalError and silently
+        fell back to keyword matching. This test fails before the fix
+        because the result would carry source=in_memory.
+        """
+        self._use_temp_palace(monkeypatch, tmp_path)
+        resp = client.post("/api/v1/entries", json={
+            "content": "The sensor fusion team agreed on a Kalman filter for attitude estimation.",
+            "wing": "engineering",
+            "room": "decisions",
+            "tenant_id": "default",
+        })
+        assert resp.status_code == 201
+
+        r = client.post("/api/v1/search", json={
+            "query": "Kalman filter attitude", "tenant_id": "default",
+        })
+        assert r.status_code == 200
+        results = r.json()["results"]
+        assert results, "search returned nothing"
+        assert any(
+            x["source"] == "mempalace" for x in results
+        ), f"MemPalace never served results (fell back to keyword?): {results}"
+
     def test_tenant_scoping_applies_to_mempalace_results(self, monkeypatch, tmp_path):
         self._use_temp_palace(monkeypatch, tmp_path)
         resp = client.post("/api/v1/entries", json={
@@ -519,4 +588,44 @@ class TestSearchMempalaceMetadata:
         assert r.status_code == 200
         results = r.json()["results"]
         assert any(x["id"] == entry_id for x in results)
+
+    def test_delete_removes_from_mempalace(self, monkeypatch, tmp_path):
+        """Deleting an entry must also remove its MemPalace drawer.
+
+        Regression (2026-08-20): delete_entry removed from the memory and
+        SQLite stores but NOT MemPalace, so deleted entries kept
+        surfacing in hybrid search (source=mempalace) — a privacy leak
+        for the bot's delete command.
+        """
+        self._use_temp_palace(monkeypatch, tmp_path)
+        resp = client.post("/api/v1/entries", json={
+            "content": (
+                "We decided to host the pilot dashboard on the internal "
+                "application server to keep latency under two seconds."
+            ),
+            "wing": "engineering",
+            "room": "infra",
+            "tenant_id": "default",
+        })
+        assert resp.status_code == 201
+        entry_id = resp.json()["id"]
+
+        # Confirmed searchable via MemPalace before deletion
+        r = client.post("/api/v1/search", json={
+            "query": "pilot dashboard latency", "tenant_id": "default",
+        })
+        assert any(x["id"] == entry_id for x in r.json()["results"])
+
+        # Delete via the API (admin role bypasses author scoping)
+        d = client.delete(f"/api/v1/entries/{entry_id}?person_id=admin&role=admin")
+        assert d.status_code == 204
+
+        # Gone from memory store AND the MemPalace index
+        r = client.post("/api/v1/search", json={
+            "query": "pilot dashboard latency", "tenant_id": "default",
+        })
+        results = r.json()["results"]
+        assert all(
+            x["id"] != entry_id for x in results
+        ), f"deleted entry still searchable: {results}"
 

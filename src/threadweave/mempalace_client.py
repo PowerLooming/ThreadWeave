@@ -351,6 +351,38 @@ class MemPalaceClient:
             logger.warning("Failed to add drawer to MemPalace: %s", exc)
             return None
 
+    def delete_drawer(self, drawer_id: str) -> bool:
+        """Remove a drawer from MemPalace by ID.
+
+        Handles both storage shapes: single-row drawers (ThreadWeave's
+        own add_drawer writes one row with ``id == drawer_id``) and
+        chunked drawers (rows carry ``parent_drawer_id`` metadata, the
+        shape the MemPalace CLI/MCP produces). Deleting an unknown id
+        is a no-op success (already gone). Returns True on success.
+
+        NOTE: before this method existed, delete_entry removed entries
+        from the memory and SQLite stores but NOT MemPalace, so deleted
+        entries kept surfacing in hybrid search (fixed 2026-08-20).
+        """
+        if not self.available:
+            return False
+        try:
+            from mempalace.palace import get_collection
+
+            col = get_collection(self.palace_path, collection_name="mempalace_drawers")
+            if col is None:
+                return False
+            col.delete(ids=[drawer_id])
+            try:
+                col.delete(where={"parent_drawer_id": drawer_id})
+            except Exception:
+                pass  # no chunk rows — single-row drawer, fine
+            logger.debug("Deleted drawer %s from MemPalace", drawer_id)
+            return True
+        except Exception as exc:
+            logger.warning("Failed to delete drawer from MemPalace: %s", exc)
+            return False
+
     # ── utility ────────────────────────────────────────────────────
 
     def list_wings(self) -> list[dict]:
