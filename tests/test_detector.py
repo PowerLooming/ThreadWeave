@@ -267,9 +267,9 @@ class TestDetectionEngine:
     def test_pii_company_name_not_flagged(self):
         """Company names must NOT trigger PII detection."""
         text = (
-            "We're partnering with Kongsberg Maritime AS on the new "
-            "propulsion system. Equinor ASA is also involved. "
-            "The contract with Aker Solutions was signed last week."
+            "We're partnering with Nordvik Maritime AS on the new "
+            "propulsion system. Nordlys Energy is also involved. "
+            "The contract with Fjord Works was signed last week."
         )
         result = detect(text)
         assert result.has_pii is False, (
@@ -291,8 +291,8 @@ class TestDetectionEngine:
     def test_pii_org_number_not_flagged(self):
         """Norwegian org numbers (organisasjonsnummer) are public — not PII."""
         text = (
-            "Vendor registration: Kongsberg Maritime AS, org.nr. 974 760 223. "
-            "Equinor ASA, org.nr. 923 609 016."
+            "Vendor registration: Nordvik Maritime AS, org.nr. 910 123 456. "
+            "Nordlys Energy, org.nr. 910 654 321."
         )
         result = detect(text)
         assert result.has_pii is False, (

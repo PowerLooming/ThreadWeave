@@ -1,4 +1,4 @@
-# ThreadWeave Pilot Plan — Kongsberg Maritime
+# ThreadWeave Pilot Plan — External
 
 ## Overview
 

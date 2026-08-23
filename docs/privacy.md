@@ -1,6 +1,6 @@
 # ThreadWeave Privacy Model
 
-ThreadWeave captures organizational knowledge so nobody has to ask Lars. Passive capture without disclosure is surveillance, so the privacy model is a first-class feature, not a footnote.
+ThreadWeave captures organizational knowledge so nobody has to ask the person who knows. Passive capture without disclosure is surveillance, so the privacy model is a first-class feature, not a footnote.
 
 ## The contract
 

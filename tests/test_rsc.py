@@ -206,11 +206,11 @@ def test_remember_team_prefers_aad_group_id(monkeypatch, tmp_path):
             "team": {
                 "id": "19:5c345b5e1e1e4e64bb6c191611d9973f@thread.tacv2",
                 "aadGroupId": "22222222-3333-4444-5555-666666666666",
-                "name": "Sales West",
+                "name": "Sales North",
             },
             "channel": {
                 "id": "19:5c345b5e1e1e4e64bb6c191611d9973f@thread.tacv2",
-                "name": "Sales West",
+                "name": "Sales North",
             },
         }
     )
@@ -232,7 +232,7 @@ def test_remember_team_skips_channel_ids_without_aad_group_id(
         channel_data={
             "team": {
                 "id": "19:efe09cac35154697875c9325066e7a1b@thread.tacv2",
-                "name": "Retail General",
+                "name": "Retail East",
             },
         }
     )

@@ -621,7 +621,7 @@ class TestSearchMempalaceMetadata:
         self._use_temp_palace(monkeypatch, tmp_path)
         resp = client.post("/api/v1/entries", json={
             "content": (
-                "Kongsberg radar calibration schedule for tenant B "
+                "Nordvik radar calibration schedule for tenant B "
                 "operations is finalized."
             ),
             "wing": "engineering",
