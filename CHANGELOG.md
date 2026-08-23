@@ -6,6 +6,42 @@ uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **Action items (Phase 1)** — responsibility assignments embedded in captured
+  content are now detected, stored, and listable as tasks. `extract_action_items()`
+  recognizes direct assignments ("can you X"), delegation to a named person
+  ("Bob should own X"), ownership obligations, and ambiguous owners ("someone
+  should X", saved but never listed). Owner resolution maps "you" to the message
+  author and named owners against the org model (`OrgModel.resolve_person`).
+  Tasks are stored as ordinary entries via `source_metadata`, so they inherit
+  search, confidentiality, and opt-out. CLI: `threadweave tasks list [--owner]`,
+  `tasks team [--manager]`, `tasks done <id>`, `tasks undone <id>`. Status is a
+  three-state enum (open / suggested_done / done); completion detection is
+  Phase 3.
+- **Action items (Phase 2 — bot surface)** — the Teams bot answers task
+  commands via @mention or 1:1 DM: `my tasks`, `tasks for <name>`,
+  `tasks done <n>`, `tasks not done <n>`, `tasks search <query>`, backed by
+  new API endpoints `GET /api/v1/tasks`, `POST /api/v1/tasks/{id}/done`,
+  `POST /api/v1/tasks/{id}/undone`. Assignments embedded in ingested content
+  are now captured even when the message is not otherwise knowledge-worthy:
+  a high-confidence resolved assignment forces the entry to save and queues
+  a task notification (kind=task) to the assignee, so they get a
+  "Noted: you were assigned ... reply 'tasks done 1' when finished" DM
+  (respecting the assignee's opt-out). A concrete named owner resolves to
+  itself when no org directory is available, making named assignments
+  actionable without org resolution.
+- **Action items (Phase 3 — completion detection)** — when a person reports
+  a task as done ("I've chased the vendor", "the QA run is done"), the
+  ingest pipeline correlates the completion statement to that person's open
+  tasks (verb + object overlap after normalization) and sets them to
+  `suggested_done`, never `done`. The assignee gets a
+  "Looks like X is done? Reply 'tasks done 1' to confirm, or 'tasks not
+  done 1' if it's not yet" DM (kind=task_suggest). Only explicit
+  confirmation via the bot marks a task done, so a false-positive
+  correlation can never silently erase a commitment. The done/not-done
+  commands now operate on the open+suggested view (`status=pending_open`).
+
 ## [0.4.6] — 2026-08-19
 
 

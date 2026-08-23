@@ -59,6 +59,8 @@ class FakeGraph:
     def __init__(self):
         self.team = {"id": "team1", "displayName": "Mark 8 Project Team"}
         self.channel = {"id": "ch1", "displayName": "Decisions"}
+        self.channels = None  # optional override; else single channel
+        self.private_channel = None  # {"id","displayName","members":[...]}
         self.polls = []  # (team_id, channel_id, delta_url) per call
         self.history = []  # messages returned when no delta token
         self.new_messages = []  # messages returned when a token exists
@@ -75,10 +77,18 @@ class FakeGraph:
 
     async def list_channels(self, team_id):
         from types import SimpleNamespace
+        if self.channels is not None:
+            return self.channels
         return [SimpleNamespace(
             team_id=team_id, team_name="", id=self.channel["id"],
             display_name=self.channel["displayName"],
+            membership_type="standard",
         )]
+
+    async def get_channel_members(self, team_id, channel_id):
+        if self.private_channel and channel_id == self.private_channel["id"]:
+            return list(self.private_channel["members"])
+        return []
 
     async def get_channel_messages_delta(self, team_id, channel_id, delta_url=""):
         self.polls.append((team_id, channel_id, delta_url))
@@ -406,3 +416,120 @@ def test_delta_raises_on_other_nextlink_errors():
 def test_teams_watch_registered_as_daemon():
     assert "teams-watch" in DAEMONS
     assert DAEMONS["teams-watch"]["argv"][-2:] == ["teams", "watch"]
+
+
+@pytest.mark.asyncio
+async def test_private_channel_scopes_to_members(tmp_path, monkeypatch):
+    """Content from a private channel is tagged RESTRICTED to its members.
+
+    This is the KM management-channel requirement: dialog captured from a
+    private channel must not leak to the rest of the department team. The
+    watcher must carry the membershipType through, resolve members, and
+    emit sensitivity=restricted + allowed_people=members so the central
+    confidentiality gate hides it from non-members.
+    """
+    monkeypatch.setattr("threadweave.optout.OptOutStore", lambda: StubOptOut())
+
+    from types import SimpleNamespace
+
+    graph = FakeGraph()
+    graph.private_channel = {
+        "id": "mgmt-ch", "displayName": "Management",
+        "members": ["mgmt-user-1", "mgmt-user-2"],
+    }
+    graph.channels = [
+        SimpleNamespace(
+            team_id="team1", team_name="Dept Team", id="mgmt-ch",
+            display_name="Management", membership_type="private",
+        ),
+        SimpleNamespace(
+            team_id="team1", team_name="Dept Team", id="general-ch",
+            display_name="General", membership_type="standard",
+        ),
+    ]
+    # Route all messages to the private channel for this test.
+    graph.history = [
+        make_msg("pm1", channel_id="mgmt-ch",
+                 text="Approved the FY26 headcount freeze for the department."),
+    ]
+
+    sink = FakeSink()
+    daemon = TeamsWatchDaemon(
+        graph, state_file=str(tmp_path / "state.json"), ingest=sink,
+        backfill=True,
+    )
+
+    await daemon.run_once()
+
+    # One payload per polled channel (mgmt-ch + general-ch). Find the
+    # private-channel one and verify its scoping.
+    private_payloads = [
+        p for p in sink.payloads
+        if p["metadata"].get("private_channel")
+    ]
+    assert private_payloads, "no private-channel payload emitted"
+    payload = private_payloads[0]
+    assert payload["metadata"]["sensitivity"] == "restricted"
+    assert payload["metadata"]["allowed_people"] == ["mgmt-user-1", "mgmt-user-2"]
+    assert payload["metadata"]["private_channel"] is True
+    # Still captured (never dropped) so management's own memory persists.
+    assert "headcount freeze" in payload["content"]
+
+
+@pytest.mark.asyncio
+async def test_standard_channel_stays_internal(tmp_path, monkeypatch):
+    """Standard channels are unchanged: default sensitivity, no allowlist."""
+    monkeypatch.setattr("threadweave.optout.OptOutStore", lambda: StubOptOut())
+    graph = FakeGraph()
+    graph.history = [make_msg("g1", channel_id="ch1")]
+    sink = FakeSink()
+    daemon = TeamsWatchDaemon(
+        graph, state_file=str(tmp_path / "state.json"), ingest=sink,
+        backfill=True,
+    )
+
+    await daemon.run_once()
+
+    assert len(sink.payloads) == 1
+    payload = sink.payloads[0]
+    assert payload["metadata"]["sensitivity"] == "internal"
+    assert payload["metadata"]["allowed_people"] == []
+    assert payload["metadata"]["private_channel"] is False
+
+
+@pytest.mark.asyncio
+async def test_private_channel_member_lookup_failure_fails_closed(
+    tmp_path, monkeypatch,
+):
+    """If members can't be resolved, fail closed (empty allowlist) not leak."""
+    monkeypatch.setattr("threadweave.optout.OptOutStore", lambda: StubOptOut())
+
+    from types import SimpleNamespace
+
+    graph = FakeGraph()
+    graph.private_channel = {
+        "id": "mgmt-ch", "displayName": "Management",
+        "members": [],  # force get_channel_members to return empty
+    }
+    graph.channels = [
+        SimpleNamespace(
+            team_id="team1", team_name="Dept Team", id="mgmt-ch",
+            display_name="Management", membership_type="private",
+        ),
+    ]
+    graph.history = [make_msg("pm1", channel_id="mgmt-ch",
+                              text="Board decided to divest the electronics unit.")]
+
+    sink = FakeSink()
+    daemon = TeamsWatchDaemon(
+        graph, state_file=str(tmp_path / "state.json"), ingest=sink,
+        backfill=True,
+    )
+
+    await daemon.run_once()
+
+    assert len(sink.payloads) == 1
+    payload = sink.payloads[0]
+    assert payload["metadata"]["sensitivity"] == "restricted"
+    assert payload["metadata"]["allowed_people"] == []
+    assert payload["metadata"]["private_channel"] is True

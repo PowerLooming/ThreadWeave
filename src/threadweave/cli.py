@@ -98,6 +98,97 @@ def cmd_serve(args):
     )
 
 
+# ── Action Item (Tasks) Commands ─────────────────────────────────
+
+def _print_task(entry: dict, idx: int) -> None:
+    md = entry.get("source_metadata") or {}
+    owner = md.get("action_owner_name") or md.get("action_owner") or "(unresolved)"
+    status = md.get("action_status", "open")
+    deadline = md.get("action_deadline", "")
+    deadline_txt = f"  [by {deadline}]" if deadline else ""
+    status_txt = f"  ({status})" if status != "open" else ""
+    print(f"{idx}. {owner}: {md.get('action', entry.get('content', ''))}"
+          f"{deadline_txt}{status_txt}")
+    print(f"   {entry['id']}")
+
+
+def cmd_tasks_list(args):
+    """List open action items (optionally by owner)."""
+    from threadweave.store import EntryStore
+    from threadweave.action_items import list_open_tasks
+
+    store = EntryStore()
+    owner = args.owner or ""
+    entries = list_open_tasks(store, owner=owner)
+    if not entries:
+        print("No open action items." + (f" for {owner}" if owner else ""))
+        return
+    print(f"{len(entries)} open action item(s):\n")
+    for i, e in enumerate(entries, 1):
+        _print_task(e, i)
+
+
+def cmd_tasks_team(args):
+    """List open action items for a manager's direct reports."""
+    from threadweave.store import EntryStore
+    from threadweave.org_model import OrgModel
+    from threadweave.action_items import list_open_tasks
+
+    store = EntryStore()
+    org = OrgModel()
+    manager = args.manager or args.owner or ""
+    if not manager:
+        manager = _current_user()
+    reports = org.get_direct_reports(manager)
+    if not reports:
+        print(f"No direct reports found for '{manager}'.")
+        return
+    entries = []
+    for r in reports:
+        entries.extend(list_open_tasks(store, owner=r))
+    if not entries:
+        print(f"No open action items for {len(reports)} direct report(s) of '{manager}'.")
+        return
+    print(f"{len(entries)} open action item(s) for {len(reports)} direct report(s) of "
+          f"'{manager}':\n")
+    for i, e in enumerate(entries, 1):
+        _print_task(e, i)
+
+
+def cmd_tasks_done(args):
+    """Mark an action item as done."""
+    from threadweave.store import EntryStore
+    from threadweave.action_items import set_task_status, ActionStatus
+
+    store = EntryStore()
+    ok = set_task_status(store, args.entry_id, ActionStatus.DONE)
+    if ok:
+        print(f"Marked {args.entry_id} as done.")
+    else:
+        print(f"No open action item found with id '{args.entry_id}'.", file=sys.stderr)
+        sys.exit(1)
+
+
+def cmd_tasks_undone(args):
+    """Reopen a done/suggested-done action item."""
+    from threadweave.store import EntryStore
+    from threadweave.action_items import set_task_status, ActionStatus
+
+    store = EntryStore()
+    ok = set_task_status(store, args.entry_id, ActionStatus.OPEN)
+    if ok:
+        print(f"Reopened {args.entry_id} (status = open).")
+    else:
+        print(f"No action item found with id '{args.entry_id}'.", file=sys.stderr)
+        sys.exit(1)
+
+
+def _current_user() -> str:
+    """Best-effort current OS user as an owner fallback."""
+    import getpass
+    return getpass.getuser()
+
+
 # ── Graph Connector Commands ───────────────────────────────────────
 
 def cmd_graph_setup(args):
@@ -798,6 +889,29 @@ def build_parser() -> argparse.ArgumentParser:
         "daemon", help="Manage connector daemons as OS services")
     daemon_sub = p_daemon.add_subparsers(dest="daemon_command")
 
+    # tasks — action items
+    p_tasks = sub.add_parser(
+        "tasks", help="Action items: list, mark done, manager view")
+    tasks_sub = p_tasks.add_subparsers(dest="tasks_command")
+    p_tasks_list = tasks_sub.add_parser(
+        "list", help="List open action items (optionally by owner)")
+    p_tasks_list.add_argument("--owner", default="",
+                              help="Only list items assigned to this owner")
+    p_tasks_list.add_argument("--host", default="localhost")
+    p_tasks_list.add_argument("--port", type=int, default=8000)
+    p_tasks_team = tasks_sub.add_parser(
+        "team", help="List open action items of a manager's direct reports")
+    p_tasks_team.add_argument("--manager", default="",
+                              help="Manager id (default: current OS user)")
+    p_tasks_team.add_argument("--owner", default="",
+                              help="Alias for --manager")
+    p_tasks_done = tasks_sub.add_parser(
+        "done", help="Mark an action item as done")
+    p_tasks_done.add_argument("entry_id")
+    p_tasks_undone = tasks_sub.add_parser(
+        "undone", help="Reopen a done action item")
+    p_tasks_undone.add_argument("entry_id")
+
     p_teams = sub.add_parser("teams", help="Teams app tooling")
     teams_sub = p_teams.add_subparsers(dest="teams_command")
     p_teams_pkg = teams_sub.add_parser(
@@ -935,6 +1049,17 @@ def main() -> None:
             cmd_graph_daemon(args)
         else:
             p_graph.print_help()
+    elif args.command == "tasks":
+        if args.tasks_command == "list":
+            cmd_tasks_list(args)
+        elif args.tasks_command == "team":
+            cmd_tasks_team(args)
+        elif args.tasks_command == "done":
+            cmd_tasks_done(args)
+        elif args.tasks_command == "undone":
+            cmd_tasks_undone(args)
+        else:
+            p_tasks.print_help()
     elif args.command == "org":
         if args.org_command == "sync":
             cmd_org_sync(args)

@@ -408,6 +408,67 @@ class TestIngestPipeline:
         assert data["should_save"] is True
         assert data["content_type"] == "decision"
 
+    def test_private_channel_isolated_end_to_end(self):
+        """End-to-end: a private-channel message is stored but only its
+        members can retrieve it via direct access AND search.
+
+        This is the KM management-channel requirement. A non-member (even
+        with admin clearance) must not see it through any retrieval path.
+        """
+        ingest = client.post("/api/v1/ingest", json={
+            "content": (
+                "We have decided to freeze headcount across the department "
+                "for FY26 and halt all hiring until the Q2 review, and this "
+                "management decision is now finalized and documented."
+            ),
+            "source": "teams",
+            "tenant_id": "acme-corp",
+            "metadata": {
+                "wing": "dept-team",
+                "room": "management",
+                "private_channel": True,
+                "sensitivity": "restricted",
+                "allowed_people": ["mgmt-user-1", "mgmt-user-2"],
+            },
+        })
+        assert ingest.status_code == 201
+        entry_id = ingest.json()["id"]
+
+        # Direct access: member sees it, non-member (even admin) is denied.
+        member_get = client.get(
+            f"/api/v1/entries/{entry_id}",
+            params={"person_id": "mgmt-user-1"},
+        )
+        assert member_get.status_code == 200
+
+        nonmember_get = client.get(
+            f"/api/v1/entries/{entry_id}",
+            params={"person_id": "sysadmin", "role": "admin"},
+        )
+        assert nonmember_get.status_code == 403
+
+        # Search: member sees the hit, non-member does not.
+        member_search = client.post("/api/v1/search", json={
+            "query": "headcount freeze",
+            "tenant_id": "acme-corp",
+            "requester_team": "mgmt-user-1",
+        })
+        assert member_search.status_code == 200
+        assert any(
+            r["id"] == entry_id for r in member_search.json()["results"]
+        )
+
+        nonmember_search = client.post("/api/v1/search", json={
+            "query": "headcount freeze",
+            "tenant_id": "acme-corp",
+            "requester_team": "sysadmin",
+            "requester_role": "admin",
+        })
+        assert nonmember_search.status_code == 200
+        assert not any(
+            r["id"] == entry_id for r in nonmember_search.json()["results"]
+        )
+
 
 class TestMemPalaceSearch:
     """Tests for hybrid search (MemPalace semantic + keyword fallback)."""
@@ -628,4 +689,161 @@ class TestSearchMempalaceMetadata:
         assert all(
             x["id"] != entry_id for x in results
         ), f"deleted entry still searchable: {results}"
+
+
+class TestActionItemEndpoints:
+    """Action-item (task) endpoints: list, done, undone."""
+
+    @pytest.fixture(autouse=True)
+    def _isolate_notify_store(self, tmp_path, monkeypatch):
+        """Give each test a fresh notification DB so action-item task
+        notifications don't leak into other tests (the shared notify
+        singleton would otherwise pollute test_notifications.py)."""
+        import threadweave.notify as notify_mod
+
+        monkeypatch.setenv(
+            "THREADWEAVE_NOTIFY_DB",
+            str(tmp_path / "notifications.sqlite3"),
+        )
+        notify_mod._store = None
+        yield
+        notify_mod._store = None
+
+    def _ingest_assignment(self, content, author="boss@x.com"):
+        resp = client.post("/api/v1/ingest", json={
+            "content": content,
+            "source": "teams",
+            "metadata": {"author_id": author},
+        })
+        assert resp.status_code == 201
+        return resp.json()["id"]
+
+    def test_list_tasks_by_owner(self):
+        eid = self._ingest_assignment(
+            "Adele should look into the Azure quota issue."
+        )
+        # owner matching by name works without org resolution on the bot side
+        r = client.get("/api/v1/tasks", params={"owner": "Adele"})
+        assert r.status_code == 200
+        ids = [t["id"] for t in r.json()["tasks"]]
+        assert eid in ids
+
+    def test_list_tasks_empty(self):
+        r = client.get("/api/v1/tasks", params={"owner": "nobody@x.com"})
+        assert r.status_code == 200
+        assert r.json()["tasks"] == []
+
+    def test_task_done_and_undone(self):
+        eid = self._ingest_assignment(
+            "Harald should chase the vendor by Friday."
+        )
+        # open by default
+        r = client.get("/api/v1/tasks", params={"owner": "harald"})
+        assert any(t["id"] == eid and t["status"] == "open"
+                   for t in r.json()["tasks"])
+
+        # mark done → no longer open
+        r = client.post(f"/api/v1/tasks/{eid}/done")
+        assert r.status_code == 200
+        r = client.get("/api/v1/tasks", params={"owner": "harald"})
+        assert all(t["id"] != eid for t in r.json()["tasks"])
+
+        # done filter shows it
+        r = client.get("/api/v1/tasks", params={"owner": "harald",
+                                                "status": "done"})
+        assert any(t["id"] == eid for t in r.json()["tasks"])
+
+        # undone → open again
+        r = client.post(f"/api/v1/tasks/{eid}/undone")
+        assert r.status_code == 200
+        r = client.get("/api/v1/tasks", params={"owner": "harald"})
+        assert any(t["id"] == eid for t in r.json()["tasks"])
+
+    def test_task_done_missing_404(self):
+        r = client.post("/api/v1/tasks/does-not-exist/done")
+        assert r.status_code == 404
+
+    def test_ingest_queues_task_notification_to_assignee(self):
+        """A high-confidence resolved assignment notifies the assignee."""
+        from threadweave.notify import get_notification_store
+
+        # Ensure a clean store snapshot of pending before this ingest
+        before = {n["id"] for n in
+                  get_notification_store().pending(limit=100)}
+        eid = self._ingest_assignment(
+            "Harald should follow up on the vendor invoice.",
+            author="boss@x.com",
+        )
+        pending = get_notification_store().pending(limit=100)
+        new = [n for n in pending if n["id"] not in before]
+        task_notifs = [n for n in new if n.get("kind") == "task"]
+        assert task_notifs, "expected a task notification for the assignee"
+        # Notification is addressed to the assignee (Harald), not the author
+        assert task_notifs[0]["author_id"] == "harald"
+        assert task_notifs[0]["entry_id"] == eid
+
+    def test_ingest_completion_sets_suggested_done(self):
+        """A 'done' statement from the assignee suggests the task is done."""
+        from threadweave.notify import get_notification_store
+
+        before = {n["id"] for n in
+                  get_notification_store().pending(limit=100)}
+        # 1. assign harald a task (unique content to avoid dedup with other tests)
+        task_id = self._ingest_assignment(
+            "Harald should chase the Phase3 vendor by Friday.",
+            author="boss@x.com",
+        )
+        # open
+        r = client.get("/api/v1/tasks", params={"owner": "harald"})
+        assert any(t["id"] == task_id and t["status"] == "open"
+                   for t in r.json()["tasks"])
+
+        # 2. harald reports completion
+        c = client.post("/api/v1/ingest", json={
+            "content": "I've chased the vendor now.",
+            "source": "teams",
+            "metadata": {"author_id": "harald"},
+        })
+        assert c.status_code == 201
+
+        # task now suggested_done, not open
+        r = client.get("/api/v1/tasks", params={"owner": "harald"})
+        assert all(t["id"] != task_id for t in r.json()["tasks"])
+        r = client.get("/api/v1/tasks", params={"owner": "harald",
+                                                "status": "suggested_done"})
+        assert any(t["id"] == task_id for t in r.json()["tasks"])
+
+        # a task_suggest confirmation notification was queued to harald
+        # for the suggested task(s) (the shared entry store may hold other
+        # matching tasks from earlier tests, so assert the suggestion
+        # notification is addressed to harald and refers to a suggested task)
+        pending = get_notification_store().pending(limit=100)
+        new = [n for n in pending if n["id"] not in before]
+        suggests = [n for n in new if n.get("kind") == "task_suggest"]
+        assert suggests, "expected a task_suggest confirmation notification"
+        assert suggests[0]["author_id"] == "harald"
+
+        # 3. confirm → done
+        r = client.post(f"/api/v1/tasks/{task_id}/done")
+        assert r.status_code == 200
+        r = client.get("/api/v1/tasks", params={"owner": "harald",
+                                                "status": "done"})
+        assert any(t["id"] == task_id for t in r.json()["tasks"])
+
+    def test_ingest_completion_no_match_changes_nothing(self):
+        """An unrelated completion from the assignee leaves open tasks open."""
+        task_id = self._ingest_assignment(
+            "Harald should chase the vendor.",
+            author="boss@x.com",
+        )
+        c = client.post("/api/v1/ingest", json={
+            "content": "I've finished the coffee now.",
+            "source": "teams",
+            "metadata": {"author_id": "harald"},
+        })
+        assert c.status_code == 201
+        r = client.get("/api/v1/tasks", params={"owner": "harald"})
+        assert any(t["id"] == task_id and t["status"] == "open"
+                   for t in r.json()["tasks"])
+
 

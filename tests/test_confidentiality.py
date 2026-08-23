@@ -344,6 +344,90 @@ class TestRequesterContext:
         }
         assert ctx.can_see(entry)
 
+    # ---- Private-channel gate (KM management-channel requirement) ----
+
+    def test_private_channel_member_can_see(self):
+        """A member of the private channel sees the content."""
+        ctx = RequesterContext(
+            person_id="mgmt-user-1",
+            role="readwrite",
+            clearance=SensitivityLevel.INTERNAL,
+        )
+        entry = {
+            "wing": "dept",
+            "sensitivity": "restricted",
+            "allowed_people": ["mgmt-user-1", "mgmt-user-2"],
+            "source_metadata": {"private_channel": True},
+        }
+        assert ctx.can_see(entry)
+
+    def test_private_channel_non_member_blocked(self):
+        """A department colleague NOT in the private channel is blocked,
+        even with higher clearance and the same wing."""
+        ctx = RequesterContext(
+            person_id="engineer-9",
+            wing="dept",
+            role="readwrite",
+            clearance=SensitivityLevel.LEGAL_PRIVILEGED,
+        )
+        entry = {
+            "wing": "dept",
+            "sensitivity": "restricted",
+            "allowed_people": ["mgmt-user-1", "mgmt-user-2"],
+            "source_metadata": {"private_channel": True},
+        }
+        assert not ctx.can_see(entry)
+
+    def test_private_channel_admin_cannot_bypass(self):
+        """System admin who is NOT a channel member cannot bypass the gate.
+
+        Unlike RESTRICTED (which admins can see), a management private
+        channel must not leak to anyone outside the group, including
+        admins. This is the strictest rule and runs before all others.
+        """
+        ctx = RequesterContext(
+            person_id="sysadmin",
+            role="admin",
+            clearance=SensitivityLevel.LEGAL_PRIVILEGED,
+        )
+        entry = {
+            "wing": "dept",
+            "sensitivity": "restricted",
+            "allowed_people": ["mgmt-user-1", "mgmt-user-2"],
+            "source_metadata": {"private_channel": True},
+        }
+        assert not ctx.can_see(entry)
+
+    def test_private_channel_empty_members_denied_even_for_admin(self):
+        """Fail closed: empty member list means nobody (even admin) can see."""
+        ctx = RequesterContext(
+            person_id="sysadmin",
+            role="admin",
+            clearance=SensitivityLevel.LEGAL_PRIVILEGED,
+        )
+        entry = {
+            "wing": "dept",
+            "sensitivity": "restricted",
+            "allowed_people": [],
+            "source_metadata": {"private_channel": True},
+        }
+        assert not ctx.can_see(entry)
+
+    def test_standard_channel_not_private_gate(self):
+        """Non-private entries are unaffected by the private-channel gate."""
+        ctx = RequesterContext(
+            person_id="engineer-9",
+            wing="dept",
+            role="readwrite",
+            clearance=SensitivityLevel.INTERNAL,
+        )
+        entry = {
+            "wing": "dept",
+            "sensitivity": "internal",
+            "source_metadata": {"private_channel": False},
+        }
+        assert ctx.can_see(entry)
+
     def test_legal_privileged_blocked_for_non_legal(self):
         ctx = RequesterContext(
             wing="engineering",

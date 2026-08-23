@@ -334,6 +334,18 @@ class RequesterContext:
             entry.get("sensitivity", "internal")
         )
 
+        # 0. Private-channel gate — strictest, first, and AUTHORITATIVE.
+        #    Content captured from a Teams private channel (or any source
+        #    flagged private_channel) is visible ONLY to the channel's own
+        #    members, with NO role bypass. Membership is the grant: a
+        #    member sees it regardless of nominal clearance (their channel
+        #    membership IS the clearance), and a non-member never sees it,
+        #    including admins/legal/hr who would bypass RESTRICTED. Fail
+        #    closed: an empty member list means nobody can see it.
+        if entry.get("source_metadata", {}).get("private_channel"):
+            members = entry.get("allowed_people", []) or []
+            return self.person_id in members
+
         # 1. Clearance check
         if not sensitivity.can_access(self.clearance):
             return False

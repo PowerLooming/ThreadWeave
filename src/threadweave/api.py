@@ -367,6 +367,25 @@ async def get_metrics_prometheus():
 # ---- INGEST — Central Pipeline ----
 
 
+def _extract_action_items(content: str, meta: dict) -> list:
+    """Extract action items from content for the ingest pipeline.
+
+    ``you`` resolves to the message author (from metadata). Named-owner
+    resolution against the org model is a later phase; here owners are
+    resolved only to the author, so explicit named owners are captured
+    with owner_resolved=False unless they match the author.
+    """
+    try:
+        from threadweave.action_items import extract_action_items
+
+        author = meta.get("author_id") or meta.get("email_sender", "")
+        return extract_action_items(
+            content, author_id=author, org=None, author_name=author
+        )
+    except Exception:
+        return []
+
+
 @app.post("/api/v1/ingest", response_model=IngestResponse, status_code=201)
 @track_latency(metrics.ingest_latency)
 async def ingest_content(req: IngestRequest, request: Request):
@@ -488,8 +507,57 @@ async def ingest_content(req: IngestRequest, request: Request):
             detector=detector_mode,
         )
 
-    # 4. Check if worth saving
-    if not should_save:
+    # 4. Check if worth saving. An entry is still saved when it contains a
+    #    high-confidence resolved action item, even if the base classification
+    #    wouldn't otherwise meet the knowledge threshold — assignments are
+    #    captured regardless of whether the message is a knowledge entry.
+    action_items = _extract_action_items(req.content, req.metadata)
+    force_save = any(
+        it.owner_resolved and it.owner and it.confidence >= 0.55
+        for it in action_items
+    )
+
+    # Completion detection — when the author reports a task as done
+    # ("I've chased the vendor"), correlate it to their open tasks and
+    # set SUGGESTED_DONE (never DONE directly). This must run BEFORE the
+    # not_saved return: a bare completion statement may not itself be a
+    # knowledge entry, but it still closes the loop on an open task.
+    # The owner confirms via the bot ("tasks done 1" / "tasks not done 1").
+    suggested_entries: list[dict] = []
+    try:
+        from threadweave.action_items import suggest_done
+
+        author = req.metadata.get("author_id") or req.metadata.get(
+            "email_sender", ""
+        )
+        if author:
+            suggested_entries = suggest_done(
+                get_entry_store(), req.content, author_id=author
+            )
+            # Queue a confirmation notification to the assignee for each
+            # suggested task ("Looks like X is done?").
+            for task_entry in suggested_entries:
+                suggestion_id = hashlib.sha256(
+                    f"{task_entry['id']}:suggest".encode()
+                ).hexdigest()[:16]
+                get_notification_store().enqueue(
+                    notification_id=suggestion_id,
+                    entry_id=task_entry["id"],
+                    author_id=author,
+                    title=(task_entry.get("source_metadata") or {}).get(
+                        "action", task_entry.get("content", "")
+                    ),
+                    wing=task_entry.get("wing", ""),
+                    room=task_entry.get("room", ""),
+                    source=req.source,
+                    created_at=task_entry.get("created_at", ""),
+                    message_url=req.metadata.get("message_url", ""),
+                    kind="task_suggest",
+                )
+    except Exception as exc:
+        logger.warning("Completion detection failed for ingest: %s", exc)
+
+    if not should_save and not force_save:
         metrics.record_ingest(skipped=True)
         return IngestResponse(
             id="not_saved",
@@ -511,6 +579,22 @@ async def ingest_content(req: IngestRequest, request: Request):
     # Sensitivity detection
     sens = detect_sensitivity(req.content)
 
+    # Sensitivity override: a connector (e.g. the Teams watcher for a
+    # private channel) may pin the entry's sensitivity via metadata.
+    # Validate the value; fall back to auto-detection otherwise.
+    override = (req.metadata.get("sensitivity") or "").strip()
+    if override:
+        try:
+            effective_sensitivity = SensitivityLevel(override).value
+        except ValueError:
+            logger.warning(
+                "Ignoring invalid sensitivity override %r for %s",
+                override, req.source,
+            )
+            effective_sensitivity = sens.suggested_level.value
+    else:
+        effective_sensitivity = sens.suggested_level.value
+
     entry = {
         "id": entry_id,
         "content": req.content,
@@ -530,10 +614,44 @@ async def ingest_content(req: IngestRequest, request: Request):
         "has_pii": result.has_pii,
         "tenant_id": req.tenant_id,
         "source_metadata": req.metadata,
-        "sensitivity": sens.suggested_level.value,
+        "sensitivity": effective_sensitivity,
         "client_id": req.metadata.get("client_id"),
         "allowed_people": req.metadata.get("allowed_people", []),
     }
+
+    # Action-item capture — attach detected responsibility assignments to
+    # the entry and queue a task notification to the assignee for each
+    # high-confidence resolved item (Phase 2). The assignee's opt-out is
+    # respected: an opted-out person is never notified about a task.
+    try:
+        from threadweave.action_items import attach_to_entry
+
+        for it in action_items:
+            attach_to_entry(entry, it)
+            if (
+                it.owner_resolved
+                and it.owner
+                and it.confidence >= 0.55
+                and not optout.is_opted_out(it.owner)
+            ):
+                task_notif_id = hashlib.sha256(
+                    f"{entry_id}:task:{it.owner}:{it.action}".encode()
+                ).hexdigest()[:16]
+                get_notification_store().enqueue(
+                    notification_id=task_notif_id,
+                    entry_id=entry_id,
+                    author_id=it.owner,
+                    title=it.action,
+                    wing=entry["wing"],
+                    room=entry["room"],
+                    source=req.source,
+                    created_at=entry["created_at"],
+                    message_url=req.metadata.get("message_url", ""),
+                    kind="task",
+                )
+    except Exception as exc:
+        logger.warning("Action-item capture failed for ingest %s: %s",
+                       entry_id, exc)
 
     # Mark as seen only after the entry is actually stored
     _dedup_hashes.add(content_hash)
@@ -895,6 +1013,78 @@ async def notifications_stats():
             "skipped": store.count_skipped()}
 
 
+# ---- Action items (tasks) ----
+
+@app.get("/api/v1/tasks")
+async def list_tasks(owner: str = "", status: str = "open"):
+    """List action-item entries, optionally filtered by owner or status.
+
+    ``owner`` matches the resolved owner id OR the owner display name
+    (case-insensitive), so the Teams bot can answer both ``my tasks``
+    (owner = the caller's AAD id) and ``tasks for Adele`` (owner = a
+    name) without needing org resolution on its side.
+
+    ``status``: open (default), done, suggested_done, all.
+    """
+    from threadweave.action_items import is_action_entry
+
+    status = (status or "open").lower()
+    owner_l = owner.strip().lower()
+    result = []
+    for entry in get_entry_store().load_all():
+        if not is_action_entry(entry):
+            continue
+        md = entry.get("source_metadata") or {}
+        st = md.get("action_status", "open")
+        if status == "pending_open":
+            # open + suggested_done (the "actionable" view the bot uses for
+            # done/not-done confirmation commands)
+            if st not in ("open", "suggested_done"):
+                continue
+        elif status not in ("all", st):
+            continue
+        if owner_l:
+            oid = (md.get("action_owner") or "").lower()
+            oname = (md.get("action_owner_name") or "").lower()
+            if oid != owner_l and oname != owner_l:
+                continue
+        result.append({
+            "id": entry["id"],
+            "content": entry.get("content", ""),
+            "action": md.get("action", ""),
+            "owner": md.get("action_owner", ""),
+            "owner_name": md.get("action_owner_name", ""),
+            "owner_resolved": bool(md.get("action_owner_resolved", False)),
+            "deadline": md.get("action_deadline", ""),
+            "status": st,
+            "confidence": md.get("action_confidence", 0.5),
+            "created_at": entry.get("created_at", ""),
+        })
+    # Newest first
+    result.sort(key=lambda r: r.get("created_at", ""), reverse=True)
+    return {"tasks": result}
+
+
+@app.post("/api/v1/tasks/{entry_id}/done")
+async def task_done(entry_id: str):
+    """Mark an action-item entry as done."""
+    from threadweave.action_items import ActionStatus, set_task_status
+
+    if not set_task_status(get_entry_store(), entry_id, ActionStatus.DONE):
+        raise HTTPException(status_code=404, detail="Action item not found")
+    return {"id": entry_id, "status": "done"}
+
+
+@app.post("/api/v1/tasks/{entry_id}/undone")
+async def task_undone(entry_id: str):
+    """Reopen an action-item entry (done or suggested_done -> open)."""
+    from threadweave.action_items import ActionStatus, set_task_status
+
+    if not set_task_status(get_entry_store(), entry_id, ActionStatus.OPEN):
+        raise HTTPException(status_code=404, detail="Action item not found")
+    return {"id": entry_id, "status": "open"}
+
+
 # ---- Entry version chain ----
 
 @app.get("/api/v1/entries/{entry_id}/versions")
@@ -1031,6 +1221,9 @@ async def search(req: SearchRequest, request: Request):
                 if tenants and (mr.tenant_id or "default") not in tenants:
                     continue
                 mp_ids.add(mr.drawer_id)
+                # Pull private-channel scoping from the source entry so the
+                # strict gate fires on MemPalace search hits too.
+                _src = _memory_store.get(mr.drawer_id, {})
                 mp_hits.append({
                     "id": mr.drawer_id,
                     "title": "",
@@ -1045,6 +1238,8 @@ async def search(req: SearchRequest, request: Request):
                     "bm25_score": mr.bm25_score,
                     "source": "mempalace",
                     "sensitivity": mr.sensitivity or "internal",
+                    "source_metadata": _src.get("source_metadata", {}),
+                    "allowed_people": _src.get("allowed_people", []),
                 })
             seen_ids.update(mp_ids)
             results.extend(mp_hits)
@@ -1090,6 +1285,11 @@ async def search(req: SearchRequest, request: Request):
                 "content_type": entry.get("content_type", "unknown"),
                 "source": "in_memory",
                 "sensitivity": entry.get("sensitivity", "internal"),
+                # Private-channel scoping must survive into filter_results,
+                # or the strict gate never fires on search (the leak this
+                # feature exists to stop).
+                "source_metadata": entry.get("source_metadata", {}),
+                "allowed_people": entry.get("allowed_people", []),
             })
 
     # ── 3. Confidentiality filtering ──
