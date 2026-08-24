@@ -90,6 +90,7 @@ CREATE TABLE IF NOT EXISTS {self.table_name} (
     sensitivity TEXT DEFAULT 'internal',
     client_id TEXT,
     allowed_people TEXT DEFAULT '[]',
+    acl TEXT DEFAULT '{{}}',
     version_of TEXT
 )
 """,
@@ -111,6 +112,16 @@ CREATE TABLE IF NOT EXISTS {self.table_name} (
                     conn.execute(text(
                         f"ALTER TABLE {self.table_name} ADD COLUMN "
                         "version_of TEXT"
+                    ))
+                # Migration for existing DBs: add acl if missing.
+                has_acl = any(
+                    col["name"] == "acl"
+                    for col in self._columns()
+                )
+                if not has_acl:
+                    conn.execute(text(
+                        f"ALTER TABLE {self.table_name} ADD COLUMN "
+                        "acl TEXT DEFAULT '{}'"
                     ))
         except Exception as exc:
             logger.warning(
@@ -149,6 +160,7 @@ CREATE TABLE IF NOT EXISTS {self.table_name} (
             "sensitivity": entry.get("sensitivity", "internal"),
             "client_id": entry.get("client_id"),
             "allowed_people": json.dumps(entry.get("allowed_people", [])),
+            "acl": json.dumps(entry.get("acl", {})),
             "version_of": entry.get("version_of"),
         }
 
@@ -172,6 +184,7 @@ CREATE TABLE IF NOT EXISTS {self.table_name} (
             "sensitivity": row["sensitivity"],
             "client_id": row["client_id"],
             "allowed_people": json.loads(row["allowed_people"] or "[]"),
+            "acl": json.loads(row["acl"] or "{}"),
             "version_of": row["version_of"],
         }
 

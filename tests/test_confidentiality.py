@@ -474,6 +474,107 @@ class TestRequesterContext:
 
 
 # ═══════════════════════════════════════════════════════════════════════
+# P1 — General per-source ACL gate (deny-overrides-grant)
+# ═══════════════════════════════════════════════════════════════════════
+
+class TestSourceACLGate:
+    """The generalized per-source ACL gate in can_see().
+
+    A source may tag content with an ``acl`` block:
+      allowed_users / allowed_groups / deny_users / deny_groups / revoked_at.
+    The gate is authoritative (no role bypass), and DENY overrides GRANT.
+    An empty/missing ACL falls through to the normal clearance checks.
+    """
+
+    def _entry(self, acl):
+        return {"wing": "engineering", "sensitivity": "internal", "acl": acl}
+
+    def test_allowed_user_sees(self):
+        ctx = RequesterContext(person_id="alice", groups=[])
+        assert ctx.can_see(self._entry(
+            {"allowed_users": ["alice", "bob"]}
+        ))
+
+    def test_non_allowed_user_blocked(self):
+        ctx = RequesterContext(person_id="charlie", groups=[])
+        assert not ctx.can_see(self._entry(
+            {"allowed_users": ["alice", "bob"]}
+        ))
+
+    def test_allowed_group_member_sees(self):
+        ctx = RequesterContext(person_id="alice", groups=["grp-finance"])
+        assert ctx.can_see(self._entry(
+            {"allowed_groups": ["grp-finance"]}
+        ))
+
+    def test_non_member_of_allowed_group_blocked(self):
+        ctx = RequesterContext(person_id="alice", groups=["grp-eng"])
+        assert not ctx.can_see(self._entry(
+            {"allowed_groups": ["grp-finance"]}
+        ))
+
+    def test_deny_overrides_grant_user(self):
+        """A user in deny_users is blocked even if also in allowed_users."""
+        ctx = RequesterContext(person_id="alice", groups=[])
+        assert not ctx.can_see(self._entry(
+            {"allowed_users": ["alice", "bob"], "deny_users": ["alice"]}
+        ))
+
+    def test_deny_group_overrides_allowed_group(self):
+        """A user in a deny_group is blocked even if in an allowed_group."""
+        ctx = RequesterContext(person_id="alice", groups=["grp-a", "grp-deny"])
+        assert not ctx.can_see(self._entry(
+            {"allowed_groups": ["grp-a"], "deny_groups": ["grp-deny"]}
+        ))
+
+    def test_admin_cannot_bypass_acl(self):
+        """A source ACL is authoritative: admin does NOT bypass it."""
+        ctx = RequesterContext(person_id="", role="admin")
+        assert not ctx.can_see(self._entry(
+            {"allowed_users": ["alice", "bob"]}
+        ))
+
+    def test_revoked_entry_denied(self):
+        """Fast revocation: revoked_at >= granted_at blocks the entry."""
+        ctx = RequesterContext(person_id="alice", groups=[])
+        entry = self._entry({
+            "allowed_users": ["alice", "bob"],
+            "acl_granted_at": "2026-08-01T00:00:00+00:00",
+            "revoked_at": "2026-08-02T00:00:00+00:00",
+        })
+        assert not ctx.can_see(entry)
+
+    def test_revocation_before_grant_does_not_block(self):
+        """A revoked_at earlier than the grant is not a live revocation."""
+        ctx = RequesterContext(person_id="alice", groups=[])
+        entry = self._entry({
+            "allowed_users": ["alice", "bob"],
+            "acl_granted_at": "2026-08-02T00:00:00+00:00",
+            "revoked_at": "2026-08-01T00:00:00+00:00",
+        })
+        assert ctx.can_see(entry)
+
+    def test_empty_acl_falls_through_to_clearance(self):
+        """No ACL = normal behaviour; internal clearance sees internal."""
+        ctx = RequesterContext(person_id="alice", role="readwrite",
+                               clearance=SensitivityLevel.INTERNAL)
+        assert ctx.can_see(self._entry({}))
+
+    def test_acl_with_private_channel_still_membership_gated(self):
+        """Private-channel rule 0 still wins over a general ACL grant."""
+        ctx = RequesterContext(person_id="alice", groups=["grp-a"])
+        entry = {
+            "wing": "engineering",
+            "sensitivity": "internal",
+            "source_metadata": {"private_channel": True},
+            "allowed_people": ["bob"],
+            "acl": {"allowed_groups": ["grp-a"]},
+        }
+        # alice is in grp-a but not in the private-channel members → denied
+        assert not ctx.can_see(entry)
+
+
+# ═══════════════════════════════════════════════════════════════════════
 # Audit Log Tests
 # ═══════════════════════════════════════════════════════════════════════
 

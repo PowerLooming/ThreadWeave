@@ -111,11 +111,37 @@ def _request_ip_hash(request: Request) -> str:
     return hashlib.sha256(host.encode()).hexdigest()[:16]
 
 
+def _materialize_acl(acl: Optional[dict]) -> dict:
+    """Normalize a per-source ACL block into a stored, enforced form.
+
+    Accepts an optional ``acl`` dict from connector metadata with any of:
+      allowed_users / allowed_groups / deny_users / deny_groups / revoked_at
+    Keeps only the recognized keys, coerces lists to lists of str, and stamps
+    ``acl_granted_at`` (now) on the initial grant so the confidentiality gate's
+    fast-revocation comparison has a baseline. Returns {} when no ACL is set.
+    """
+    if not acl:
+        return {}
+    now = datetime.now(timezone.utc).isoformat()
+    out: dict = {}
+    for key in ("allowed_users", "allowed_groups", "deny_users", "deny_groups"):
+        val = acl.get(key)
+        if val:
+            out[key] = [str(v) for v in val]
+    if acl.get("revoked_at"):
+        out["revoked_at"] = str(acl["revoked_at"])
+    # Only stamp a grant baseline when there is something to grant/deny.
+    if out and "acl_granted_at" not in out:
+        out["acl_granted_at"] = now
+    return out
+
+
 def _requester_from_request(
     request: Request,
     wing: str = "",
     person_id: str = "",
     role: str = "readwrite",
+    groups: Optional[list[str]] = None,
 ) -> RequesterContext:
     """Build the requester context from TRUSTED key claims when present.
 
@@ -131,12 +157,14 @@ def _requester_from_request(
             person_id=getattr(request.state, "auth_person", ""),
             wing=getattr(request.state, "auth_wing", ""),
             role=key_role,
+            groups=getattr(request.state, "auth_groups", None) or [],
             clearance=_clearance_for_role(key_role),
         )
     return RequesterContext(
         person_id=person_id,
         wing=wing,
         role=role,
+        groups=groups or [],
     )
 
 
@@ -236,6 +264,7 @@ class SearchRequest(BaseModel):
     room: Optional[str] = None
     requester_team: Optional[str] = None
     requester_role: Optional[str] = None
+    requester_groups: Optional[list[str]] = None
     limit: int = Field(default=10, ge=1, le=100)
     tenant_id: str = Field(default="default")
 
@@ -598,6 +627,10 @@ async def ingest_content(req: IngestRequest, request: Request):
         "sensitivity": effective_sensitivity,
         "client_id": req.metadata.get("client_id"),
         "allowed_people": req.metadata.get("allowed_people", []),
+        # Per-source ACL materialized at ingest (allowed_users/groups,
+        # deny_users/groups, revoked_at, acl_granted_at). Enforced by the
+        # confidentiality gate with deny-overrides-grant.
+        "acl": _materialize_acl(req.metadata.get("acl")),
     }
 
     # Action-item capture — attach detected responsibility assignments to
@@ -838,6 +871,7 @@ async def get_entry(
     person_id: Optional[str] = Query(None),
     wing: Optional[str] = Query(None),
     role: str = Query("readwrite"),
+    groups: Optional[str] = Query(None),
 ):
     entry = _memory_store.get(entry_id)
     if not entry:
@@ -855,6 +889,7 @@ async def get_entry(
         wing=wing or "",
         person_id=person_id or "",
         role=role,
+        groups=(groups.split(",") if groups else []),
     )
     if not requester.can_see(entry):
         audit = get_audit_log()
@@ -937,6 +972,59 @@ async def delete_entry(
     except Exception:
         pass
     return Response(status_code=204)
+
+
+# ---- Revoke source ACL (fast permission revocation) ----
+
+@app.post("/api/v1/entries/{entry_id}/revoke", status_code=200)
+async def revoke_entry_acl(
+    entry_id: str,
+    request: Request,
+    person_id: Optional[str] = Query(None),
+    role: str = Query("readwrite"),
+):
+    """Revoke a per-source ACL grant immediately, without re-ingest.
+
+    Sets ``revoked_at`` on the entry's ``acl`` so the confidentiality gate
+    denies it on the next access (deny-overrides-grant + fast revocation).
+    Only admin/legal/hr may revoke (a source boundary must not be lifted by
+    an ordinary member). Idempotent: revoking an already-revoked or
+    ACL-less entry succeeds.
+    """
+    entry = _memory_store.get(entry_id)
+    if not entry:
+        raise HTTPException(status_code=404, detail="Entry not found")
+
+    scoped = _scoped_tenant(request)
+    if scoped and entry.get("tenant_id", "default") != scoped:
+        raise HTTPException(status_code=404, detail="Entry not found")
+
+    requester = _requester_from_request(
+        request, person_id=person_id or "", role=role,
+    )
+    if requester.role not in ("admin", "legal", "hr_admin"):
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    acl = entry.setdefault("acl", {}) or {}
+    # Base the grant baseline on the existing stamp, or now if absent.
+    granted = acl.get("acl_granted_at") or datetime.now(timezone.utc).isoformat()
+    acl["acl_granted_at"] = granted
+    acl["revoked_at"] = datetime.now(timezone.utc).isoformat()
+    entry["acl"] = acl
+
+    # Persist the revocation so it survives restarts.
+    try:
+        get_entry_store().save(entry)
+    except Exception:
+        pass
+
+    audit = get_audit_log()
+    audit.log_access(
+        requester, entry,
+        action="revoke_acl",
+        ip_hash=_request_ip_hash(request),
+    )
+    return {"id": entry_id, "revoked": True}
 
 
 # ---- Capture notifications (bot polling) ----
@@ -1147,6 +1235,7 @@ async def search(req: SearchRequest, request: Request):
         wing=req.requester_team or "",
         person_id=req.requester_team or "",  # requester_team doubles as person_id
         role=req.requester_role or "readwrite",
+        groups=req.requester_groups or [],
     )
 
     # ── 1. MemPalace hybrid search ──
@@ -1185,6 +1274,7 @@ async def search(req: SearchRequest, request: Request):
                     "sensitivity": mr.sensitivity or "internal",
                     "source_metadata": _src.get("source_metadata", {}),
                     "allowed_people": _src.get("allowed_people", []),
+                    "acl": _src.get("acl", {}),
                 })
         except Exception as exc:
             logger.warning(
@@ -1231,9 +1321,11 @@ async def search(req: SearchRequest, request: Request):
                 "sensitivity": entry.get("sensitivity", "internal"),
                 # Private-channel scoping must survive into filter_results,
                 # or the strict gate never fires on search (the leak this
-                # feature exists to stop).
+                # feature exists to stop). Same for the general per-source
+                # ACL gate.
                 "source_metadata": entry.get("source_metadata", {}),
                 "allowed_people": entry.get("allowed_people", []),
+                "acl": entry.get("acl", {}),
             })
 
     # ── 3. Confidentiality filtering ──

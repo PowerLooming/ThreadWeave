@@ -427,6 +427,116 @@ class TestIngestPipeline:
             r["id"] == entry_id for r in nonmember_search.json()["results"]
         )
 
+    def test_source_acl_group_gated_end_to_end(self):
+        """P1: a general per-source ACL (group-based) gates direct access
+        and search, with deny-overrides-grant and fast revocation."""
+        ingest = client.post("/api/v1/ingest", json={
+            "content": (
+                "We have decided to move the Q3 vendor contract to the new "
+                "procurement platform and this decision is now finalized "
+                "and documented."
+            ),
+            "source": "teams",
+            "tenant_id": "acme-corp",
+            "metadata": {
+                "wing": "procurement",
+                "room": "contracts",
+                "sensitivity": "confidential",
+                # General source ACL: visible to group members only.
+                "acl": {
+                    "allowed_groups": ["grp-procurement"],
+                    "allow_users_demo": None,  # ignored, not a recognized key
+                },
+            },
+        })
+        assert ingest.status_code == 201
+        entry_id = ingest.json()["id"]
+
+        # Member (in the allowed group) sees it via direct access.
+        member_get = client.get(
+            f"/api/v1/entries/{entry_id}",
+            params={"person_id": "proc-user", "role": "readwrite",
+                    "groups": "grp-procurement"},
+        )
+        assert member_get.status_code == 200
+
+        # Non-member (no group) is denied, even as admin.
+        nonmember_get = client.get(
+            f"/api/v1/entries/{entry_id}",
+            params={"person_id": "sysadmin", "role": "admin"},
+        )
+        assert nonmember_get.status_code == 403
+
+        # Search: group member finds it; non-member does not.
+        member_search = client.post("/api/v1/search", json={
+            "query": "procurement platform contract",
+            "tenant_id": "acme-corp",
+            "requester_team": "proc-user",
+            "requester_groups": ["grp-procurement"],
+        })
+        assert any(
+            r["id"] == entry_id for r in member_search.json()["results"]
+        )
+
+        nonmember_search = client.post("/api/v1/search", json={
+            "query": "procurement platform contract",
+            "tenant_id": "acme-corp",
+            "requester_team": "sysadmin",
+            "requester_role": "admin",
+            "requester_groups": [],
+        })
+        assert not any(
+            r["id"] == entry_id for r in nonmember_search.json()["results"]
+        )
+
+    def test_source_acl_revoke_end_to_end(self):
+        """P1: the revoke endpoint denies a previously-allowed member
+        immediately, without re-ingest."""
+        ingest = client.post("/api/v1/ingest", json={
+            "content": (
+                "We have decided to onboard the Nordic distribution partner "
+                "in Q4 and this decision is now finalized and documented."
+            ),
+            "source": "teams",
+            "tenant_id": "acme-corp",
+            "metadata": {
+                "wing": "sales",
+                "room": "partners",
+                "sensitivity": "confidential",
+                "acl": {"allowed_users": ["partner-mgr", "sales-dir"]},
+            },
+        })
+        assert ingest.status_code == 201
+        entry_id = ingest.json()["id"]
+
+        # Allowed member can see it before revocation.
+        before = client.get(
+            f"/api/v1/entries/{entry_id}",
+            params={"person_id": "partner-mgr"},
+        )
+        assert before.status_code == 200
+
+        # Admin revokes the ACL grant.
+        revoke = client.post(
+            f"/api/v1/entries/{entry_id}/revoke",
+            params={"role": "admin"},
+        )
+        assert revoke.status_code == 200
+
+        # Now the member is denied, even with admin role.
+        after = client.get(
+            f"/api/v1/entries/{entry_id}",
+            params={"person_id": "partner-mgr", "role": "admin"},
+        )
+        assert after.status_code == 403
+
+        # Non-admin cannot revoke.
+        nonadmin_revoke = client.post(
+            f"/api/v1/entries/{entry_id}/revoke",
+            params={"role": "readwrite"},
+        )
+        assert nonadmin_revoke.status_code == 403
+
 
 class TestMemPalaceSearch:
     """Tests for hybrid search (MemPalace semantic + keyword fallback)."""
