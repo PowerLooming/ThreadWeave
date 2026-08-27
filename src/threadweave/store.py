@@ -75,6 +75,7 @@ class EntryStore:
 CREATE TABLE IF NOT EXISTS {self.table_name} (
     id TEXT PRIMARY KEY,
     content TEXT NOT NULL,
+    content_en TEXT DEFAULT '',
     wing TEXT DEFAULT '',
     room TEXT DEFAULT 'general',
     scope TEXT DEFAULT 'team',
@@ -123,6 +124,16 @@ CREATE TABLE IF NOT EXISTS {self.table_name} (
                         f"ALTER TABLE {self.table_name} ADD COLUMN "
                         "acl TEXT DEFAULT '{}'"
                     ))
+                # Migration for existing DBs: add content_en if missing.
+                has_content_en = any(
+                    col["name"] == "content_en"
+                    for col in self._columns()
+                )
+                if not has_content_en:
+                    conn.execute(text(
+                        f"ALTER TABLE {self.table_name} ADD COLUMN "
+                        "content_en TEXT DEFAULT ''"
+                    ))
         except Exception as exc:
             logger.warning(
                 "Entry DB unavailable at %s (%s) — entries will be "
@@ -145,6 +156,7 @@ CREATE TABLE IF NOT EXISTS {self.table_name} (
         return {
             "id": entry.get("id", ""),
             "content": entry.get("content", ""),
+            "content_en": entry.get("content_en", ""),
             "wing": entry.get("wing", ""),
             "room": entry.get("room", "general"),
             "scope": entry.get("scope", "team"),
@@ -169,6 +181,7 @@ CREATE TABLE IF NOT EXISTS {self.table_name} (
         return {
             "id": row["id"],
             "content": row["content"],
+            "content_en": row["content_en"] or "",
             "wing": row["wing"],
             "room": row["room"],
             "scope": row["scope"],

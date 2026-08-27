@@ -23,7 +23,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from threadweave.detector import (
-    detect, is_worth_saving, detect_async, is_worth_saving_async,
+    detect, is_worth_saving, detect_async, is_worth_saving_async, translate_async,
     ContentType, DetectionResult,
 )
 from threadweave.llm_detector import get_llm_detector
@@ -491,6 +491,19 @@ async def ingest_content(req: IngestRequest, request: Request):
     should_save, result = await is_worth_saving_async(req.content)
     metrics.detect_latency.record((time.monotonic() - t0) * 1000)
 
+    # 2b. P6 — cross-language capture: translate non-English content to English
+    #     at ingest and store as content_en. Only runs when the detector reports
+    #     a non-English language (Option 1: gate on the detector). English skips
+    #     the extra LLM round-trip. A translation failure (None) never blocks
+    #     the capture — the original is always saved.
+    content_en: Optional[str] = None
+    src_lang = getattr(result, "language", "") or ""
+    if src_lang and src_lang != "en":
+        try:
+            content_en = await translate_async(req.content, target="en")
+        except Exception:
+            content_en = None
+
     # Track LLM vs regex usage from the detection signals
     signals = result.signals
     if any("llm(" in s for s in signals):
@@ -608,6 +621,7 @@ async def ingest_content(req: IngestRequest, request: Request):
     entry = {
         "id": entry_id,
         "content": req.content,
+        "content_en": content_en or "",
         "wing": req.metadata.get("wing", req.source),
         "room": req.metadata.get("room", result.content_type.value),
         "scope": result.suggested_scope,
@@ -723,8 +737,13 @@ async def ingest_content(req: IngestRequest, request: Request):
     # 6. MemPalace (if available)
     if _mempalace_available:
         try:
+            # P6: when a translation exists, index content + content_en together
+            # so the entry is searchable in BOTH the original language and English.
+            index_text = (
+                f"{req.content}\n\n{content_en}" if content_en else req.content
+            )
             _mempalace.add_drawer(
-                content=req.content,
+                content=index_text,
                 wing=entry["wing"],
                 room=entry["room"],
                 title=entry["title"],
@@ -1295,13 +1314,21 @@ async def search(req: SearchRequest, request: Request):
             continue
 
         content_lower = entry["content"].lower()
+        # P6: also search the English translation so non-English captures are
+        # findable by English queries.
+        content_en_lower = (entry.get("content_en") or "").lower()
         title_lower = entry.get("title", "").lower()
         score = 0.0
-        if query_lower in content_lower:
+        if query_lower in content_lower or (
+            content_en_lower and query_lower in content_en_lower
+        ):
             score = 0.8
         elif query_lower in title_lower:
             score = 0.6
-        elif any(word in content_lower for word in query_lower.split()):
+        elif any(word in content_lower for word in query_lower.split()) or (
+            content_en_lower
+            and any(word in content_en_lower for word in query_lower.split())
+        ):
             score = 0.3
         if score > 0:
             seen_ids.add(entry_id)

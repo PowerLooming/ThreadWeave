@@ -848,3 +848,134 @@ class TestActionItemEndpoints:
                    for t in r.json()["tasks"])
 
 
+class TestP6CrossLanguageCapture:
+    """P6: non-English content is translated at ingest and stored as content_en.
+
+    The translation call is mocked (translate_async) so the test runs without
+    a live Ollama. The assertions verify the entry gains content_en and that
+    the English translation is searchable.
+    """
+
+    def test_non_english_ingest_stores_content_en(self, monkeypatch):
+        from threadweave.detector import DetectionResult, ContentType
+        import threadweave.api as api_mod
+
+        # Make detection report Chinese content.
+        async def fake_detect(text, threshold=0.40):
+            return True, DetectionResult(
+                content_type=ContentType.DECISION,
+                confidence=0.95,
+                suggested_scope="team",
+                suggested_title="Decision to migrate vendor contract",
+                language="zh",
+            )
+
+        async def fake_translate(text, target="en"):
+            return "We decided to migrate the vendor contract to the new procurement platform."
+
+        monkeypatch.setattr(api_mod, "is_worth_saving_async", fake_detect)
+        monkeypatch.setattr(api_mod, "translate_async", fake_translate)
+
+        resp = client.post("/api/v1/ingest", json={
+            "content": (
+                "我们已经决定将供应商合同迁移到新的采购平台，这个决定已经最终确定并记录在案，"
+                "包括具体的迁移时间表和负责人安排。"
+            ),
+            "source": "teams",
+            "tenant_id": "acme-corp",
+            "metadata": {"wing": "procurement", "room": "contracts"},
+        })
+        assert resp.status_code == 201
+        entry_id = resp.json()["id"]
+
+        # The stored entry must carry the English translation.
+        from threadweave.api import _memory_store
+        stored = _memory_store.get(entry_id)
+        assert stored is not None
+        assert stored["content_en"] == (
+            "We decided to migrate the vendor contract to the new procurement platform."
+        )
+        # Original preserved.
+        assert stored["content"].startswith("我们已经决定")
+
+        # Search by English terms finds it (in-memory keyword path).
+        r = client.post("/api/v1/search", json={
+            "query": "migrate vendor contract",
+            "tenant_id": "acme-corp",
+            "requester_team": "someone",
+        })
+        assert any(x["id"] == entry_id for x in r.json()["results"])
+
+    def test_english_ingest_skips_translation(self, monkeypatch):
+        from threadweave.detector import DetectionResult, ContentType
+        import threadweave.api as api_mod
+
+        called = {"translate": False}
+
+        async def fake_detect(text, threshold=0.40):
+            return True, DetectionResult(
+                content_type=ContentType.DECISION,
+                confidence=0.95,
+                language="en",
+            )
+
+        async def fake_translate(text, target="en"):
+            called["translate"] = True
+            return "should not be called"
+
+        monkeypatch.setattr(api_mod, "is_worth_saving_async", fake_detect)
+        monkeypatch.setattr(api_mod, "translate_async", fake_translate)
+
+        resp = client.post("/api/v1/ingest", json={
+            "content": (
+                "We decided to use PostgreSQL for the new analytics platform because "
+                "it offers JSONB support and full-text search that our workload requires."
+            ),
+            "source": "email",
+            "tenant_id": "acme-corp",
+            "metadata": {"wing": "engineering", "room": "database"},
+        })
+        assert resp.status_code == 201
+        assert called["translate"] is False, "translation must not run for English"
+
+        from threadweave.api import _memory_store
+        stored = _memory_store.get(resp.json()["id"])
+        assert stored["content_en"] == ""
+
+    def test_translation_failure_never_blocks_capture(self, monkeypatch):
+        from threadweave.detector import DetectionResult, ContentType
+        import threadweave.api as api_mod
+
+        async def fake_detect(text, threshold=0.40):
+            return True, DetectionResult(
+                content_type=ContentType.DECISION,
+                confidence=0.95,
+                language="no",
+            )
+
+        async def fake_translate(text, target="en"):
+            return None  # translation fails
+
+        monkeypatch.setattr(api_mod, "is_worth_saving_async", fake_detect)
+        monkeypatch.setattr(api_mod, "translate_async", fake_translate)
+
+        resp = client.post("/api/v1/ingest", json={
+            "content": (
+                "Vi har besluttet å migrere leverandørkontrakten til den nye "
+                "innkjøpsplattformen, og denne beslutningen er endelig og dokumentert."
+            ),
+            "source": "teams",
+            "tenant_id": "acme-corp",
+            "metadata": {"wing": "procurement", "room": "contracts"},
+        })
+        assert resp.status_code == 201, "capture must not fail when translation fails"
+
+        from threadweave.api import _memory_store
+        stored = _memory_store.get(resp.json()["id"])
+        assert stored is not None
+        # Original preserved even though translation returned None.
+        assert stored["content"].startswith("Vi har besluttet")
+        assert stored["content_en"] == ""
+
+
+
