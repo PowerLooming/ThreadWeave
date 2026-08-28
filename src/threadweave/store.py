@@ -75,6 +75,7 @@ class EntryStore:
 CREATE TABLE IF NOT EXISTS {self.table_name} (
     id TEXT PRIMARY KEY,
     content TEXT NOT NULL,
+    content_en TEXT DEFAULT '',
     wing TEXT DEFAULT '',
     room TEXT DEFAULT 'general',
     scope TEXT DEFAULT 'team',
@@ -90,6 +91,7 @@ CREATE TABLE IF NOT EXISTS {self.table_name} (
     sensitivity TEXT DEFAULT 'internal',
     client_id TEXT,
     allowed_people TEXT DEFAULT '[]',
+    acl TEXT DEFAULT '{{}}',
     version_of TEXT
 )
 """,
@@ -111,6 +113,26 @@ CREATE TABLE IF NOT EXISTS {self.table_name} (
                     conn.execute(text(
                         f"ALTER TABLE {self.table_name} ADD COLUMN "
                         "version_of TEXT"
+                    ))
+                # Migration for existing DBs: add acl if missing.
+                has_acl = any(
+                    col["name"] == "acl"
+                    for col in self._columns()
+                )
+                if not has_acl:
+                    conn.execute(text(
+                        f"ALTER TABLE {self.table_name} ADD COLUMN "
+                        "acl TEXT DEFAULT '{}'"
+                    ))
+                # Migration for existing DBs: add content_en if missing.
+                has_content_en = any(
+                    col["name"] == "content_en"
+                    for col in self._columns()
+                )
+                if not has_content_en:
+                    conn.execute(text(
+                        f"ALTER TABLE {self.table_name} ADD COLUMN "
+                        "content_en TEXT DEFAULT ''"
                     ))
         except Exception as exc:
             logger.warning(
@@ -134,6 +156,7 @@ CREATE TABLE IF NOT EXISTS {self.table_name} (
         return {
             "id": entry.get("id", ""),
             "content": entry.get("content", ""),
+            "content_en": entry.get("content_en", ""),
             "wing": entry.get("wing", ""),
             "room": entry.get("room", "general"),
             "scope": entry.get("scope", "team"),
@@ -149,6 +172,7 @@ CREATE TABLE IF NOT EXISTS {self.table_name} (
             "sensitivity": entry.get("sensitivity", "internal"),
             "client_id": entry.get("client_id"),
             "allowed_people": json.dumps(entry.get("allowed_people", [])),
+            "acl": json.dumps(entry.get("acl", {})),
             "version_of": entry.get("version_of"),
         }
 
@@ -157,6 +181,7 @@ CREATE TABLE IF NOT EXISTS {self.table_name} (
         return {
             "id": row["id"],
             "content": row["content"],
+            "content_en": row["content_en"] or "",
             "wing": row["wing"],
             "room": row["room"],
             "scope": row["scope"],
@@ -172,6 +197,7 @@ CREATE TABLE IF NOT EXISTS {self.table_name} (
             "sensitivity": row["sensitivity"],
             "client_id": row["client_id"],
             "allowed_people": json.loads(row["allowed_people"] or "[]"),
+            "acl": json.loads(row["acl"] or "{}"),
             "version_of": row["version_of"],
         }
 

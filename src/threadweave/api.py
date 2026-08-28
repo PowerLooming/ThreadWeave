@@ -23,7 +23,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from threadweave.detector import (
-    detect, is_worth_saving, detect_async, is_worth_saving_async,
+    detect, is_worth_saving, detect_async, is_worth_saving_async, translate_async,
     ContentType, DetectionResult,
 )
 from threadweave.llm_detector import get_llm_detector
@@ -111,11 +111,53 @@ def _request_ip_hash(request: Request) -> str:
     return hashlib.sha256(host.encode()).hexdigest()[:16]
 
 
+def _citation_url(metadata: dict) -> str:
+    """P2: resolve the deep-link source URL for an entry's citation.
+
+    Prefers the Teams message ``webUrl`` (message_url), falling back to a
+    ``source_file`` pointer, then a ``url`` if present. Returns "" when the
+    source carries no link (e.g. a manual entry).
+    """
+    if not metadata:
+        return ""
+    for key in ("message_url", "webUrl", "url", "source_file"):
+        val = metadata.get(key) or ""
+        if isinstance(val, str) and val.startswith(("http", "https")):
+            return val
+    return ""
+
+
+def _materialize_acl(acl: Optional[dict]) -> dict:
+    """Normalize a per-source ACL block into a stored, enforced form.
+
+    Accepts an optional ``acl`` dict from connector metadata with any of:
+      allowed_users / allowed_groups / deny_users / deny_groups / revoked_at
+    Keeps only the recognized keys, coerces lists to lists of str, and stamps
+    ``acl_granted_at`` (now) on the initial grant so the confidentiality gate's
+    fast-revocation comparison has a baseline. Returns {} when no ACL is set.
+    """
+    if not acl:
+        return {}
+    now = datetime.now(timezone.utc).isoformat()
+    out: dict = {}
+    for key in ("allowed_users", "allowed_groups", "deny_users", "deny_groups"):
+        val = acl.get(key)
+        if val:
+            out[key] = [str(v) for v in val]
+    if acl.get("revoked_at"):
+        out["revoked_at"] = str(acl["revoked_at"])
+    # Only stamp a grant baseline when there is something to grant/deny.
+    if out and "acl_granted_at" not in out:
+        out["acl_granted_at"] = now
+    return out
+
+
 def _requester_from_request(
     request: Request,
     wing: str = "",
     person_id: str = "",
     role: str = "readwrite",
+    groups: Optional[list[str]] = None,
 ) -> RequesterContext:
     """Build the requester context from TRUSTED key claims when present.
 
@@ -131,12 +173,14 @@ def _requester_from_request(
             person_id=getattr(request.state, "auth_person", ""),
             wing=getattr(request.state, "auth_wing", ""),
             role=key_role,
+            groups=getattr(request.state, "auth_groups", None) or [],
             clearance=_clearance_for_role(key_role),
         )
     return RequesterContext(
         person_id=person_id,
         wing=wing,
         role=role,
+        groups=groups or [],
     )
 
 
@@ -238,6 +282,7 @@ class SearchRequest(BaseModel):
     room: Optional[str] = None
     requester_team: Optional[str] = None
     requester_role: Optional[str] = None
+    requester_groups: Optional[list[str]] = None
     limit: int = Field(default=10, ge=1, le=100)
     tenant_id: str = Field(default="default")
 
@@ -464,6 +509,19 @@ async def ingest_content(req: IngestRequest, request: Request):
     should_save, result = await is_worth_saving_async(req.content)
     metrics.detect_latency.record((time.monotonic() - t0) * 1000)
 
+    # 2b. P6 — cross-language capture: translate non-English content to English
+    #     at ingest and store as content_en. Only runs when the detector reports
+    #     a non-English language (Option 1: gate on the detector). English skips
+    #     the extra LLM round-trip. A translation failure (None) never blocks
+    #     the capture — the original is always saved.
+    content_en: Optional[str] = None
+    src_lang = getattr(result, "language", "") or ""
+    if src_lang and src_lang != "en":
+        try:
+            content_en = await translate_async(req.content, target="en")
+        except Exception:
+            content_en = None
+
     # Track LLM vs regex usage from the detection signals
     signals = result.signals
     if any("llm(" in s for s in signals):
@@ -598,6 +656,7 @@ async def ingest_content(req: IngestRequest, request: Request):
     entry = {
         "id": entry_id,
         "content": req.content,
+        "content_en": content_en or "",
         "wing": req.metadata.get("wing", req.source),
         "room": req.metadata.get("room", result.content_type.value),
         "scope": result.suggested_scope,
@@ -617,6 +676,10 @@ async def ingest_content(req: IngestRequest, request: Request):
         "sensitivity": effective_sensitivity,
         "client_id": req.metadata.get("client_id"),
         "allowed_people": req.metadata.get("allowed_people", []),
+        # Per-source ACL materialized at ingest (allowed_users/groups,
+        # deny_users/groups, revoked_at, acl_granted_at). Enforced by the
+        # confidentiality gate with deny-overrides-grant.
+        "acl": _materialize_acl(req.metadata.get("acl")),
     }
 
     # Action-item capture — attach detected responsibility assignments to
@@ -709,8 +772,13 @@ async def ingest_content(req: IngestRequest, request: Request):
     # 6. MemPalace (if available)
     if _mempalace_available:
         try:
+            # P6: when a translation exists, index content + content_en together
+            # so the entry is searchable in BOTH the original language and English.
+            index_text = (
+                f"{req.content}\n\n{content_en}" if content_en else req.content
+            )
             _mempalace.add_drawer(
-                content=req.content,
+                content=index_text,
                 wing=entry["wing"],
                 room=entry["room"],
                 title=entry["title"],
@@ -873,6 +941,7 @@ async def get_entry(
     person_id: Optional[str] = Query(None),
     wing: Optional[str] = Query(None),
     role: str = Query("readwrite"),
+    groups: Optional[str] = Query(None),
 ):
     entry = _memory_store.get(entry_id)
     if not entry:
@@ -890,6 +959,7 @@ async def get_entry(
         wing=wing or "",
         person_id=person_id or "",
         role=role,
+        groups=(groups.split(",") if groups else []),
     )
     if not requester.can_see(entry):
         audit = get_audit_log()
@@ -981,6 +1051,59 @@ async def delete_entry(
                 "MemPalace delete failed for entry %s: %s", entry_id, exc
             )
     return Response(status_code=204)
+
+
+# ---- Revoke source ACL (fast permission revocation) ----
+
+@app.post("/api/v1/entries/{entry_id}/revoke", status_code=200)
+async def revoke_entry_acl(
+    entry_id: str,
+    request: Request,
+    person_id: Optional[str] = Query(None),
+    role: str = Query("readwrite"),
+):
+    """Revoke a per-source ACL grant immediately, without re-ingest.
+
+    Sets ``revoked_at`` on the entry's ``acl`` so the confidentiality gate
+    denies it on the next access (deny-overrides-grant + fast revocation).
+    Only admin/legal/hr may revoke (a source boundary must not be lifted by
+    an ordinary member). Idempotent: revoking an already-revoked or
+    ACL-less entry succeeds.
+    """
+    entry = _memory_store.get(entry_id)
+    if not entry:
+        raise HTTPException(status_code=404, detail="Entry not found")
+
+    scoped = _scoped_tenant(request)
+    if scoped and entry.get("tenant_id", "default") != scoped:
+        raise HTTPException(status_code=404, detail="Entry not found")
+
+    requester = _requester_from_request(
+        request, person_id=person_id or "", role=role,
+    )
+    if requester.role not in ("admin", "legal", "hr_admin"):
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    acl = entry.setdefault("acl", {}) or {}
+    # Base the grant baseline on the existing stamp, or now if absent.
+    granted = acl.get("acl_granted_at") or datetime.now(timezone.utc).isoformat()
+    acl["acl_granted_at"] = granted
+    acl["revoked_at"] = datetime.now(timezone.utc).isoformat()
+    entry["acl"] = acl
+
+    # Persist the revocation so it survives restarts.
+    try:
+        get_entry_store().save(entry)
+    except Exception:
+        pass
+
+    audit = get_audit_log()
+    audit.log_access(
+        requester, entry,
+        action="revoke_acl",
+        ip_hash=_request_ip_hash(request),
+    )
+    return {"id": entry_id, "revoked": True}
 
 
 # ---- Capture notifications (bot polling) ----
@@ -1191,6 +1314,7 @@ async def search(req: SearchRequest, request: Request):
         wing=req.requester_team or "",
         person_id=req.requester_team or "",  # requester_team doubles as person_id
         role=req.requester_role or "readwrite",
+        groups=req.requester_groups or [],
     )
 
     # Tenant scoping: a tenant key must not see other tenants' entries.
@@ -1240,6 +1364,10 @@ async def search(req: SearchRequest, request: Request):
                     "sensitivity": mr.sensitivity or "internal",
                     "source_metadata": _src.get("source_metadata", {}),
                     "allowed_people": _src.get("allowed_people", []),
+                    "acl": _src.get("acl", {}),
+                    # P2 citation: the deep link back to the exact captured
+                    # source (Teams message webUrl, or source_file).
+                    "source_url": _citation_url(_src.get("source_metadata", {})),
                 })
             seen_ids.update(mp_ids)
             results.extend(mp_hits)
@@ -1261,13 +1389,21 @@ async def search(req: SearchRequest, request: Request):
             continue
 
         content_lower = entry["content"].lower()
+        # P6: also search the English translation so non-English captures are
+        # findable by English queries.
+        content_en_lower = (entry.get("content_en") or "").lower()
         title_lower = entry.get("title", "").lower()
         score = 0.0
-        if query_lower in content_lower:
+        if query_lower in content_lower or (
+            content_en_lower and query_lower in content_en_lower
+        ):
             score = 0.8
         elif query_lower in title_lower:
             score = 0.6
-        elif any(word in content_lower for word in query_lower.split()):
+        elif any(word in content_lower for word in query_lower.split()) or (
+            content_en_lower
+            and any(word in content_en_lower for word in query_lower.split())
+        ):
             score = 0.3
         if score > 0:
             seen_ids.add(entry_id)
@@ -1287,9 +1423,13 @@ async def search(req: SearchRequest, request: Request):
                 "sensitivity": entry.get("sensitivity", "internal"),
                 # Private-channel scoping must survive into filter_results,
                 # or the strict gate never fires on search (the leak this
-                # feature exists to stop).
+                # feature exists to stop). Same for the general per-source
+                # ACL gate.
                 "source_metadata": entry.get("source_metadata", {}),
                 "allowed_people": entry.get("allowed_people", []),
+                "acl": entry.get("acl", {}),
+                # P2 citation: deep link back to the exact captured source.
+                "source_url": _citation_url(entry.get("source_metadata", {})),
             })
 
     # ── 3. Confidentiality filtering ──

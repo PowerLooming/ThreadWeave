@@ -195,6 +195,39 @@ happen by themselves on every code push.
 
 **Connector extras:** `pip install -e ".[gws]"` (Google Workspace), `".[graph]"` (Microsoft Graph connector), `".[teams]"`, `".[sharepoint]"`, `".[email]"`, `".[outlook]"`, or `".[all-connectors]"` for everything.
 
+## Hardware recommendations
+
+ThreadWeave runs fully on-prem. The CPU/GPU you need depends on whether you enable the
+local LLM, and for what. Everything runs on CPU only; a GPU is only needed for faster
+and higher-quality LLM detection and translation.
+
+### Minimum (CPU only, no LLM)
+
+- 4 vCPU / 8 GB RAM
+- 20 GB disk
+- Runs detection on the built-in regex engine (English-first) and hybrid search.
+- No GPU required.
+
+### Recommended (LLM detection + all-language translation)
+
+- 8 vCPU / 16 GB RAM
+- **NVIDIA GPU with 12 GB VRAM** (e.g. RTX 3060 Ti / 4060 Ti / 4070)
+- 30 GB disk
+- Runs a local LLM (Ollama) for multilingual detection and translation.
+
+### Model tiers (Ollama)
+
+| Scope | Model | VRAM | Notes |
+|---|---|---|---|
+| Testing / baseline | `qwen3.5:9b` | ~6.6 GB | Already pulled by default; good for building and testing the pipeline |
+| All-language production | `qwen3:14b` | ~10 GB (Q4) | Qwen3 supports 100+ languages natively; recommended for serving all world languages |
+
+A 12 GB GPU runs `qwen3:14b` (Q4, ~10 GB) comfortably. For 7B-class models (light
+multilingual) an 8 GB GPU suffices. A GPU with 24 GB unlocks 30B-class models
+(e.g. `qwen3-coder:30b`) if you later want higher translation fidelity.
+
+Translation and multilingual detection stay local — no data ever leaves the on-prem host.
+
 ## What's Built
 
 - ✅ **Detection engine** — Regex + LLM two-tier classifier (ANSWER/DECISION/QUESTION/CHAT/REFERENCE)

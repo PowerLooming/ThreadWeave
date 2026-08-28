@@ -22,6 +22,8 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Optional
 
+from threadweave.auth import api_headers
+
 logger = logging.getLogger(__name__)
 
 
@@ -116,6 +118,7 @@ class BaseConnector(ABC):
                 resp = await client.post(
                     f"{self.api_base_url}/api/v1/ingest",
                     json=payload,
+                    headers=api_headers(),
                 )
                 resp.raise_for_status()
                 data = resp.json()
@@ -148,7 +151,10 @@ class BaseConnector(ABC):
         import httpx
         try:
             async with httpx.AsyncClient(timeout=5.0) as client:
-                resp = await client.get(f"{self.api_base_url}/api/v1/health")
+                resp = await client.get(
+                    f"{self.api_base_url}/api/v1/health",
+                    headers=api_headers(),
+                )
                 return resp.json()
         except Exception as e:
             return {"status": "unreachable", "error": str(e)}

@@ -300,6 +300,10 @@ class RequesterContext:
     client_ids: list[str] = field(default_factory=list)
     """Which clients is this person cleared to work on?"""
 
+    groups: list[str] = field(default_factory=list)
+    """Group object IDs this requester belongs to (e.g. Entra group IDs).
+    Used by per-source ACLs (`allowed_groups` / `deny_groups`)."""
+
     clearance: SensitivityLevel = SensitivityLevel.INTERNAL
     """Maximum sensitivity level this person can access."""
 
@@ -313,6 +317,7 @@ class RequesterContext:
             wing=request_data.get("wing", ""),
             role=request_data.get("role", "readwrite"),
             client_ids=request_data.get("client_ids", []),
+            groups=request_data.get("groups", []),
             clearance=SensitivityLevel(request_data.get("clearance", "internal")),
         )
 
@@ -345,6 +350,45 @@ class RequesterContext:
         if entry.get("source_metadata", {}).get("private_channel"):
             members = entry.get("allowed_people", []) or []
             return self.person_id in members
+
+        # 0b. General per-source ACL gate — deny-overrides-grant.
+        #    A source (Teams channel, SharePoint site/folder, email thread,
+        #    etc.) may tag content with an explicit ACL in `entry["acl"]`:
+        #      allowed_users / allowed_groups / deny_users / deny_groups
+        #      revoked_at + acl_granted_at for fast revocation.
+        #    This is AUTHORITATIVE like private_channel: a source boundary
+        #    is not a clearance level, so no role (admin/legal/hr) bypasses
+        #    it, and DENY beats GRANT. A revoked entry is denied immediately,
+        #    independent of re-ingest. Empty ACL falls through to clearance.
+        acl = entry.get("acl") or {}
+        if acl:
+            # Fast revocation: if the grant was revoked at/after it was
+            # granted, treat as denied.
+            if acl.get("revoked_at"):
+                granted = acl.get("acl_granted_at", "")
+                if acl["revoked_at"] >= granted:
+                    return False
+            # DENY overrides GRANT.
+            if self.person_id in (acl.get("deny_users") or []):
+                return False
+            if any(g in (acl.get("deny_groups") or []) for g in self.groups):
+                return False
+            # GRANT is authoritative when a grant list is present: the
+            # source explicitly decided who may see this, so membership IS
+            # the grant and it does NOT fall through to the nominal
+            # clearance gate (which could otherwise deny a source-granted
+            # reader). A matched grant returns True immediately; a
+            # non-match returns False (fail closed).
+            if acl.get("allowed_users") or acl.get("allowed_groups"):
+                in_users = self.person_id in (acl.get("allowed_users") or [])
+                in_groups = any(
+                    g in (acl.get("allowed_groups") or []) for g in self.groups
+                )
+                if in_users or in_groups:
+                    return True
+                return False
+            # ACL exists but has no grant list (only denies/revocation that
+            # did not match) → fall through to clearance checks.
 
         # 1. Clearance check
         if not sensitivity.can_access(self.clearance):

@@ -24,6 +24,7 @@ from typing import Optional
 
 import requests
 
+from threadweave.auth import api_headers
 from threadweave.connectors.gws.auth import GWSAuth
 
 logger = logging.getLogger("threadweave.gws.chat")
@@ -200,6 +201,7 @@ class ChatListener:
             try:
                 resp = requests.post(
                     f"{self.threadweave_url}/api/v1/ingest",
+                    headers=api_headers(),
                     json={
                         "content": content,
                         "source": "google_chat",

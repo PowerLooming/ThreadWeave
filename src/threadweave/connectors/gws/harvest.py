@@ -36,6 +36,7 @@ from typing import Optional
 
 import requests
 
+from threadweave.auth import api_headers
 from threadweave.connectors.gws.auth import GWSAuth, GWSCredentials
 from threadweave.connectors.gws.gmail import GmailWatcher, GmailMessage
 from threadweave.connectors.gws.chat import ChatListener
@@ -545,6 +546,7 @@ def generate_onboarding_brief(
         resp = requests.post(
             f"{base}/api/v1/search",
             json={"query": "", "wing": team_wing, "limit": 20},
+            headers=api_headers(),
             timeout=15,
         )
         if resp.status_code == 200:
@@ -553,7 +555,9 @@ def generate_onboarding_brief(
             for r in data.get("results", []):
                 # Get full entry to check author
                 entry_resp = requests.get(
-                    f"{base}/api/v1/entries/{r['id']}", timeout=10,
+                    f"{base}/api/v1/entries/{r['id']}",
+                    headers=api_headers(),
+                    timeout=10,
                 )
                 if entry_resp.status_code == 200:
                     entry = entry_resp.json()
@@ -572,6 +576,7 @@ def generate_onboarding_brief(
         resp = requests.post(
             f"{base}/api/v1/search",
             json={"query": "", "wing": team_wing, "limit": 10},
+            headers=api_headers(),
             timeout=15,
         )
         if resp.status_code == 200:
@@ -590,6 +595,7 @@ def generate_onboarding_brief(
         resp = requests.post(
             f"{base}/api/v1/search",
             json={"query": "decision", "wing": team_wing, "limit": 10},
+            headers=api_headers(),
             timeout=15,
         )
         if resp.status_code == 200:

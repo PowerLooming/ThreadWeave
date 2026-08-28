@@ -3257,7 +3257,7 @@ wheels = [
 
 [[package]]
 name = "threadweave-memory"
-version = "0.4.6"
+version = "0.4.7"
 source = { virtual = "." }
 dependencies = [
     { name = "fastapi" },

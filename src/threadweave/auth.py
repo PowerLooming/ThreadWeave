@@ -165,6 +165,19 @@ class APIKeyMiddleware(BaseHTTPMiddleware):
 
 _keystore = KeyStore()
 
+def api_headers() -> dict[str, str]:
+    """Headers to send with ThreadWeave API requests.
+
+    Reads THREADWEAVE_API_KEY from the environment (set in a connector's
+    daemon env file) and returns an X-API-Key header when present. Returns
+    an empty dict when unset so callers stay backwards-compatible with an
+    auth-disabled server.
+    """
+    key = os.environ.get("THREADWEAVE_API_KEY", "").strip()
+    if not key:
+        return {}
+    return {"X-API-Key": key}
+
 def configure(enabled: bool, keys_env: str = "") -> None:
     global AUTH_ENABLED, _keystore
     AUTH_ENABLED = enabled

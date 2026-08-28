@@ -14,6 +14,7 @@ Heuristic-based (no LLM required for classification). Classifies text into:
 import re
 from dataclasses import dataclass, field
 from enum import Enum
+from typing import Optional
 
 
 class ContentType(Enum):
@@ -34,6 +35,7 @@ class DetectionResult:
     suggested_title: str = ""
     has_pii: bool = False
     has_gossip: bool = False
+    language: str = ""  # ISO 639-1 code detected by the LLM (e.g. "en", "zh", "no"); empty = unknown/English default
 
 
 # ── Signal patterns ──────────────────────────────────────────────
@@ -481,3 +483,19 @@ async def is_worth_saving_async(
     except Exception:
         pass
     return is_worth_saving(text, threshold=threshold)
+
+
+async def translate_async(text: str, target: str = "en") -> Optional[str]:
+    """Translate ``text`` into ``target`` (default English) via the LLM.
+
+    Returns None when no LLM is configured or translation fails — the caller
+    must treat None as "keep the original" and never block on translation.
+    """
+    try:
+        from threadweave.llm_detector import get_llm_detector
+        llm = get_llm_detector()
+        if llm is not None:
+            return await llm.translate(text, target)
+    except Exception:
+        pass
+    return None

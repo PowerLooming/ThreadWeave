@@ -32,6 +32,7 @@ from typing import Optional
 
 MAX_FOLDER_DEPTH = 8  # recursion bound for full-drive imports
 
+from threadweave.auth import api_headers
 from threadweave.connectors.sharepoint.watcher import (
     GraphClient,
     ChangeNotification,
@@ -659,6 +660,7 @@ class DocumentProcessor:
             async with httpx.AsyncClient(timeout=30.0) as client:
                 resp = await client.post(
                     "http://localhost:8000/api/v1/ingest",
+                    headers=api_headers(),
                     json={
                         "content": text,
                         "source": "sharepoint",

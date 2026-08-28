@@ -57,6 +57,7 @@ Return ONLY a valid JSON object — no markdown fences, no extra text:
   "entities": [{"type": "technology"|"person"|"organization"|"system","value":"name"}],
   "has_pii": true | false,
   "has_gossip": true | false,
+  "language": "ISO 639-1 code of the content language (e.g. \"en\", \"zh\", \"no\", \"de\", \"ar\", \"ko\", \"ja\"). For mixed content use the dominant language. Use \"en\" for English.",
   "suggested_title": "short descriptive title (5-10 words, max 100 chars)",
   "suggested_scope": "team" | "department" | "organization",
   "reasoning": "one sentence explaining the classification (max 120 chars)"
@@ -260,6 +261,73 @@ class LLMDetector:
         )
         return should, result
 
+    async def translate(
+        self, text: str, target: str = "en"
+    ) -> Optional[str]:
+        """Translate ``text`` into ``target`` (default English) via the LLM.
+
+        Uses the same async Ollama/OpenAI-compatible path as classification.
+        Returns the translated string, or ``None`` on any failure (so a
+        translation failure never blocks the capture of the original).
+
+        On-prem safe: uses the configured local endpoint; no cloud involved.
+        """
+        if not text or not self.available:
+            return None
+        url = self._resolve_url()
+        messages = [
+            {
+                "role": "system",
+                "content": (
+                    f"You are a professional translator. Translate the user's text "
+                    f"into {target} ({'English' if target == 'en' else target}). "
+                    "Preserve meaning, names, numbers, and technical terms. "
+                    "Return ONLY the translated text with no preamble, no quotes, "
+                    "no markdown."
+                ),
+            },
+            {"role": "user", "content": text},
+        ]
+        is_ollama = self.config.provider == "ollama"
+        if is_ollama:
+            payload = {
+                "model": self.config.model,
+                "messages": messages,
+                "stream": False,
+                "think": False,
+                "options": {"temperature": 0.0, "num_predict": self.config.max_tokens * 2},
+            }
+        else:
+            payload = {
+                "model": self.config.model,
+                "messages": messages,
+                "max_tokens": self.config.max_tokens * 2,
+                "temperature": 0.0,
+            }
+        try:
+            client = await self._get_client()
+            resp = await client.post(url, json=payload)
+            resp.raise_for_status()
+            data = resp.json()
+            if is_ollama:
+                content = data["message"]["content"]
+            else:
+                content = data["choices"][0]["message"]["content"]
+            out = content.strip().strip("\"'`").strip()
+            return out or None
+        except Exception:
+            return None
+
+    def translate_sync(self, text: str, target: str = "en") -> Optional[str]:
+        """Synchronous wrapper for translate() (for tests / REPL)."""
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = None
+        if loop is not None:
+            return None
+        return asyncio.run(self.translate(text, target))
+
     async def close(self) -> None:
         if self._client is not None:
             await self._client.aclose()
@@ -414,6 +482,13 @@ class LLMDetector:
 
         reasoning = str(parsed.get("reasoning", ""))[:120]
 
+        # Language: ISO 639-1 code, normalized to lowercase 2-letter form.
+        lang = str(parsed.get("language", "")).strip().lower()
+        if lang and re.fullmatch(r"[a-z]{2,3}", lang):
+            norm_lang = lang
+        else:
+            norm_lang = ""
+
         return DetectionResult(
             content_type=ct,
             confidence=confidence,
@@ -423,6 +498,7 @@ class LLMDetector:
             suggested_title=str(parsed.get("suggested_title", ""))[:100],
             has_pii=bool(parsed.get("has_pii", False)),
             has_gossip=bool(parsed.get("has_gossip", False)),
+            language=norm_lang,
         )
 
 

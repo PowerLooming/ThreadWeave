@@ -469,6 +469,116 @@ class TestIngestPipeline:
             r["id"] == entry_id for r in nonmember_search.json()["results"]
         )
 
+    def test_source_acl_group_gated_end_to_end(self):
+        """P1: a general per-source ACL (group-based) gates direct access
+        and search, with deny-overrides-grant and fast revocation."""
+        ingest = client.post("/api/v1/ingest", json={
+            "content": (
+                "We have decided to move the Q3 vendor contract to the new "
+                "procurement platform and this decision is now finalized "
+                "and documented."
+            ),
+            "source": "teams",
+            "tenant_id": "acme-corp",
+            "metadata": {
+                "wing": "procurement",
+                "room": "contracts",
+                "sensitivity": "confidential",
+                # General source ACL: visible to group members only.
+                "acl": {
+                    "allowed_groups": ["grp-procurement"],
+                    "allow_users_demo": None,  # ignored, not a recognized key
+                },
+            },
+        })
+        assert ingest.status_code == 201
+        entry_id = ingest.json()["id"]
+
+        # Member (in the allowed group) sees it via direct access.
+        member_get = client.get(
+            f"/api/v1/entries/{entry_id}",
+            params={"person_id": "proc-user", "role": "readwrite",
+                    "groups": "grp-procurement"},
+        )
+        assert member_get.status_code == 200
+
+        # Non-member (no group) is denied, even as admin.
+        nonmember_get = client.get(
+            f"/api/v1/entries/{entry_id}",
+            params={"person_id": "sysadmin", "role": "admin"},
+        )
+        assert nonmember_get.status_code == 403
+
+        # Search: group member finds it; non-member does not.
+        member_search = client.post("/api/v1/search", json={
+            "query": "procurement platform contract",
+            "tenant_id": "acme-corp",
+            "requester_team": "proc-user",
+            "requester_groups": ["grp-procurement"],
+        })
+        assert any(
+            r["id"] == entry_id for r in member_search.json()["results"]
+        )
+
+        nonmember_search = client.post("/api/v1/search", json={
+            "query": "procurement platform contract",
+            "tenant_id": "acme-corp",
+            "requester_team": "sysadmin",
+            "requester_role": "admin",
+            "requester_groups": [],
+        })
+        assert not any(
+            r["id"] == entry_id for r in nonmember_search.json()["results"]
+        )
+
+    def test_source_acl_revoke_end_to_end(self):
+        """P1: the revoke endpoint denies a previously-allowed member
+        immediately, without re-ingest."""
+        ingest = client.post("/api/v1/ingest", json={
+            "content": (
+                "We have decided to onboard the Nordic distribution partner "
+                "in Q4 and this decision is now finalized and documented."
+            ),
+            "source": "teams",
+            "tenant_id": "acme-corp",
+            "metadata": {
+                "wing": "sales",
+                "room": "partners",
+                "sensitivity": "confidential",
+                "acl": {"allowed_users": ["partner-mgr", "sales-dir"]},
+            },
+        })
+        assert ingest.status_code == 201
+        entry_id = ingest.json()["id"]
+
+        # Allowed member can see it before revocation.
+        before = client.get(
+            f"/api/v1/entries/{entry_id}",
+            params={"person_id": "partner-mgr"},
+        )
+        assert before.status_code == 200
+
+        # Admin revokes the ACL grant.
+        revoke = client.post(
+            f"/api/v1/entries/{entry_id}/revoke",
+            params={"role": "admin"},
+        )
+        assert revoke.status_code == 200
+
+        # Now the member is denied, even with admin role.
+        after = client.get(
+            f"/api/v1/entries/{entry_id}",
+            params={"person_id": "partner-mgr", "role": "admin"},
+        )
+        assert after.status_code == 403
+
+        # Non-admin cannot revoke.
+        nonadmin_revoke = client.post(
+            f"/api/v1/entries/{entry_id}/revoke",
+            params={"role": "readwrite"},
+        )
+        assert nonadmin_revoke.status_code == 403
+
 
 class TestMemPalaceSearch:
     """Tests for hybrid search (MemPalace semantic + keyword fallback)."""
@@ -845,5 +955,211 @@ class TestActionItemEndpoints:
         r = client.get("/api/v1/tasks", params={"owner": "harald"})
         assert any(t["id"] == task_id and t["status"] == "open"
                    for t in r.json()["tasks"])
+
+
+class TestP6CrossLanguageCapture:
+    """P6: non-English content is translated at ingest and stored as content_en.
+
+    The translation call is mocked (translate_async) so the test runs without
+    a live Ollama. The assertions verify the entry gains content_en and that
+    the English translation is searchable.
+    """
+
+    def test_non_english_ingest_stores_content_en(self, monkeypatch):
+        from threadweave.detector import DetectionResult, ContentType
+        import threadweave.api as api_mod
+
+        # Make detection report Chinese content.
+        async def fake_detect(text, threshold=0.40):
+            return True, DetectionResult(
+                content_type=ContentType.DECISION,
+                confidence=0.95,
+                suggested_scope="team",
+                suggested_title="Decision to migrate vendor contract",
+                language="zh",
+            )
+
+        async def fake_translate(text, target="en"):
+            return "We decided to migrate the vendor contract to the new procurement platform."
+
+        monkeypatch.setattr(api_mod, "is_worth_saving_async", fake_detect)
+        monkeypatch.setattr(api_mod, "translate_async", fake_translate)
+
+        resp = client.post("/api/v1/ingest", json={
+            "content": (
+                "我们已经决定将供应商合同迁移到新的采购平台，这个决定已经最终确定并记录在案，"
+                "包括具体的迁移时间表和负责人安排。"
+            ),
+            "source": "teams",
+            "tenant_id": "acme-corp",
+            "metadata": {"wing": "procurement", "room": "contracts"},
+        })
+        assert resp.status_code == 201
+        entry_id = resp.json()["id"]
+
+        # The stored entry must carry the English translation.
+        from threadweave.api import _memory_store
+        stored = _memory_store.get(entry_id)
+        assert stored is not None
+        assert stored["content_en"] == (
+            "We decided to migrate the vendor contract to the new procurement platform."
+        )
+        # Original preserved.
+        assert stored["content"].startswith("我们已经决定")
+
+        # Search by English terms finds it (in-memory keyword path).
+        r = client.post("/api/v1/search", json={
+            "query": "migrate vendor contract",
+            "tenant_id": "acme-corp",
+            "requester_team": "someone",
+        })
+        assert any(x["id"] == entry_id for x in r.json()["results"])
+
+    def test_english_ingest_skips_translation(self, monkeypatch):
+        from threadweave.detector import DetectionResult, ContentType
+        import threadweave.api as api_mod
+
+        called = {"translate": False}
+
+        async def fake_detect(text, threshold=0.40):
+            return True, DetectionResult(
+                content_type=ContentType.DECISION,
+                confidence=0.95,
+                language="en",
+            )
+
+        async def fake_translate(text, target="en"):
+            called["translate"] = True
+            return "should not be called"
+
+        monkeypatch.setattr(api_mod, "is_worth_saving_async", fake_detect)
+        monkeypatch.setattr(api_mod, "translate_async", fake_translate)
+
+        resp = client.post("/api/v1/ingest", json={
+            "content": (
+                "We decided to use PostgreSQL for the new analytics platform because "
+                "it offers JSONB support and full-text search that our workload requires."
+            ),
+            "source": "email",
+            "tenant_id": "acme-corp",
+            "metadata": {"wing": "engineering", "room": "database"},
+        })
+        assert resp.status_code == 201
+        assert called["translate"] is False, "translation must not run for English"
+
+        from threadweave.api import _memory_store
+        stored = _memory_store.get(resp.json()["id"])
+        assert stored["content_en"] == ""
+
+    def test_translation_failure_never_blocks_capture(self, monkeypatch):
+        from threadweave.detector import DetectionResult, ContentType
+        import threadweave.api as api_mod
+
+        async def fake_detect(text, threshold=0.40):
+            return True, DetectionResult(
+                content_type=ContentType.DECISION,
+                confidence=0.95,
+                language="no",
+            )
+
+        async def fake_translate(text, target="en"):
+            return None  # translation fails
+
+        monkeypatch.setattr(api_mod, "is_worth_saving_async", fake_detect)
+        monkeypatch.setattr(api_mod, "translate_async", fake_translate)
+
+        resp = client.post("/api/v1/ingest", json={
+            "content": (
+                "Vi har besluttet å migrere leverandørkontrakten til den nye "
+                "innkjøpsplattformen, og denne beslutningen er endelig og dokumentert."
+            ),
+            "source": "teams",
+            "tenant_id": "acme-corp",
+            "metadata": {"wing": "procurement", "room": "contracts"},
+        })
+        assert resp.status_code == 201, "capture must not fail when translation fails"
+
+        from threadweave.api import _memory_store
+        stored = _memory_store.get(resp.json()["id"])
+        assert stored is not None
+        # Original preserved even though translation returned None.
+        assert stored["content"].startswith("Vi har besluttet")
+        assert stored["content_en"] == ""
+
+
+class TestP2Citation:
+    """P2: every search result carries a source_url citation back to the
+    exact captured source (Teams message deep link, file, etc.)."""
+
+    def test_search_result_includes_source_url(self):
+        resp = client.post("/api/v1/ingest", json={
+            "content": (
+                "We decided to adopt Kubernetes for the platform rollout and "
+                "this decision is now finalized and documented in full."
+            ),
+            "source": "teams",
+            "tenant_id": "acme-corp",
+            "metadata": {
+                "wing": "platform",
+                "room": "deploy",
+                "message_url": "https://teams.microsoft.com/l/message/team/123",
+            },
+        })
+        assert resp.status_code == 201
+        eid = resp.json()["id"]
+
+        r = client.post("/api/v1/search", json={
+            "query": "Kubernetes platform rollout",
+            "tenant_id": "acme-corp",
+            "requester_team": "someone",
+        })
+        hits = [x for x in r.json()["results"] if x["id"] == eid]
+        assert hits, "entry should be searchable"
+        assert hits[0].get("source_url") == (
+            "https://teams.microsoft.com/l/message/team/123"
+        )
+
+    def test_source_url_empty_for_manual_entry(self):
+        """An entry captured with no source link has an empty source_url."""
+        resp = client.post("/api/v1/ingest", json={
+            "content": (
+                "We decided to standardize on a quarterly security review and "
+                "this decision is now finalized and documented in full."
+            ),
+            "source": "manual",
+            "tenant_id": "acme-corp",
+            "metadata": {"wing": "security", "room": "process"},
+        })
+        assert resp.status_code == 201
+        eid = resp.json()["id"]
+
+        r = client.post("/api/v1/search", json={
+            "query": "quarterly security review",
+            "tenant_id": "acme-corp",
+            "requester_team": "someone",
+        })
+        hits = [x for x in r.json()["results"] if x["id"] == eid]
+        assert hits
+        assert hits[0].get("source_url") == ""
+
+    def test_citation_url_helper_prefers_message_url(self):
+        import threadweave.api as api_mod
+        md = {
+            "source_file": "/path/to/doc.pdf",
+            "url": "https://example.com/doc.pdf",
+            "message_url": "https://teams.microsoft.com/l/message/42",
+        }
+        assert api_mod._citation_url(md) == "https://teams.microsoft.com/l/message/42"
+
+    def test_citation_url_falls_back_when_no_message_url(self):
+        import threadweave.api as api_mod
+        md = {"url": "https://example.com/doc.pdf"}
+        assert api_mod._citation_url(md) == "https://example.com/doc.pdf"
+
+    def test_citation_url_empty_for_no_link(self):
+        import threadweave.api as api_mod
+        assert api_mod._citation_url({}) == ""
+        assert api_mod._citation_url({"wing": "x"}) == ""
+
 
 

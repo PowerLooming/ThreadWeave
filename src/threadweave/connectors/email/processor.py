@@ -23,6 +23,7 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from threadweave.detector import is_worth_saving_async, DetectionResult
+from threadweave.auth import api_headers
 from threadweave.connectors.email.watcher import (
     EmailMessage,
     EmailThread,
@@ -295,6 +296,7 @@ class EmailProcessor:
             async with httpx.AsyncClient(timeout=30.0) as client:
                 resp = await client.post(
                     "http://localhost:8000/api/v1/ingest",
+                    headers=api_headers(),
                     json={
                         "content": text,
                         "source": "email",

@@ -42,6 +42,7 @@ def _make_llm_response(
     should_save: bool = True,
     entities: list | None = None,
     has_pii: bool = False,
+    language: str = "",
     suggested_title: str = "Test Title",
     suggested_scope: str = "team",
     reasoning: str = "Clear knowledge-sharing pattern detected.",
@@ -53,6 +54,7 @@ def _make_llm_response(
         "should_save": should_save,
         "entities": entities or [],
         "has_pii": has_pii,
+        "language": language,
         "suggested_title": suggested_title,
         "suggested_scope": suggested_scope,
         "reasoning": reasoning,
@@ -725,3 +727,104 @@ class TestSystemPrompt:
 
     def test_prompt_asks_for_json_only(self):
         assert "ONLY a valid JSON object" in SYSTEM_PROMPT
+
+
+# ── Translation (P6) ───────────────────────────────────────────────
+
+
+def _make_translation_response(text: str) -> dict:
+    """Ollama-style response whose message.content is the translated text."""
+    return {"message": {"content": text}, "prompt_eval_count": 10, "eval_count": 20}
+
+
+class TestTranslate:
+    """Tests for LLMDetector.translate() (P6 cross-language capture)."""
+
+    @pytest.mark.asyncio
+    async def test_translate_returns_text(self):
+        detector = LLMDetector(LLMConfig(
+            api_key="sk-test", provider="ollama", base_url="http://localhost:11434/v1",
+            model="qwen3.5:9b", max_retries=0,
+        ))
+        detector._client = _make_mock_client(
+            _make_translation_response("We decided to move the vendor contract.")
+        )
+        out = await detector.translate("我们决定迁移供应商合同。", target="en")
+        assert out == "We decided to move the vendor contract."
+
+    @pytest.mark.asyncio
+    async def test_translate_strips_quotes(self):
+        detector = LLMDetector(LLMConfig(api_key="sk-test", provider="ollama",
+                                         base_url="http://localhost:11434/v1",
+                                         model="qwen3.5:9b", max_retries=0))
+        detector._client = _make_mock_client(
+            _make_translation_response('"We decided to move the contract."')
+        )
+        out = await detector.translate("我们决定迁移合同。")
+        assert out == "We decided to move the contract."
+
+    @pytest.mark.asyncio
+    async def test_translate_failure_returns_none(self):
+        """A failed translation must return None (never raise)."""
+        detector = LLMDetector(LLMConfig(api_key="sk-test", provider="ollama",
+                                         base_url="http://localhost:11434/v1",
+                                         model="qwen3.5:9b", max_retries=0))
+        detector._client = MagicMock(spec=httpx.AsyncClient)
+        detector._client.post = AsyncMock(side_effect=httpx.ConnectError("down"))
+        out = await detector.translate("我们决定迁移合同。")
+        assert out is None
+
+    @pytest.mark.asyncio
+    async def test_translate_not_available_returns_none(self):
+        """No LLM configured → translate returns None."""
+        detector = LLMDetector(LLMConfig())  # no api_key, no base_url
+        out = await detector.translate("some text")
+        assert out is None
+
+    def test_translate_sync(self):
+        detector = LLMDetector(LLMConfig(
+            api_key="sk-test", provider="ollama", base_url="http://localhost:11434/v1",
+            model="qwen3.5:9b", max_retries=0,
+        ))
+        detector._client = _make_mock_client(
+            _make_translation_response("Hello world.")
+        )
+        out = detector.translate_sync("你好，世界。")
+        assert out == "Hello world."
+
+
+class TestLanguageDetection:
+    """P6: the LLM reports content language; we parse it into DetectionResult."""
+
+    @pytest.mark.asyncio
+    async def test_language_parsed_from_llm_response(self):
+        detector = LLMDetector(LLMConfig(api_key="sk-test", model="gpt-4o-mini", max_retries=0))
+        detector._client = _make_mock_client(_make_llm_response(
+            content_type="decision", confidence=0.9, language="zh",
+        ))
+        result = await detector.detect(
+            "我们已经决定将供应商合同迁移到新的采购平台，这个决定已经最终确定并记录在案，"
+            "包括具体的迁移时间表和负责人安排。"
+        )
+        assert result.language == "zh"
+
+    @pytest.mark.asyncio
+    async def test_language_defaults_empty_for_english(self):
+        detector = LLMDetector(LLMConfig(api_key="sk-test", model="gpt-4o-mini", max_retries=0))
+        detector._client = _make_mock_client(_make_llm_response(
+            content_type="answer", confidence=0.9, language="en",
+        ))
+        result = await detector.detect(
+            "We decided to use PostgreSQL for the new analytics platform because "
+            "it offers JSONB support and full-text search that our workload requires."
+        )
+        assert result.language == "en"
+
+    @pytest.mark.asyncio
+    async def test_invalid_language_normalized_to_empty(self):
+        detector = LLMDetector(LLMConfig(api_key="sk-test", model="gpt-4o-mini", max_retries=0))
+        detector._client = _make_mock_client(_make_llm_response(
+            content_type="answer", confidence=0.9, language="English!!",
+        ))
+        result = await detector.detect("We decided to use PostgreSQL.")
+        assert result.language == ""
