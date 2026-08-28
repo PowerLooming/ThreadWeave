@@ -39,11 +39,13 @@ def cmd_detect(args):
 def cmd_search(args):
     """Search organizational memory."""
     import httpx
+    from threadweave.auth import api_headers
 
     try:
         resp = httpx.post(
             f"http://{args.host}:{args.port}/api/v1/search",
             json={"query": args.query, "limit": args.limit},
+            headers=api_headers(),
             timeout=10,
         )
         resp.raise_for_status()
@@ -61,6 +63,7 @@ def cmd_search(args):
 def cmd_save(args):
     """Save knowledge to organizational memory."""
     import httpx
+    from threadweave.auth import api_headers
 
     payload = {
         "content": args.content,
@@ -75,6 +78,7 @@ def cmd_save(args):
         resp = httpx.post(
             f"http://{args.host}:{args.port}/api/v1/entries",
             json=payload,
+            headers=api_headers(),
             timeout=10,
         )
         resp.raise_for_status()

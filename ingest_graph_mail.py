@@ -29,6 +29,12 @@ import httpx
 API = "http://localhost:8000/api/v1/ingest"
 GRAPH_API = "https://graph.microsoft.com/v1.0"
 
+
+def _api_headers():
+    """X-API-Key header if THREADWEAVE_API_KEY is set (for auth-enabled servers)."""
+    key = os.environ.get("THREADWEAVE_API_KEY", "").strip()
+    return {"X-API-Key": key} if key else {}
+
 # Microsoft's well-known "Microsoft Authentication Library" client ID
 # for public client apps — works with device code flow without any
 # Azure registration. Used by Microsoft's own tools and SDKs.
@@ -265,7 +271,7 @@ def main():
             continue
 
         try:
-            resp = httpx.post(api_url, json={
+            resp = httpx.post(api_url, headers=_api_headers(), json={
                 "content": email_data["content"],
                 "source": "email",
                 "tenant_id": "default",

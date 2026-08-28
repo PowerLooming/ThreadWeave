@@ -42,6 +42,7 @@ from html.parser import HTMLParser
 
 import httpx
 
+from threadweave.auth import api_headers
 from threadweave.connectors.sharepoint.watcher import GRAPH_API_BASE, GraphClient
 
 logger = logging.getLogger(__name__)
@@ -497,7 +498,9 @@ class TeamsWatchDaemon:
 
         async with httpx.AsyncClient(timeout=30.0) as client:
             resp = await client.post(
-                f"{self.api_base_url}/api/v1/ingest", json=payload
+                f"{self.api_base_url}/api/v1/ingest",
+                json=payload,
+                headers=api_headers(),
             )
             resp.raise_for_status()
             return resp.json()

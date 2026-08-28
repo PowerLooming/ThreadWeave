@@ -34,6 +34,7 @@ try:
 except ImportError:
     BOTBUILDER_AVAILABLE = False
 
+from threadweave.auth import api_headers
 from threadweave.detector import is_worth_saving_async, DetectionResult
 
 logger = logging.getLogger(__name__)
@@ -1170,7 +1171,8 @@ class ThreadWeaveTeamsBot(ActivityHandler if BOTBUILDER_AVAILABLE else object):
         try:
             async with httpx.AsyncClient(timeout=10.0) as client:
                 resp = await client.post(
-                    f"{self.api_base_url}{path}", json=body
+                    f"{self.api_base_url}{path}", json=body,
+                    headers=api_headers(),
                 )
                 if resp.status_code < 300:
                     return resp.json()
@@ -1184,7 +1186,9 @@ class ThreadWeaveTeamsBot(ActivityHandler if BOTBUILDER_AVAILABLE else object):
 
         try:
             async with httpx.AsyncClient(timeout=10.0) as client:
-                resp = await client.get(f"{self.api_base_url}{path}")
+                resp = await client.get(
+                    f"{self.api_base_url}{path}", headers=api_headers(),
+                )
                 if resp.status_code < 300:
                     return resp.json()
         except Exception as e:
@@ -1199,6 +1203,7 @@ class ThreadWeaveTeamsBot(ActivityHandler if BOTBUILDER_AVAILABLE else object):
                 resp = await client.post(
                     f"{self.api_base_url}/api/v1/search",
                     json={"query": query, "limit": 20},
+                    headers=api_headers(),
                 )
                 if resp.status_code < 300:
                     return resp.json().get("results", [])
@@ -1214,6 +1219,7 @@ class ThreadWeaveTeamsBot(ActivityHandler if BOTBUILDER_AVAILABLE else object):
                 resp = await client.delete(
                     f"{self.api_base_url}/api/v1/entries/{entry_id}",
                     params={"person_id": person, "role": "readwrite"},
+                    headers=api_headers(),
                 )
                 return resp.status_code == 204
         except Exception as e:
@@ -1420,6 +1426,7 @@ class ThreadWeaveTeamsBot(ActivityHandler if BOTBUILDER_AVAILABLE else object):
             resp = await client.post(
                 f"{self.api_base_url}/api/v1/ingest",
                 json=payload,
+                headers=api_headers(),
             )
             resp.raise_for_status()
             result = resp.json()
@@ -1443,6 +1450,7 @@ class ThreadWeaveTeamsBot(ActivityHandler if BOTBUILDER_AVAILABLE else object):
                         "title": title,
                         "tenant_id": "default",
                     },
+                    headers=api_headers(),
                 )
                 if resp.status_code == 422 and resp.json().get("code") == "rejected_gossip":
                     raise GossipRejectedError()

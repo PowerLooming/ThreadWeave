@@ -36,6 +36,7 @@ from typing import Optional
 
 import requests
 
+from threadweave.auth import api_headers
 from threadweave.connectors.graph.auth import GraphAuth, GraphCredentials
 from threadweave.connectors.graph.schema import (
     CONNECTION_ID,
@@ -523,7 +524,7 @@ class ThreadWeaveGraphConnector:
         """
         try:
             list_url = f"{self.threadweave_url}/api/v1/tenants/default/entries"
-            resp = requests.get(list_url, timeout=30)
+            resp = requests.get(list_url, headers=api_headers(), timeout=30)
             if resp.status_code != 200:
                 logger.error(
                     "Failed to list entries: %s", resp.status_code,
@@ -537,6 +538,7 @@ class ThreadWeaveGraphConnector:
             for item in listing:
                 entry_resp = requests.get(
                     f"{self.threadweave_url}/api/v1/entries/{item['id']}",
+                    headers=api_headers(),
                     timeout=10,
                 )
                 if entry_resp.status_code == 200:

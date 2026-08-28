@@ -26,6 +26,13 @@ import httpx
 
 API = "http://localhost:8000/api/v1/ingest"
 
+
+def _api_headers():
+    """X-API-Key header if THREADWEAVE_API_KEY is set (for auth-enabled servers)."""
+    import os
+    key = os.environ.get("THREADWEAVE_API_KEY", "").strip()
+    return {"X-API-Key": key} if key else {}
+
 # Common IMAP servers
 SERVERS = {
     "outlook": "outlook.office365.com",
@@ -174,7 +181,7 @@ def main():
                 print()
                 continue
 
-            resp = httpx.post(api_url, json={
+            resp = httpx.post(api_url, headers=_api_headers(), json={
                 "content": email_data["content"],
                 "source": "email",
                 "tenant_id": "default",

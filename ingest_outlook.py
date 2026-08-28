@@ -8,12 +8,19 @@ Usage:
     python ingest_outlook.py --dry-run                # Preview only, don't submit
 """
 import argparse
+import os
 import re
 import sys
 
 import httpx
 
 API = "http://localhost:8000/api/v1/ingest"
+
+
+def _api_headers():
+    """X-API-Key header if THREADWEAVE_API_KEY is set (for auth-enabled servers)."""
+    key = os.environ.get("THREADWEAVE_API_KEY", "").strip()
+    return {"X-API-Key": key} if key else {}
 
 
 def strip_reply_headers(text: str) -> str:
@@ -214,7 +221,7 @@ def main():
             continue
 
         try:
-            resp = httpx.post(api_url, json={
+            resp = httpx.post(api_url, headers=_api_headers(), json={
                 "content": email_data["body"],
                 "source": "email",
                 "tenant_id": "default",
