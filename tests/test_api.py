@@ -978,4 +978,79 @@ class TestP6CrossLanguageCapture:
         assert stored["content_en"] == ""
 
 
+class TestP2Citation:
+    """P2: every search result carries a source_url citation back to the
+    exact captured source (Teams message deep link, file, etc.)."""
+
+    def test_search_result_includes_source_url(self):
+        resp = client.post("/api/v1/ingest", json={
+            "content": (
+                "We decided to adopt Kubernetes for the platform rollout and "
+                "this decision is now finalized and documented in full."
+            ),
+            "source": "teams",
+            "tenant_id": "acme-corp",
+            "metadata": {
+                "wing": "platform",
+                "room": "deploy",
+                "message_url": "https://teams.microsoft.com/l/message/team/123",
+            },
+        })
+        assert resp.status_code == 201
+        eid = resp.json()["id"]
+
+        r = client.post("/api/v1/search", json={
+            "query": "Kubernetes platform rollout",
+            "tenant_id": "acme-corp",
+            "requester_team": "someone",
+        })
+        hits = [x for x in r.json()["results"] if x["id"] == eid]
+        assert hits, "entry should be searchable"
+        assert hits[0].get("source_url") == (
+            "https://teams.microsoft.com/l/message/team/123"
+        )
+
+    def test_source_url_empty_for_manual_entry(self):
+        """An entry captured with no source link has an empty source_url."""
+        resp = client.post("/api/v1/ingest", json={
+            "content": (
+                "We decided to standardize on a quarterly security review and "
+                "this decision is now finalized and documented in full."
+            ),
+            "source": "manual",
+            "tenant_id": "acme-corp",
+            "metadata": {"wing": "security", "room": "process"},
+        })
+        assert resp.status_code == 201
+        eid = resp.json()["id"]
+
+        r = client.post("/api/v1/search", json={
+            "query": "quarterly security review",
+            "tenant_id": "acme-corp",
+            "requester_team": "someone",
+        })
+        hits = [x for x in r.json()["results"] if x["id"] == eid]
+        assert hits
+        assert hits[0].get("source_url") == ""
+
+    def test_citation_url_helper_prefers_message_url(self):
+        import threadweave.api as api_mod
+        md = {
+            "source_file": "/path/to/doc.pdf",
+            "url": "https://example.com/doc.pdf",
+            "message_url": "https://teams.microsoft.com/l/message/42",
+        }
+        assert api_mod._citation_url(md) == "https://teams.microsoft.com/l/message/42"
+
+    def test_citation_url_falls_back_when_no_message_url(self):
+        import threadweave.api as api_mod
+        md = {"url": "https://example.com/doc.pdf"}
+        assert api_mod._citation_url(md) == "https://example.com/doc.pdf"
+
+    def test_citation_url_empty_for_no_link(self):
+        import threadweave.api as api_mod
+        assert api_mod._citation_url({}) == ""
+        assert api_mod._citation_url({"wing": "x"}) == ""
+
+
 

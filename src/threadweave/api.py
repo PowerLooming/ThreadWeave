@@ -111,6 +111,22 @@ def _request_ip_hash(request: Request) -> str:
     return hashlib.sha256(host.encode()).hexdigest()[:16]
 
 
+def _citation_url(metadata: dict) -> str:
+    """P2: resolve the deep-link source URL for an entry's citation.
+
+    Prefers the Teams message ``webUrl`` (message_url), falling back to a
+    ``source_file`` pointer, then a ``url`` if present. Returns "" when the
+    source carries no link (e.g. a manual entry).
+    """
+    if not metadata:
+        return ""
+    for key in ("message_url", "webUrl", "url", "source_file"):
+        val = metadata.get(key) or ""
+        if isinstance(val, str) and val.startswith(("http", "https")):
+            return val
+    return ""
+
+
 def _materialize_acl(acl: Optional[dict]) -> dict:
     """Normalize a per-source ACL block into a stored, enforced form.
 
@@ -1294,6 +1310,9 @@ async def search(req: SearchRequest, request: Request):
                     "source_metadata": _src.get("source_metadata", {}),
                     "allowed_people": _src.get("allowed_people", []),
                     "acl": _src.get("acl", {}),
+                    # P2 citation: the deep link back to the exact captured
+                    # source (Teams message webUrl, or source_file).
+                    "source_url": _citation_url(_src.get("source_metadata", {})),
                 })
         except Exception as exc:
             logger.warning(
@@ -1353,6 +1372,8 @@ async def search(req: SearchRequest, request: Request):
                 "source_metadata": entry.get("source_metadata", {}),
                 "allowed_people": entry.get("allowed_people", []),
                 "acl": entry.get("acl", {}),
+                # P2 citation: deep link back to the exact captured source.
+                "source_url": _citation_url(entry.get("source_metadata", {})),
             })
 
     # ── 3. Confidentiality filtering ──
