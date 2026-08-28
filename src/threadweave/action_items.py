@@ -546,3 +546,111 @@ def list_pending_tasks(store, owner: str = "") -> list[dict]:
             continue
         result.append(entry)
     return result
+
+
+# ── Follow-up loop (P3) ────────────────────────────────────────────
+# Persistence + reassign + check-off + weekly digest. The action item lives
+# in the entry's source_metadata; these functions mutate it through the store.
+
+def reassign_task(
+    store,
+    entry_id: str,
+    new_owner: str,
+    new_owner_name: str = "",
+) -> bool:
+    """Reassign an open action item to a new owner.
+
+    Updates ``action_owner`` (+ ``action_owner_name``) and resets any
+    completion state back to OPEN (a reassigned task is not done). Returns
+    True on success, False if the entry is not an action item.
+    """
+    entry = store.get(entry_id)
+    if not entry:
+        return False
+    md = entry.setdefault("source_metadata", {})
+    if not md.get("action_item"):
+        return False
+    md["action_owner"] = new_owner
+    md["action_owner_name"] = new_owner_name or new_owner
+    md["action_status"] = ActionStatus.OPEN.value
+    md["action_reassigned_at"] = datetime.now().isoformat()
+    # The new owner must be resolvable as a person for the task to list.
+    md["action_owner_resolved"] = True
+    store.save(entry)
+    return True
+
+
+def list_tasks_due(store, within_days: int = 7) -> list[dict]:
+    """Return open action items with a deadline within ``within_days``.
+
+    Includes overdue items (deadline in the past) and items due within the
+    window. Items with no deadline are excluded. Sorted by deadline.
+    """
+    from datetime import timedelta
+
+    now = datetime.now().date()
+    window_end = now + timedelta(days=within_days)
+    out = []
+    for entry in store.load_all():
+        md = entry.get("source_metadata") or {}
+        if not md.get("action_item"):
+            continue
+        if md.get("action_status") != ActionStatus.OPEN.value:
+            continue
+        deadline = md.get("action_deadline", "")
+        if not deadline:
+            continue
+        try:
+            d = datetime.fromisoformat(deadline).date()
+        except ValueError:
+            continue
+        if d <= window_end:
+            out.append(entry)
+    out.sort(key=lambda e: (e.get("source_metadata") or {}).get("action_deadline", ""))
+    return out
+
+
+def build_digest(store, owner: str = "") -> dict:
+    """Compile a per-owner action-item digest (weekly follow-up summary).
+
+    Returns counts plus the lists: open (all), due-soon (within 7 days),
+    overdue (deadline in the past), pending confirmation (suggested_done).
+    Filtered by ``owner`` when provided.
+    """
+    from datetime import timedelta
+
+    now = datetime.now().date()
+    open_list, due_list, overdue_list, pending_list = [], [], [], []
+    for entry in store.load_all():
+        md = entry.get("source_metadata") or {}
+        if not md.get("action_item"):
+            continue
+        if owner and md.get("action_owner") != owner:
+            continue
+        status = md.get("action_status", "open")
+        deadline = md.get("action_deadline", "")
+        if status == ActionStatus.OPEN.value:
+            open_list.append(entry)
+            if deadline:
+                try:
+                    d = datetime.fromisoformat(deadline).date()
+                except ValueError:
+                    d = None
+                if d is not None:
+                    if d < now:
+                        overdue_list.append(entry)
+                    elif d <= now + timedelta(days=7):
+                        due_list.append(entry)
+        elif status == ActionStatus.SUGGESTED_DONE.value:
+            pending_list.append(entry)
+    return {
+        "owner": owner,
+        "open_count": len(open_list),
+        "due_soon_count": len(due_list),
+        "overdue_count": len(overdue_list),
+        "pending_confirmation_count": len(pending_list),
+        "open": open_list,
+        "due_soon": due_list,
+        "overdue": overdue_list,
+        "pending_confirmation": pending_list,
+    }

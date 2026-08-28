@@ -187,6 +187,56 @@ def cmd_tasks_undone(args):
         sys.exit(1)
 
 
+def cmd_tasks_reassign(args):
+    """Reassign an open action item to a new owner."""
+    from threadweave.store import EntryStore
+    from threadweave.action_items import reassign_task
+
+    store = EntryStore()
+    ok = reassign_task(store, args.entry_id, args.to, args.name or "")
+    if ok:
+        print(f"Reassigned {args.entry_id} to {args.name or args.to}.")
+    else:
+        print(f"No open action item found with id '{args.entry_id}'.", file=sys.stderr)
+        sys.exit(1)
+
+
+def cmd_tasks_digest(args):
+    """Print a weekly follow-up digest of action items."""
+    from threadweave.store import EntryStore
+    from threadweave.action_items import build_digest
+
+    store = EntryStore()
+    owner = args.owner or ""
+    digest = build_digest(store, owner=owner)
+    label = f" for {owner}" if owner else ""
+    print(f"Action-item digest{label}:")
+    print(f"  open:                  {digest['open_count']}")
+    print(f"  due soon (<=7d):       {digest['due_soon_count']}")
+    print(f"  overdue:               {digest['overdue_count']}")
+    print(f"  pending confirmation:  {digest['pending_confirmation_count']}")
+
+    def _fmt(e):
+        md = e.get("source_metadata") or {}
+        owner_txt = md.get("action_owner_name") or md.get("action_owner") or "(unresolved)"
+        deadline = md.get("action_deadline", "")
+        dl = f"  [by {deadline}]" if deadline else ""
+        return f"    {owner_txt}: {md.get('action', e.get('content',''))}{dl}  ({e['id']})"
+
+    if digest["overdue"]:
+        print("\nOverdue:")
+        for e in digest["overdue"]:
+            print(_fmt(e))
+    if digest["due_soon"]:
+        print("\nDue soon:")
+        for e in digest["due_soon"]:
+            print(_fmt(e))
+    if digest["pending_confirmation"]:
+        print("\nAwaiting confirmation (suggested done):")
+        for e in digest["pending_confirmation"]:
+            print(_fmt(e))
+
+
 def _current_user() -> str:
     """Best-effort current OS user as an owner fallback."""
     import getpass
@@ -915,6 +965,17 @@ def build_parser() -> argparse.ArgumentParser:
     p_tasks_undone = tasks_sub.add_parser(
         "undone", help="Reopen a done action item")
     p_tasks_undone.add_argument("entry_id")
+    p_tasks_reassign = tasks_sub.add_parser(
+        "reassign", help="Reassign an open action item to a new owner")
+    p_tasks_reassign.add_argument("entry_id")
+    p_tasks_reassign.add_argument("--to", required=True,
+                                  help="New owner id")
+    p_tasks_reassign.add_argument("--name", default="",
+                                  help="New owner display name")
+    p_tasks_digest = tasks_sub.add_parser(
+        "digest", help="Print a weekly follow-up digest of action items")
+    p_tasks_digest.add_argument("--owner", default="",
+                                help="Only include this owner's items")
 
     p_teams = sub.add_parser("teams", help="Teams app tooling")
     teams_sub = p_teams.add_subparsers(dest="teams_command")
@@ -1062,6 +1123,10 @@ def main() -> None:
             cmd_tasks_done(args)
         elif args.tasks_command == "undone":
             cmd_tasks_undone(args)
+        elif args.tasks_command == "reassign":
+            cmd_tasks_reassign(args)
+        elif args.tasks_command == "digest":
+            cmd_tasks_digest(args)
         else:
             p_tasks.print_help()
     elif args.command == "org":

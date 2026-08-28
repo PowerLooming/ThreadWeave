@@ -16,9 +16,13 @@ from threadweave.action_items import (
     extract_completion_signal,
     suggest_done,
     list_pending_tasks,
+    reassign_task,
+    list_tasks_due,
+    build_digest,
 )
 from threadweave.org_model import OrgModel
 from threadweave.store import EntryStore
+from datetime import datetime
 
 
 @pytest.fixture
@@ -300,4 +304,93 @@ class TestCompletionDetection:
         assert set_task_status(store, "t1", ActionStatus.OPEN) is True
         assert list_open_tasks(store, owner="harald")[0]["id"] == "t1"
         assert list_pending_tasks(store, owner="harald") == []
+
+
+class TestFollowUpLoop:
+    """P3: reassign, due-soon/overdue, and the weekly digest."""
+
+    def _make_task(self, store, eid, owner, action="chase the vendor",
+                   deadline="", status="open"):
+        entry = {
+            "id": eid,
+            "content": f"{owner} to {action}",
+            "wing": "engineering", "room": "general",
+            "source_type": "email", "author_id": "boss@x.com",
+        }
+        item = ActionItem(
+            owner=owner, owner_name=owner.title(), owner_resolved=True,
+            action=action, deadline=deadline,
+        )
+        item.status = ActionStatus(status)
+        attach_to_entry(entry, item)
+        store.save(entry)
+        return entry
+
+    def test_reassign_changes_owner_and_resets_to_open(self, store):
+        self._make_task(store, "t1", "harald", deadline="2026-08-22")
+        assert reassign_task(store, "t1", "adele", "Adele Smith") is True
+        loaded = store.get("t1")
+        md = loaded["source_metadata"]
+        assert md["action_owner"] == "adele"
+        assert md["action_owner_name"] == "Adele Smith"
+        assert md["action_status"] == "open"
+        # Now listed under adele, not harald.
+        assert list_open_tasks(store, owner="adele")[0]["id"] == "t1"
+        assert list_open_tasks(store, owner="harald") == []
+
+    def test_reassign_reopens_done_task(self, store):
+        self._make_task(store, "t1", "harald", status="done")
+        # mark done
+        set_task_status(store, "t1", ActionStatus.DONE)
+        assert reassign_task(store, "t1", "adele") is True
+        assert store.get("t1")["source_metadata"]["action_status"] == "open"
+
+    def test_reassign_non_action_item_returns_false(self, store):
+        store.save({"id": "x", "content": "not a task",
+                    "source_type": "manual"})
+        assert reassign_task(store, "x", "adele") is False
+
+    def test_list_tasks_due_includes_overdue_and_within_window(self, store):
+        # overdue (yesterday)
+        self._make_task(store, "t1", "harald", deadline=_iso_days_ago(1))
+        # due in 3 days
+        self._make_task(store, "t2", "adele", deadline=_iso_days_from_now(3))
+        # due far out (30 days) — excluded
+        self._make_task(store, "t3", "bob", deadline=_iso_days_from_now(30))
+        # no deadline — excluded
+        self._make_task(store, "t4", "harald", deadline="")
+        due = [e["id"] for e in list_tasks_due(store, within_days=7)]
+        assert "t1" in due and "t2" in due
+        assert "t3" not in due and "t4" not in due
+
+    def test_build_digest_counts_and_sections(self, store):
+        self._make_task(store, "t1", "harald", deadline=_iso_days_ago(1))  # overdue
+        self._make_task(store, "t2", "harald", deadline=_iso_days_from_now(3))  # due soon
+        self._make_task(store, "t3", "harald", status="suggested_done")  # pending
+        self._make_task(store, "t4", "adele", deadline=_iso_days_from_now(1))  # other owner
+        d = build_digest(store, owner="harald")
+        assert d["owner"] == "harald"
+        assert d["open_count"] == 2
+        assert d["overdue_count"] == 1
+        assert d["due_soon_count"] == 1
+        assert d["pending_confirmation_count"] == 1
+        # adele's task excluded by owner filter
+        assert all(e["source_metadata"]["action_owner"] == "harald"
+                   for e in d["open"])
+
+    def test_build_digest_all_owners(self, store):
+        self._make_task(store, "t1", "harald")
+        self._make_task(store, "t2", "adele")
+        d = build_digest(store)
+        assert d["open_count"] == 2
+
+
+def _iso_days_ago(days: int) -> str:
+    from datetime import timedelta
+    return (datetime.now().date() - timedelta(days=days)).isoformat()
+
+
+def _iso_days_from_now(days: int) -> str:
+    from datetime import timedelta
+    return (datetime.now().date() + timedelta(days=days)).isoformat()
 
