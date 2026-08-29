@@ -1162,4 +1162,73 @@ class TestP2Citation:
         assert api_mod._citation_url({"wing": "x"}) == ""
 
 
+class TestP4Topics:
+    """P4: the /api/v1/topics endpoint bundles entries into browsable topics."""
+
+    def _ingest(self, content, title, entities=None, source="teams", tenant="acme-corp"):
+        md = {"wing": "platform", "room": "general", "title": title}
+        if entities:
+            md["entities_hint"] = entities
+        resp = client.post("/api/v1/ingest", json={
+            "content": content, "source": source, "tenant_id": tenant,
+            "metadata": md,
+        })
+        assert resp.status_code == 201
+        return resp.json()["id"]
+
+    def test_topics_groups_related_entries(self):
+        # Two entries mentioning PostgreSQL (LLM detection extracts the entity)
+        e1 = self._ingest(
+            "We decided to adopt PostgreSQL for the analytics platform and this decision is finalized and documented.",
+            "PostgreSQL analytics decision",
+        )
+        e2 = self._ingest(
+            "We decided to migrate our reporting stack to PostgreSQL for reliability and this decision is finalized and documented.",
+            "PostgreSQL migration",
+        )
+        r = client.post("/api/v1/topics", json={"tenant_id": "acme-corp"})
+        assert r.status_code == 200
+        topics = r.json()["topics"]
+        # A postgresql topic exists containing both entries
+        pg = [t for t in topics if "postgresql" in t["name"].lower()]
+        assert pg, f"expected postgresql topic, got {[t['name'] for t in topics]}"
+        assert e1 in pg[0]["entry_ids"] and e2 in pg[0]["entry_ids"]
+
+    def test_topics_respects_min_size(self):
+        self._ingest(
+            "We decided to use Redis for caching and this decision is finalized and documented.",
+            "Redis cache",
+        )
+        r = client.post("/api/v1/topics", json={"tenant_id": "acme-corp", "min_size": 2})
+        topics = r.json()["topics"]
+        redis = [t for t in topics if "redis" in t["name"].lower()]
+        assert redis == [], "singleton Redis topic should be filtered at min_size=2"
+
+    def test_topics_confidentiality_filters(self):
+        # A private-channel entry must not appear in topics for a non-member.
+        resp = client.post("/api/v1/ingest", json={
+            "content": (
+                "We decided to freeze headcount for the department and this management "
+                "decision is now finalized and documented in full."
+            ),
+            "source": "teams", "tenant_id": "acme-corp",
+            "metadata": {
+                "wing": "dept", "room": "management",
+                "private_channel": True, "sensitivity": "restricted",
+                "allowed_people": ["mgmt-1"],
+            },
+        })
+        assert resp.status_code == 201
+
+        r = client.post("/api/v1/topics", json={
+            "tenant_id": "acme-corp", "requester_team": "outsider",
+        })
+        assert r.status_code == 200
+        # outsider must not see the private entry in any topic
+        private_id = resp.json()["id"]
+        for t in r.json()["topics"]:
+            assert private_id not in t["entry_ids"], \
+                f"private entry leaked into topic {t['name']}"
+
+
 

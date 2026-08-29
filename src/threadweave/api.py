@@ -1453,6 +1453,68 @@ async def search(req: SearchRequest, request: Request):
     )
 
 
+# ---- Topics (P4: browse the memory by topic, not just search) ----
+
+class TopicsRequest(BaseModel):
+    tenant_id: str = Field(default="default")
+    requester_team: Optional[str] = None
+    requester_role: Optional[str] = None
+    requester_groups: Optional[list[str]] = None
+    min_size: int = Field(default=2, ge=1, le=20)
+    max_topics: int = Field(default=50, ge=1, le=200)
+    include_people: bool = False
+
+
+class TopicsResponse(BaseModel):
+    topics: list[dict]
+    total_entries: int
+    tenant_id: str
+
+
+@app.post("/api/v1/topics")
+async def topics(req: TopicsRequest, request: Request):
+    """Bundle entries into browsable topics by shared entities/keywords.
+
+    P4: groups the requester-visible entries into topics (technology, system,
+    organization entities + title keywords), so the memory is browsable, not
+    just searchable. Confidentiality-safe: only entries the requester can see
+    are grouped.
+    """
+    from threadweave.topics import bundle_topics
+
+    scoped = _scoped_tenant(request)
+    if scoped:
+        req.tenant_id = scoped
+
+    requester = _requester_from_request(
+        request,
+        wing=req.requester_team or "",
+        person_id=req.requester_team or "",
+        role=req.requester_role or "readwrite",
+        groups=req.requester_groups or [],
+    )
+
+    # Collect the requester-visible entries in the tenant.
+    all_entries = []
+    for eid, entry in _memory_store.items():
+        if entry.get("tenant_id", "default") != req.tenant_id:
+            continue
+        if requester.can_see(entry):
+            all_entries.append(entry)
+
+    bundles = bundle_topics(
+        all_entries,
+        include_people=req.include_people,
+        min_size=req.min_size,
+        max_topics=req.max_topics,
+    )
+    return TopicsResponse(
+        topics=bundles,
+        total_entries=len(all_entries),
+        tenant_id=req.tenant_id,
+    )
+
+
 # ---- Wings (Teams) ----
 
 @app.get("/api/v1/wings")
