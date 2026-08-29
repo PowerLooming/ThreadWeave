@@ -1231,4 +1231,111 @@ class TestP4Topics:
                 f"private entry leaked into topic {t['name']}"
 
 
+class TestP5AuthorConfirmation:
+    """P5: review-and-refine before finalize + weekly recap."""
+
+    @pytest.fixture(autouse=True)
+    def _isolate_notify_store(self, tmp_path, monkeypatch):
+        """Give each test a fresh notification DB so ingest's task
+        notifications don't leak into test_notifications.py (the shared
+        notify singleton would otherwise pollute the flow test)."""
+        import threadweave.notify as notify_mod
+        monkeypatch.setenv(
+            "THREADWEAVE_NOTIFY_DB", str(tmp_path / "notifications.sqlite3"),
+        )
+        notify_mod._store = None
+        yield
+        notify_mod._store = None
+
+    def _ingest(self, content, author="alice", tenant="acme-corp", wing="engineering"):
+        resp = client.post("/api/v1/ingest", json={
+            "content": content, "source": "teams", "tenant_id": tenant,
+            "metadata": {"wing": wing, "room": "general", "author_id": author},
+        })
+        assert resp.status_code == 201
+        return resp.json()["id"]
+
+    def test_refine_updates_title_and_room(self):
+        eid = self._ingest(
+            "We decided to adopt Kubernetes for the platform and this decision is finalized and documented."
+        )
+        r = client.post(f"/api/v1/entries/{eid}/refine", json={
+            "title": "K8s platform adoption", "room": "deploy",
+        }, params={"person_id": "alice"})
+        assert r.status_code == 200
+        assert r.json()["title"] == "K8s platform adoption"
+        assert r.json()["room"] == "deploy"
+
+        # persisted + reflected in store
+        from threadweave.api import _memory_store
+        stored = _memory_store.get(eid)
+        assert stored["title"] == "K8s platform adoption"
+        assert stored["room"] == "deploy"
+
+    def test_refine_appends_notes(self):
+        eid = self._ingest(
+            "We decided to migrate to event sourcing and this decision is finalized and documented."
+        )
+        r = client.post(f"/api/v1/entries/{eid}/refine", json={
+            "notes": "Approved by steering committee",
+        }, params={"person_id": "alice"})
+        assert r.status_code == 200
+        from threadweave.api import _memory_store
+        notes = _memory_store.get(eid).get("refinement_notes", [])
+        assert notes and notes[0]["text"] == "Approved by steering committee"
+
+    def test_refine_denied_for_non_author(self):
+        eid = self._ingest(
+            "We decided to use Postgres and this decision is finalized and documented.",
+            author="alice",
+        )
+        r = client.post(f"/api/v1/entries/{eid}/refine", json={
+            "title": "hijack",
+        }, params={"person_id": "bob"})
+        assert r.status_code == 403
+
+    def test_refine_no_changes_400(self):
+        eid = self._ingest(
+            "We decided to adopt a zero-trust network model and this decision is finalized and documented."
+        )
+        r = client.post(f"/api/v1/entries/{eid}/refine", json={},
+                        params={"person_id": "alice"})
+        assert r.status_code == 400
+
+    def test_recap_returns_author_captures_and_due_tasks(self):
+        eid = self._ingest(
+            "We decided to adopt service mesh for traffic management and this decision is finalized and documented.",
+            author="alice",
+        )
+        # a recap for alice includes her capture
+        r = client.get("/api/v1/recap", params={"person_id": "alice"})
+        assert r.status_code == 200
+        data = r.json()
+        assert data["person_id"] == "alice"
+        assert any(c["id"] == eid for c in data["captures"])
+        # bob's recap excludes alice's capture
+        r2 = client.get("/api/v1/recap", params={"person_id": "bob"})
+        assert all(c["id"] != eid for c in r2.json()["captures"])
+
+    def test_recap_does_not_include_private_entries_for_others(self):
+        resp = client.post("/api/v1/ingest", json={
+            "content": (
+                "We decided to freeze the department budget and this management "
+                "decision is now finalized and documented in full."
+            ),
+            "source": "teams", "tenant_id": "acme-corp",
+            "metadata": {
+                "wing": "dept", "room": "management", "author_id": "alice",
+                "private_channel": True, "sensitivity": "restricted",
+                "allowed_people": ["alice"],
+            },
+        })
+        assert resp.status_code == 201
+        eid = resp.json()["id"]
+
+        # alice (member) sees it in her recap
+        r = client.get("/api/v1/recap", params={"person_id": "alice"})
+        assert any(c["id"] == eid for c in r.json()["captures"])
+
+
 

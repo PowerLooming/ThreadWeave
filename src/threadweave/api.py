@@ -1053,6 +1053,192 @@ async def delete_entry(
     return Response(status_code=204)
 
 
+# ---- Refine Entry (P5: review-and-refine before finalize) ----
+
+class RefineRequest(BaseModel):
+    title: Optional[str] = None
+    room: Optional[str] = None
+    scope: Optional[str] = None
+    notes: Optional[str] = None  # appended as author context
+
+
+@app.post("/api/v1/entries/{entry_id}/refine")
+async def refine_entry(
+    entry_id: str,
+    req: RefineRequest,
+    request: Request,
+    person_id: Optional[str] = Query(None),
+    wing: Optional[str] = Query(None),
+    role: str = Query("readwrite"),
+):
+    """P5: review-and-refine before an entry is finalized.
+
+    The author (or same-wing member / admin) can improve a captured entry's
+    title, room, scope, and append context notes. Persists the change through
+    the store and re-indexes MemPalace so the refined entry reflects the edit.
+    """
+    entry = _memory_store.get(entry_id)
+    if not entry:
+        raise HTTPException(status_code=404, detail="Entry not found")
+
+    scoped = _scoped_tenant(request)
+    if scoped and entry.get("tenant_id", "default") != scoped:
+        raise HTTPException(status_code=404, detail="Entry not found")
+
+    requester = _requester_from_request(
+        request, wing=wing or "", person_id=person_id or "", role=role,
+    )
+
+    # Rights: the entry's author, same-wing member for non-sensitive entries,
+    # or admin/legal/hr.
+    author = entry.get("author_id", "")
+    sensitivity = entry.get("sensitivity", "internal")
+    can_refine = (
+        requester.role in ("admin", "legal", "hr_admin")
+        or (author and requester.person_id == author)
+        or (
+            requester.wing
+            and entry.get("wing") == requester.wing
+            and sensitivity in ("public", "internal")
+        )
+    )
+    if not can_refine:
+        get_audit_log().log_denied(
+            requester, entry, "Insufficient rights to refine",
+            ip_hash=_request_ip_hash(request),
+        )
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    # Apply refinements.
+    refined = False
+    if req.title is not None and req.title.strip() != entry.get("title"):
+        entry["title"] = req.title.strip()
+        refined = True
+    if req.room is not None and req.room.strip() != entry.get("room"):
+        entry["room"] = req.room.strip()
+        refined = True
+    if req.scope is not None and req.scope.strip() in ("team", "department", "organization"):
+        entry["scope"] = req.scope.strip()
+        refined = True
+    if req.notes is not None and req.notes.strip():
+        notes = entry.setdefault("refinement_notes", [])
+        notes.append({
+            "by": requester.person_id or "unknown",
+            "at": datetime.now(timezone.utc).isoformat(),
+            "text": req.notes.strip(),
+        })
+        refined = True
+
+    if not refined:
+        raise HTTPException(status_code=400, detail="No changes supplied")
+
+    # Persist through the store.
+    try:
+        get_entry_store().save(entry)
+    except Exception as exc:
+        logger.warning("Refine persistence failed for %s: %s", entry_id, exc)
+
+    # Re-index MemPalace so the refined title/room is searchable.
+    if _mempalace_available:
+        try:
+            _mempalace.add_drawer(
+                content=entry.get("content", ""),
+                wing=entry.get("wing", ""),
+                room=entry["room"],
+                title=entry.get("title", ""),
+                source=entry.get("source_type", "manual"),
+                created_at=entry.get("created_at", ""),
+                author_id=entry.get("author_id", ""),
+                content_type=entry.get("content_type", "answer"),
+                drawer_id=entry_id,
+                tenant_id=entry.get("tenant_id", "default"),
+                sensitivity=entry.get("sensitivity", "internal"),
+            )
+        except Exception as exc:
+            logger.warning("MemPalace re-index failed after refine %s: %s", entry_id, exc)
+
+    get_audit_log().log_access(
+        requester, entry, action="refine",
+        ip_hash=_request_ip_hash(request),
+    )
+    return {
+        "id": entry_id,
+        "title": entry.get("title", ""),
+        "room": entry["room"],
+        "scope": entry.get("scope", ""),
+        "refined": True,
+    }
+
+
+# ---- Weekly Recap (P5: "what did you save this week") ----
+
+@app.get("/api/v1/recap")
+async def weekly_recap(
+    request: Request,
+    person_id: Optional[str] = Query(None),
+    role: str = Query("readwrite"),
+    days: int = Query(7, ge=1, le=31),
+):
+    """P5: the author's 'what did I save this week' recap.
+
+    Returns the captures authored by ``person_id`` in the last ``days`` days,
+    plus the author's due action items. Confined to what the requester can see.
+    """
+    from datetime import timedelta
+
+    requester = _requester_from_request(
+        request, person_id=person_id or "", role=role,
+    )
+    author = requester.person_id
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+
+    captures = []
+    for eid, entry in _memory_store.items():
+        if not author or entry.get("author_id", "") != author:
+            continue
+        if entry.get("created_at", "") < cutoff:
+            continue
+        if not requester.can_see(entry):
+            continue
+        captures.append({
+            "id": entry["id"],
+            "title": entry.get("title", ""),
+            "wing": entry.get("wing", ""),
+            "room": entry.get("room", ""),
+            "created_at": entry.get("created_at", ""),
+            "content_type": entry.get("content_type", "unknown"),
+            "source_url": _citation_url(entry.get("source_metadata", {})),
+        })
+
+    # Due action items for the author (from the follow-up loop).
+    due_tasks = []
+    if author:
+        try:
+            from threadweave.store import get_entry_store
+            from threadweave.action_items import list_tasks_due
+            store = get_entry_store()
+            for t in list_tasks_due(store, within_days=days):
+                md = t.get("source_metadata") or {}
+                if md.get("action_owner") == author and requester.can_see(t):
+                    due_tasks.append({
+                        "id": t["id"],
+                        "action": md.get("action", ""),
+                        "deadline": md.get("action_deadline", ""),
+                    })
+        except Exception as exc:
+            logger.warning("Recap task lookup failed: %s", exc)
+
+    captures.sort(key=lambda c: c["created_at"], reverse=True)
+    return {
+        "person_id": author,
+        "capture_count": len(captures),
+        "due_task_count": len(due_tasks),
+        "captures": captures,
+        "due_tasks": due_tasks,
+        "days": days,
+    }
+
+
 # ---- Revoke source ACL (fast permission revocation) ----
 
 @app.post("/api/v1/entries/{entry_id}/revoke", status_code=200)
