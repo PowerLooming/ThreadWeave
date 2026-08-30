@@ -19,6 +19,11 @@ Daemons:
 - sharepoint-watch threadweave sharepoint watch
 - graph-daemon    threadweave graph daemon
 - teams-bot       python -m threadweave.connectors.teams.adapter
+
+In personal (single-user) mode only owner-scoped capture connectors are
+exposed (see ``PERSONAL_DAEMON_NAMES`` / ``daemons_for_profile``); the
+org-wide harvesters (teams, sharepoint, graph, org-sync) require admin /
+RSC / Group.ReadWrite.All grants and are hidden there.
 """
 
 from __future__ import annotations
@@ -98,6 +103,37 @@ DAEMONS: dict[str, dict] = {
 }
 
 WINDOWS_TASK_PREFIX = "ThreadWeave-"
+
+# Daemons allowed in personal (single-user) mode. Only the owner-scoped
+# capture connectors belong here: they use delegated read of the user's
+# own mailbox/data, never org-wide RSC grants or Group.ReadWrite.All.
+# own-calendar will be added here when that connector ships.
+PERSONAL_DAEMON_NAMES = {"email-watch"}
+
+
+def daemons_for_profile() -> dict[str, dict]:
+    """The daemon registry restricted to the active profile.
+
+    In personal mode only the owner-scoped capture connectors are exposed;
+    org-wide harvesters (teams, sharepoint, graph, org-sync) are not
+    selectable or installable. In org mode the full registry is returned.
+    """
+    from threadweave.profile import is_personal
+
+    if not is_personal():
+        return dict(DAEMONS)
+    return {name: spec for name, spec in DAEMONS.items()
+            if name in PERSONAL_DAEMON_NAMES}
+
+
+def daemon_available(name: str) -> bool:
+    """Whether ``name`` is selectable in the active profile.
+
+    Guards run/install/uninstall/status so an org-wide daemon can't be
+    started or registered while in personal mode.
+    """
+    return name in daemons_for_profile()
+
 
 
 def daemons_dir() -> Path:
@@ -206,6 +242,11 @@ def run_daemon(name: str) -> int:
     configure_daemon_logging()
     if name not in DAEMONS:
         print(f"Unknown daemon: {name}. Known: {', '.join(DAEMONS)}")
+        return 2
+    if not daemon_available(name):
+        from threadweave.profile import get_profile
+        print(f"Daemon '{name}' is not available in the '{get_profile()}' "
+              f"profile. Available: {', '.join(daemons_for_profile())}")
         return 2
     env = load_daemon_env(name)
     os.environ.update(env)
@@ -451,6 +492,11 @@ def install(name: str) -> bool:
     if name not in DAEMONS:
         print(f"Unknown daemon: {name}. Known: {', '.join(DAEMONS)}")
         return False
+    if not daemon_available(name):
+        from threadweave.profile import get_profile
+        print(f"Daemon '{name}' is not available in the '{get_profile()}' "
+              f"profile. Available: {', '.join(daemons_for_profile())}")
+        return False
     if is_windows():
         ok = install_windows(name)
         if ok:
@@ -464,6 +510,8 @@ def install(name: str) -> bool:
 def uninstall(name: str) -> bool:
     if name not in DAEMONS:
         return False
+    if not daemon_available(name):
+        return False
     if is_windows():
         return uninstall_windows(name)
     return uninstall_systemd(name)
@@ -472,6 +520,8 @@ def uninstall(name: str) -> bool:
 def status(name: str) -> dict:
     if name not in DAEMONS:
         return {"installed": False, "reason": "unknown daemon"}
+    if not daemon_available(name):
+        return {"installed": False, "reason": "not available in this profile"}
     if is_windows():
         return windows_status(name)
     result = subprocess.run(

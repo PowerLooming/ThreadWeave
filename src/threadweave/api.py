@@ -41,6 +41,7 @@ from threadweave.confidentiality import (
 )
 from threadweave.store import get_entry_store
 from threadweave.notify import get_notification_store
+from threadweave.profile import get_owner_id, is_personal
 
 logger = logging.getLogger("threadweave.api")
 
@@ -187,7 +188,21 @@ def _requester_from_request(
     comes from the key and unauthenticated body/query claims are ignored.
     When it is absent (auth disabled), body/query claims are honored for
     development use.
+
+    In personal (single-user) mode the requester is ALWAYS the owner, with
+    admin clearance: key/body claims are ignored. The owner has nothing to
+    hide from themselves, so this is the one place the personal tier
+    branches — every endpoint gets its gate from here, and the gate logic
+    itself is untouched.
     """
+    if is_personal():
+        return RequesterContext(
+            person_id=get_owner_id(),
+            wing="",
+            role="admin",
+            groups=[],
+            clearance=SensitivityLevel.LEGAL_PRIVILEGED,
+        )
     key_role = getattr(request.state, "auth_role", None)
     if key_role is not None:
         return RequesterContext(

@@ -17,7 +17,7 @@ import sys
 from datetime import datetime, timezone, timedelta
 
 from threadweave.detector import detect, is_worth_saving
-from threadweave.daemons import DAEMONS  # noqa: E402  (registered before parser)
+from threadweave.daemons import DAEMONS, daemons_for_profile  # noqa: E402
 
 
 def cmd_detect(args):
@@ -92,6 +92,14 @@ def cmd_save(args):
 def cmd_serve(args):
     """Start the ThreadWeave API server."""
     import logging
+
+    # --profile overrides the env var for this process so the API module
+    # (imported below by uvicorn) sees it. get_profile() is authoritative;
+    # an explicit flag just sets the same env it reads.
+    if getattr(args, "profile", None):
+        os.environ["THREADWEAVE_PROFILE"] = args.profile
+    from threadweave.profile import get_profile
+    profile = get_profile()
     import uvicorn
 
     # Startup lines are the only record of how the server came up (which entry
@@ -109,6 +117,7 @@ def cmd_serve(args):
     app_logger.setLevel(logging.INFO)
 
     print(f"ThreadWeave API starting on http://{args.host}:{args.port}")
+    print(f"Profile: {profile}")
     print(f"Docs: http://{args.host}:{args.port}/docs")
     uvicorn.run(
         "threadweave.api:app",
@@ -459,8 +468,7 @@ def cmd_daemon_uninstall(args):
 def cmd_daemon_status(args):
     from threadweave.daemons import status
     if args.name == "all":
-        from threadweave.daemons import DAEMONS
-        for name in DAEMONS:
+        for name in daemons_for_profile():
             st = status(name)
             print(f"{name}: {'installed' if st.get('installed') else 'not installed'}")
         return
@@ -838,6 +846,10 @@ def build_parser() -> argparse.ArgumentParser:
     p_serve.add_argument("--host", default="0.0.0.0")
     p_serve.add_argument("--port", type=int, default=8000)
     p_serve.add_argument("--reload", action="store_true")
+    p_serve.add_argument(
+        "--profile", choices=["org", "personal"], default=None,
+        help="Runtime profile (overrides THREADWEAVE_PROFILE): "
+             "'personal' runs single-user, owner-scoped mode.")
 
     # graph — M365 Copilot connector
     p_graph = sub.add_parser("graph", help="Microsoft 365 Copilot Graph connector")
@@ -1059,23 +1071,23 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_d_run = daemon_sub.add_parser(
         "run", help="Run a daemon with its env file (used by services)")
-    p_d_run.add_argument("name", choices=list(DAEMONS))
+    p_d_run.add_argument("name", choices=list(daemons_for_profile()))
 
     p_d_install = daemon_sub.add_parser(
         "install", help="Register a daemon as a scheduled task / systemd unit")
-    p_d_install.add_argument("name", choices=list(DAEMONS))
+    p_d_install.add_argument("name", choices=list(daemons_for_profile()))
 
     p_d_uninstall = daemon_sub.add_parser(
         "uninstall", help="Remove a daemon's service registration")
-    p_d_uninstall.add_argument("name", choices=list(DAEMONS))
+    p_d_uninstall.add_argument("name", choices=list(daemons_for_profile()))
 
     p_d_status = daemon_sub.add_parser(
         "status", help="Show daemon service status")
-    p_d_status.add_argument("name", choices=["all"] + list(DAEMONS))
+    p_d_status.add_argument("name", choices=["all"] + list(daemons_for_profile()))
 
     p_d_config = daemon_sub.add_parser(
         "config", help="Read/write a daemon's env file")
-    p_d_config.add_argument("name", choices=list(DAEMONS))
+    p_d_config.add_argument("name", choices=list(daemons_for_profile()))
     p_d_config.add_argument("--set", action="append", nargs="+", default=[],
                             help="KEY=VALUE to set (repeatable, "
                                  "space-separated values)")
