@@ -263,13 +263,40 @@ def windows_startup_dir() -> Path:
     return Path(buf.value)
 
 
+def windows_launcher_content(name: str) -> str:
+    """Hidden-start launcher for Windows Startup folder.
+
+    A plain .cmd launcher runs the daemon in the foreground of a cmd
+    console, so a persistent cmd window stays open for every daemon after
+    login. Instead we drop a .vbs that WScript runs with window style 0
+    (hidden). Log redirection still works because it happens inside the
+    shell command.
+    """
+    logs_dir = Path(os.path.expanduser("~/.threadweave/logs"))
+    log_path = logs_dir / f"{name}.log"
+    # Project root = two dirs above this module (src/threadweave/daemons.py)
+    project_root = Path(__file__).resolve().parent.parent.parent
+    python = sys.executable
+    shell_cmd = (
+        f'cd /d "{project_root}" && '
+        f'"{python}" -m threadweave.cli daemon run {name} '
+        f'>> "{log_path}" 2>&1'
+    )
+    # VBS double-quote escaping: "" is an embedded literal quote.
+    escaped = shell_cmd.replace('"', '""')
+    return (
+        "Set WshShell = CreateObject(\"WScript.Shell\")\r\n"
+        f"WshShell.Run \"{escaped}\", 0, False\r\n"
+    )
+
+
 def install_windows(name: str) -> bool:
     """Register a daemon to start at login via the Startup folder.
 
-    A .cmd launcher is dropped into shell:startup that runs
-    `threadweave daemon run <name>`. Requires no admin rights (unlike
-    schtasks /create) and survives reboots. Restart-on-failure is
-    handled by the daemon loops themselves (resilient polling loops).
+    A .vbs launcher is dropped into shell:startup that runs
+    `threadweave daemon run <name>` with a hidden window. Requires no
+    admin rights and survives reboots. Restart-on-failure is handled by
+    the daemon loops themselves (resilient polling loops).
     """
     if name not in DAEMONS:
         return False
@@ -277,33 +304,37 @@ def install_windows(name: str) -> bool:
     startup.mkdir(parents=True, exist_ok=True)
     logs_dir = Path(os.path.expanduser("~/.threadweave/logs"))
     logs_dir.mkdir(parents=True, exist_ok=True)
-    launcher = startup / f"ThreadWeave-{name}.cmd"
-    log_path = logs_dir / f"{name}.log"
-    # Project root = two dirs above this module (src/threadweave/daemons.py)
-    project_root = Path(__file__).resolve().parent.parent.parent
-    cmd = (
-        f'@echo off\r\n'
-        f'cd /d "{project_root}"\r\n'
-        f'"{sys.executable}" -m threadweave.cli daemon run {name} '
-        f'>> "{log_path}" 2>&1\r\n'
-    )
-    launcher.write_text(cmd, encoding="utf-8")
+    launcher = startup / f"ThreadWeave-{name}.vbs"
+    launcher.write_text(windows_launcher_content(name), encoding="utf-8")
+    # Remove the old windowed .cmd launcher from earlier installs.
+    (startup / f"ThreadWeave-{name}.cmd").unlink(missing_ok=True)
     logger.info("Installed startup launcher: %s", launcher)
     return True
 
 
 def uninstall_windows(name: str) -> bool:
-    launcher = windows_startup_dir() / f"ThreadWeave-{name}.cmd"
+    launcher = windows_startup_dir() / f"ThreadWeave-{name}.vbs"
     try:
         launcher.unlink(missing_ok=True)
+    except Exception:
+        pass
+    # Also remove a legacy .cmd launcher if present.
+    legacy = windows_startup_dir() / f"ThreadWeave-{name}.cmd"
+    try:
+        legacy.unlink(missing_ok=True)
     except Exception:
         pass
     return True
 
 
 def windows_status(name: str) -> dict:
-    launcher = windows_startup_dir() / f"ThreadWeave-{name}.cmd"
-    return {"installed": launcher.exists()}
+    startup = windows_startup_dir()
+    return {
+        "installed": (
+            (startup / f"ThreadWeave-{name}.vbs").exists()
+            or (startup / f"ThreadWeave-{name}.cmd").exists()
+        )
+    }
 
 
 # ---- Linux (systemd) ----
