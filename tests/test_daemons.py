@@ -102,3 +102,28 @@ def test_all_daemons_have_argv_and_description():
 def test_run_daemon_unknown(capsys):
     from threadweave.daemons import run_daemon
     assert run_daemon("nope") == 2
+
+
+def test_windows_launcher_content_uses_cmd_wrapper_and_clean_crlf():
+    from threadweave.daemons import windows_launcher_content
+    content = windows_launcher_content("teams-bot")
+    # WshShell.Run does not route through cmd.exe, so cmd built-ins (cd, &&, >>)
+    # only work if the whole command is wrapped in `cmd /c`.
+    assert content.startswith("Set WshShell")
+    assert "cmd /c " in content
+    assert "daemon run teams-bot" in content
+    assert content.endswith("0, False\r\n")
+    assert "\r\r" not in content
+
+
+def test_install_windows_writes_launcher_without_double_cr(tmp_path, monkeypatch):
+    from threadweave.daemons import install_windows
+    monkeypatch.setattr("threadweave.daemons.windows_startup_dir", lambda: tmp_path)
+    assert install_windows("teams-bot") is True
+    raw = (tmp_path / "ThreadWeave-teams-bot.vbs").read_bytes()
+    # Text-mode writes on Windows turn every \n into \r\n, which would turn the
+    # explicit \r\n line endings into \r\r\n.
+    assert b"\r\r" not in raw
+    assert raw.count(b"\r\n") == 2
+    assert b"cmd /c " in raw
+    assert raw.decode("utf-8").endswith("0, False\r\n")

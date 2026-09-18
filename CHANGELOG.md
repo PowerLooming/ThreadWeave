@@ -49,6 +49,18 @@ uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   ("Harald to chase the vendor", not only "should chase").
 - **Serve logging** — the serve command now configures the application logger, so
   its INFO lines are visible instead of being swallowed by uvicorn's config.
+- **Windows startup launchers** — the `.vbs` launcher written into the Startup
+  folder starts the daemon in a hidden window (no cmd console at login), and is
+  now written as bytes so the explicit CRLF line endings are not translated a
+  second time by text mode (`\r\r\n`). The launcher command is wrapped in
+  `cmd /c` because `WshShell.Run` does not route through `cmd.exe`, so a command
+  built from built-ins (`cd`, `&&`, `>>`) previously made Windows try to launch
+  `cd` as a program. `daemon install` now prints the launcher it actually
+  writes instead of reporting a scheduled task.
+- **graph-daemon dispatch** — `daemon run graph-daemon` now passes
+  `THREADWEAVE_GRAPH_HOST` / `THREADWEAVE_GRAPH_PORT` to the command, fixing
+  `AttributeError: 'types.SimpleNamespace' object has no attribute 'host'` on
+  every start.
 
 ## [0.4.7] — 2026-08-23
 

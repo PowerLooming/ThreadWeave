@@ -217,6 +217,8 @@ def run_daemon(name: str) -> int:
     elif name == "graph-daemon":
         from threadweave.cli import cmd_graph_daemon
         args = SimpleNamespace(
+            host=env.get("THREADWEAVE_GRAPH_HOST", "localhost"),
+            port=int(env.get("THREADWEAVE_GRAPH_PORT", "8000")),
             interval=int(env.get("THREADWEAVE_GRAPH_INTERVAL", "300")),
         )
         cmd_graph_daemon(args)
@@ -282,8 +284,13 @@ def windows_launcher_content(name: str) -> str:
         f'"{python}" -m threadweave.cli daemon run {name} '
         f'>> "{log_path}" 2>&1'
     )
-    # VBS double-quote escaping: "" is an embedded literal quote.
-    escaped = shell_cmd.replace('"', '""')
+    # WshShell.Run does NOT route through cmd.exe by itself, so a command
+    # using cmd built-ins (cd, &&, >>) must be wrapped in `cmd /c` or Windows
+    # tries to launch `cd` as a program and pops a "system cannot find the
+    # file specified" dialog. VBS double-quote escaping: "" is an embedded
+    # literal quote.
+    run_cmd = f'cmd /c "{shell_cmd}"'
+    escaped = run_cmd.replace('"', '""')
     return (
         "Set WshShell = CreateObject(\"WScript.Shell\")\r\n"
         f"WshShell.Run \"{escaped}\", 0, False\r\n"
@@ -305,7 +312,10 @@ def install_windows(name: str) -> bool:
     logs_dir = Path(os.path.expanduser("~/.threadweave/logs"))
     logs_dir.mkdir(parents=True, exist_ok=True)
     launcher = startup / f"ThreadWeave-{name}.vbs"
-    launcher.write_text(windows_launcher_content(name), encoding="utf-8")
+    # write_bytes, not write_text: the content already carries explicit \r\n
+    # line endings, and text mode would translate the \n of every \r\n into
+    # \r\n again, leaving \r\r\n in the file.
+    launcher.write_bytes(windows_launcher_content(name).encode("utf-8"))
     # Remove the old windowed .cmd launcher from earlier installs.
     (startup / f"ThreadWeave-{name}.cmd").unlink(missing_ok=True)
     logger.info("Installed startup launcher: %s", launcher)
@@ -422,7 +432,8 @@ def install(name: str) -> bool:
         return False
     if is_windows():
         ok = install_windows(name)
-        print(f"Windows scheduled task installed: {windows_task_name(name)}")
+        if ok:
+            print(f"Startup launcher installed: ThreadWeave-{name}.vbs")
         return ok
     ok = install_systemd(name)
     print(f"systemd user unit installed: threadweave-{name}.service")
