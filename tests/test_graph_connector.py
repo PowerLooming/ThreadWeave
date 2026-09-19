@@ -51,8 +51,12 @@ class TestGraphCredentials:
             assert creds is None
 
     def test_from_env_partial(self):
+        # Blank the other two explicitly: an operator running the suite with
+        # THREADWEAVE_GRAPH_* exported would otherwise see this fail.
         with patch.dict(os.environ, {
             "THREADWEAVE_GRAPH_TENANT_ID": "tenant-123",
+            "THREADWEAVE_GRAPH_CLIENT_ID": "",
+            "THREADWEAVE_GRAPH_CLIENT_SECRET": "",
         }):
             creds = GraphCredentials.from_env()
             assert creds is None  # Missing client_id and client_secret

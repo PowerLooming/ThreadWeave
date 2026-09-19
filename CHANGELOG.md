@@ -61,6 +61,11 @@ uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `THREADWEAVE_GRAPH_HOST` / `THREADWEAVE_GRAPH_PORT` to the command, fixing
   `AttributeError: 'types.SimpleNamespace' object has no attribute 'host'` on
   every start.
+- **daemon logging** — `daemon run` now configures INFO logging at startup
+  (override with `THREADWEAVE_LOG_LEVEL`). Previously nothing configured the
+  root logger, so it stayed at WARNING and the daemons' own log files received
+  no sync statistics at all: a daemon that worked looked dead, and one that had
+  stopped was indistinguishable from an idle one.
 
 ## [0.4.7] — 2026-08-23
 

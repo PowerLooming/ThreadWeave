@@ -424,6 +424,8 @@ Expected: connection created (201), schema registered. If schema registration fa
 | `401 Unauthorized` on mailbox | Mailbox not in tenant, or no Exchange Online license | Verify user has Exchange Online and is in the same tenant as the app registration |
 | `400: Tenant does not have a SPO license` | No SharePoint Online in tenant | Tenant needs SharePoint Online license. Bare Entra ID tenants don't include it |
 | `500` on `POST /external/connections` | No Graph connectors license | Requires M365 E5 or Graph connectors add-on. Dev sandbox may not support it |
+| `409` on `POST /external/connections`, then `403` on the update | Another app registration already owns a connection with that id | Connection ids are tenant-unique and ownership cannot be transferred. Use the registration that created it (add a client secret to it and point `THREADWEAVE_GRAPH_CLIENT_ID` at it), or register a different connection id. A `403` on `GET /external/connections/{id}` while `GET /external/connections` returns an empty list is the same symptom |
+| `403` on app-only `search/query` for `externalItem` | App permission is not supported for that entity type | Only `site`, `list`, `listItem`, `drive` and `driveItem` can be queried app-only. Verify external items by reading them back: `GET /external/connections/{id}/items/{itemId}` |
 | `403` on upsert/delete | Schema not registered yet | Run `register_schema()` first — items can't be created without a schema |
 | `40001` on `/onenote/...` | App-only token used for OneNote | OneNote requires delegated auth since 2025-03-31 — run `sharepoint onenote-login` and use `--onenote` |
 | `40004` on `/onenote/...` | Missing `Notes.Read.All` scope | Add `Notes.Read.All` (Delegated) to GraphReader and re-sign-in |

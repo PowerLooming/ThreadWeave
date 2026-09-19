@@ -176,6 +176,26 @@ def build_argv(name: str) -> list[str]:
 
 # ---- run (shared entry: `threadweave daemon run <name>`) ----
 
+def configure_daemon_logging() -> None:
+    """Make daemon INFO logging visible in the daemon's redirected log file.
+
+    Daemon runs are launched with their stdout/stderr appended to
+    ~/.threadweave/logs/<name>.log, but nothing configured the root logger, so
+    it stayed at WARNING and every "synced N items" line was dropped. A daemon
+    that works perfectly then looks dead in its own log, which is how the
+    Graph connector went unnoticed for weeks. Set INFO (override with
+    THREADWEAVE_LOG_LEVEL) unless the caller already configured logging.
+    """
+    root = logging.getLogger()
+    if root.handlers:
+        return
+    level_name = os.environ.get("THREADWEAVE_LOG_LEVEL", "INFO").upper()
+    logging.basicConfig(
+        level=getattr(logging, level_name, logging.INFO),
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    )
+
+
 def run_daemon(name: str) -> int:
     """Run a daemon with its env file loaded (used by OS services).
 
@@ -183,6 +203,7 @@ def run_daemon(name: str) -> int:
     git-bash Windows). The env file is merged over the environment
     before the handler runs.
     """
+    configure_daemon_logging()
     if name not in DAEMONS:
         print(f"Unknown daemon: {name}. Known: {', '.join(DAEMONS)}")
         return 2
