@@ -116,21 +116,35 @@ explained after the fact.
 
 ## Measured on one machine (2026-09-26)
 
-CPU-only `torch` build, `bge-m3-zeroshot-v2.0-c`, four questions per message:
+`bge-m3-zeroshot-v2.0-c`, four questions per message, RTX 3060 Ti (8 GB):
 
 | Sample | Result |
 |---|---|
 | English decision | `decision@0.70`, language en (detector 0.71) |
-| Norwegian decision | `decision@0.67`, language no (detector 0.26) |
+| Norwegian decision | `decision@0.68`, language no (detector 0.26) |
 | Gossip about a colleague | `is_gossip=0.865`, rejected at the 0.80 bar |
 | Work criticism | `is_gossip=0.077`, kept |
 | Personal ID numbers | `has_pii=0.846`, rejected at the 0.75 bar |
 | Newsletter | `reference@0.33`, below the confidence floor so it escalates |
 | "ok thanks" | `too_short`, no model call |
 
-Cost: about 8 to 10 seconds per message on CPU (19 seconds for the first one
-while the weights load), because the message is re-encoded once per question. A
-CUDA build of torch would cut that sharply; on the same machine the ollama
-provider answers in about 5 seconds using the GPU, but with self-reported
-probabilities. The encoder's content-type confidence is also lower (0.67 to
-0.70 against 1.00), so more messages reach the escalation engine.
+Cost, same samples, same model:
+
+| Build | Per message | First message |
+|---|---|---|
+| CPU-only torch | 8 to 10 seconds | 19 seconds |
+| CUDA torch (`+cu130`, installed) | 0.24 to 0.28 seconds | 24 seconds (weights load plus CUDA warmup) |
+| ollama on the GPU (for comparison) | about 5 seconds | 16 seconds |
+
+The answers are identical between the CPU and CUDA builds, to the third decimal.
+Install the CUDA build with:
+
+```bash
+uv pip install --reinstall --index-url https://download.pytorch.org/whl/cu130 torch
+```
+
+Check which CUDA build the driver supports, then use that index (`cu126`, `cu130`,
+and so on; not every torch release publishes every index). The model occupies
+roughly 2.3 GB of VRAM in fp32 and coexists with an ollama model on the same card.
+The encoder's content-type confidence is lower than the ollama provider's
+(0.68 to 0.70 against 1.00), so more messages reach the escalation engine.
