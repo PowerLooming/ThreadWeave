@@ -18,6 +18,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+laya = [
+    "laya>=0.3.20",
+]
 postgres = [
     "psycopg2-binary>=2.9",
 ]

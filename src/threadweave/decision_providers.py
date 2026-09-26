@@ -11,6 +11,8 @@ Two backends behind one interface (:class:`~threadweave.decisions.DecisionProvid
   questions for one message ride in a single request; that batching is the
   whole point of the layer. Its probabilities are self-reported by a generative
   model, which makes its confidences uncalibrated by construction.
+* ``LayaDecisionProvider`` (``decision_laya.py``) — a local non-autoregressive
+  decision model, one forward pass for all questions (optional, opt-in)
 * ``EncoderDecisionProvider`` (``decision_encoder.py``) — a small local NLI
   classifier that returns real distributions computed from logits. One call per
   question, because the softmax semantics only hold inside a question.
@@ -530,6 +532,7 @@ def get_decision_provider() -> Optional[DecisionProvider]:
 
     ``THREADWEAVE_DECISION_PROVIDER`` selects the backend:
     ``encoder`` (local NLI classifier, real probability distributions),
+    ``laya`` (local non-autoregressive decision model, one pass per message),
     ``ollama`` (local generative model, self-reported probabilities),
     ``typesafe`` (hosted, needs the remote opt-in), or empty/``off``/``none``
     which leaves the typed layer switched off and the existing detector path
@@ -551,6 +554,31 @@ def get_decision_provider() -> Optional[DecisionProvider]:
 
         _provider = EncoderDecisionProvider(
             model=os.environ.get("THREADWEAVE_DECISION_MODEL") or DEFAULT_ENCODER_MODEL,
+        )
+        return _provider
+
+    if choice == "laya":
+        from threadweave.decision_laya import (
+            CHECKPOINT_ENGLISH,
+            CHECKPOINT_MULTILINGUAL,
+            LayaDecisionProvider,
+        )
+
+        _provider = LayaDecisionProvider(
+            model=os.environ.get("THREADWEAVE_DECISION_LAYA_MODEL") or "",
+            checkpoint_en=(
+                os.environ.get("THREADWEAVE_DECISION_LAYA_CHECKPOINT_EN")
+                or CHECKPOINT_ENGLISH
+            ),
+            checkpoint_other=(
+                os.environ.get("THREADWEAVE_DECISION_LAYA_CHECKPOINT_OTHER")
+                or CHECKPOINT_MULTILINGUAL
+            ),
+            preload=(os.environ.get("THREADWEAVE_DECISION_LAYA_PRELOAD") or "")
+            .strip()
+            .lower()
+            in ("1", "true", "yes"),
+            noul_form=os.environ.get("THREADWEAVE_DECISION_LAYA_NOUL_FORM") or "choice",
         )
         return _provider
 

@@ -29,6 +29,7 @@ matter which provider answered.
 | Provider | Where it runs | Notes |
 |---|---|---|
 | `encoder` | local, on-prem | a small NLI classifier (`transformers` + `torch`). Returns real distributions computed from logits, needs no GPU, and asks one question per call. Default model `MoritzLaurer/bge-m3-zeroshot-v2.0-c` (MIT, multilingual, covers Norwegian). |
+| `laya` | local, on-prem | `laya` (Apache-2.0), a non-autoregressive decision model that answers every question in one forward pass. By far the fastest backend (0.05 s per message for four questions), and the only one with a checkpoint trained on typed decisions. Opt-in, because on our own battery it is not more accurate than the encoder: see the Laya section below. |
 | `ollama` | local, on-prem | one batched call to `/api/chat` with a JSON schema pinned as the response format. Fastest on a GPU, but its probabilities are self-reported by a generative model, so its confidences are uncalibrated by construction. |
 | `typesafe` | hosted (api.typesafe.ai) | the seam for Jev. Refuses to run unless `THREADWEAVE_DECISION_ALLOW_REMOTE` is truthy, because content does not leave the machine it was captured on. |
 
@@ -73,6 +74,57 @@ samples:
   the right language only 0.17 to 0.23 of the time. The provider reports
   `answers_language = False` and `language_id.py` answers instead, which is
   deterministic and needs no model.
+
+## Laya, measured (2026-09-26)
+
+Laya answers `choice`, `score` and `noul` questions in one forward pass, which is
+the same contract this layer speaks, so `decision_laya.py` is mostly a translation
+table. Two things are fixed on top of it, both from measurements rather than from
+the model card:
+
+**Checkpoint selection is ours, not theirs.** Their router sent Norwegian and
+Danish text to the English checkpoint and reported the Norwegian sample as French.
+The same gossip sentence scored 0.239 as gossip on the English checkpoint against
+0.949 on the multilingual one, so `language_id.identify` picks the checkpoint here.
+Unknown language goes multilingual: English text on the multilingual checkpoint is
+degraded but usable, while non-English text on the English checkpoint collapses.
+
+**Noul questions are asked as a two-option choice.** The native `noul` form
+reported a mean probability of 0.098 on true gossip statements (multilingual
+checkpoint) and 0.322 (English checkpoint), while the two-option `choice` form
+reached 0.539 against 0.223. This matches Laya's own open issue #156 and its
+recommended workaround.
+
+On a 24-item set with labels true by construction (12 gossip, 12 clean, half of
+each carrying national ID numbers), gossip question, with the mean probability
+on true and false statements separately:
+
+| Backend and form | true | false | ECE | NLL |
+|---|---|---|---|---|
+| encoder, `noul` with short statement | 0.441 | 0.030 | 0.279 | 0.438 |
+| laya english, `noul` | 0.322 | 0.009 | 0.335 | 0.635 |
+| laya english, two-option `choice` | 0.452 | 0.112 | 0.230 | 0.553 |
+| laya multilingual, `noul` | 0.098 | 0.001 | 0.450 | 1.769 |
+| laya multilingual, two-option `choice` | 0.675 | 0.446 | 0.247 | 0.681 |
+| laya typed-decisions, `noul` | 0.369 | 0.086 | 0.273 | 0.569 |
+| laya typed-decisions, two-option `choice` | 0.539 | 0.223 | 0.171 | 0.470 |
+
+Through the running gate with the policy above, the same seven-message battery
+gives: gossip 0.380 (missed at the 0.80 bar, where the encoder scores 0.865 and
+rejects), personal ID numbers 0.806 (rejected, matching the encoder's 0.846), and
+PII probabilities of 0.45 to 0.58 on benign messages where the encoder stays
+between 0.03 and 0.19, which pushes three of seven samples into the review band.
+
+So Laya is the fastest backend by a factor of twenty and the only one with a
+typed-decisions checkpoint that beats the encoder on ECE, but it needs its own
+thresholds fitted before it can be switched on. Cost: 0.05 s per message for four
+questions after a 15 s load with both checkpoints preloaded, against 0.25 s for
+the encoder asking two, and about 5 s for the generative backend.
+
+Knobs: `THREADWEAVE_DECISION_LAYA_MODEL` (empty = route per message, or pin
+`english`, `multilingual`, `typed-decisions`), `..._CHECKPOINT_EN`,
+`..._CHECKPOINT_OTHER`, `..._DEVICE`, `..._PRELOAD`, `..._NOUL_FORM`
+(`choice` or `noul`).
 
 ## Policy
 
