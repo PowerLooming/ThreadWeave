@@ -37,7 +37,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Awaitable, Callable, Dict, Mapping, Optional, Union
 
 from threadweave.decisions import (
@@ -51,6 +51,8 @@ from threadweave.decisions import (
     NoulAnswer,
     Question,
     Score,
+    ScoreAnswer,
+    confidence_from_probabilities,
 )
 from threadweave.detector import (
     ContentType,
@@ -309,14 +311,60 @@ class DecisionGate:
 
         return await self._apply_policy(text, min_length, response)
 
+    # ── calibration ──────────────────────────────────────────
+
+    def _calibrate(
+        self, answers: Mapping[str, Any]
+    ) -> tuple[Dict[str, Any], list[str]]:
+        """Apply the policy's per-question calibration to the provider's answers.
+
+        Thresholds are compared against these numbers, so this is the difference
+        between a bar that means something and a bar that never fires: measured on
+        a 96-item labelled corpus, the raw probabilities of every backend missed
+        71 to 100 percent of true positives at our gossip and PII bars, and an
+        affine fit on logits roughly halved held-out ECE.
+
+        Identity entries are skipped, so an uncalibrated deployment pays nothing.
+        """
+        if not self.policy.calibration:
+            return dict(answers), []
+        out = dict(answers)
+        applied: list[str] = []
+        for question_id, calibration in self.policy.calibration.items():
+            answer = out.get(question_id)
+            if answer is None or calibration.is_identity:
+                continue
+            if isinstance(answer, NoulAnswer):
+                out[question_id] = replace(answer, noul=calibration.apply(answer.noul))
+            elif isinstance(answer, ChoiceAnswer):
+                probabilities = calibration.apply_distribution(answer.probabilities)
+                out[question_id] = replace(
+                    answer,
+                    probabilities=probabilities,
+                    choice=max(probabilities, key=lambda key: probabilities[key]),
+                    confidence=confidence_from_probabilities(probabilities.values()),
+                )
+            elif isinstance(answer, ScoreAnswer):
+                probabilities = calibration.apply_distribution(answer.probabilities)
+                out[question_id] = replace(
+                    answer,
+                    probabilities=probabilities,
+                    score=sum(int(key) * prob for key, prob in probabilities.items()),
+                    confidence=confidence_from_probabilities(probabilities.values()),
+                )
+            else:
+                continue
+            applied.append(question_id)
+        return out, ([f"calibrated({','.join(sorted(applied))})"] if applied else [])
+
     # ── policy ───────────────────────────────────────────────
 
     async def _apply_policy(
         self, text: str, min_length: int, response: DecisionResponse
     ) -> GateOutcome:
-        answers = response.answers
+        answers, calibration_signals = self._calibrate(response.answers)
         policy = self.policy
-        signals: list[str] = []
+        signals: list[str] = list(calibration_signals)
         escalated = False
         reasons: list[str] = []
 

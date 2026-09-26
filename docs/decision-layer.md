@@ -148,6 +148,45 @@ Generative work (titles, entities) is deliberately not asked as a decision. It
 comes from the escalation engine, or from the regex classifier when no LLM is
 configured.
 
+## Calibration
+
+Thresholds only mean something if the probabilities under them are calibrated, and
+ours were not. Measured on a 96-item labelled corpus (labels true by construction,
+48 items to fit and 48 to score) with every backend:
+
+* At the shipped bars (gossip 0.80, PII 0.75) the true-positive miss rate is 0.71 to
+  1.00 in every configuration. The bars are safe and nearly inert.
+* Temperature scaling alone (`sigmoid(logit(p)/T)`) improves NLL and ECE where the
+  problem is scale, but it cannot move a crossover point, and it made the miss rate
+  worse in several configurations.
+* An affine fit on logits, `sigmoid(a * logit(p) + b)`, roughly halves held-out ECE
+  everywhere and improves held-out NLL in the same direction. The offset term is
+  always large (b from +1.5 up), so these distributions are compressed and shifted,
+  not merely under-confident.
+
+Set the fitted parameters per question, either as JSON or as a path to a JSON file:
+
+```bash
+set THREADWEAVE_DECISION_CALIBRATION={"is_gossip":{"a":2.95,"b":6.5},"has_pii":{"a":0.8,"b":1.5}}
+set THREADWEAVE_DECISION_CALIBRATION=C:\Users\Haral\.threadweave\calibration.json
+```
+
+The gate applies them to the provider's answers before any threshold comparison, for
+Noul, Choice and Score alike (a distribution is calibrated option by option and then
+renormalized), and records `calibrated(is_gossip)` in the signals so an audited
+decision can be explained. An unset or identity entry costs nothing and changes
+nothing. Parameters are per provider and per question: they do not transfer between
+backends, and they must be fitted on your own corpus, because they describe your
+distribution of messages, not the model's.
+
+Fitting harness and raw numbers live outside the repository in
+`~/threadweave-docs/calibration/` (corpus, `fit_temperatures.py`, `results.json`,
+`FINDINGS.md`), because they are measurements of one deployment rather than product
+code. Practical note from that run: the strongest ranking came from Laya's
+typed-decisions checkpoint with the native yes/no form (AUC 0.977 gossip, 0.984 PII
+against the encoder's 0.906 and 0.957), which only becomes usable once the affine fit
+is applied. The two-option choice form remains the better default while uncalibrated.
+
 ## Verifying it is active
 
 `GET /api/v1/health` reports which engine is classifying and the thresholds in

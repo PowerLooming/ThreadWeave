@@ -34,6 +34,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import math
 import os
 import time
 from dataclasses import dataclass, field
@@ -325,6 +326,53 @@ class DecisionProvider:
 # ── Policy ───────────────────────────────────────────────────
 
 
+def _env_calibration() -> Dict[str, Calibration]:
+    """Per-question calibration from ``THREADWEAVE_DECISION_CALIBRATION``.
+
+    The value is either JSON, or a path to a JSON file (a file is friendlier
+    than a shell-escaped blob in a launcher script). Shape:
+
+        {"is_gossip": {"a": 2.95, "b": 6.5}, "has_pii": [0.8, 1.5]}
+
+    Anything unreadable is ignored with a warning: a launcher typo must not turn
+    a threshold decision into a crash, and the identity transform is the safe
+    default because it leaves today's behaviour untouched.
+    """
+    raw = (os.environ.get("THREADWEAVE_DECISION_CALIBRATION") or "").strip()
+    if not raw:
+        return {}
+    payload = raw
+    path = Path(raw)
+    if not raw.startswith("{") and path.exists():
+        try:
+            payload = path.read_text(encoding="utf-8")
+        except OSError as exc:
+            logger.warning("could not read calibration file %s: %s", raw, exc)
+            return {}
+    try:
+        data = json.loads(payload)
+    except ValueError as exc:
+        logger.warning("ignoring malformed %s=%r (%s)", "THREADWEAVE_DECISION_CALIBRATION", raw, exc)
+        return {}
+    if not isinstance(data, Mapping):
+        logger.warning("calibration must be a JSON object, got %s", type(data).__name__)
+        return {}
+    calibration: Dict[str, Calibration] = {}
+    for question, values in data.items():
+        try:
+            if isinstance(values, Mapping):
+                calibration[str(question)] = Calibration(
+                    a=float(values.get("a", 1.0)), b=float(values.get("b", 0.0))
+                )
+            elif isinstance(values, (list, tuple)) and len(values) == 2:
+                calibration[str(question)] = Calibration(a=float(values[0]), b=float(values[1]))
+            else:
+                raise ValueError("expected {a, b} or [a, b]")
+        except (TypeError, ValueError) as exc:
+            logger.warning("ignoring calibration for %s: %s", question, exc)
+    return calibration
+
+
 def _env_float(name: str, default: float) -> float:
     raw = os.environ.get(name)
     if raw is None or not raw.strip():
@@ -334,6 +382,52 @@ def _env_float(name: str, default: float) -> float:
     except ValueError:
         logger.warning("ignoring non-numeric %s=%r", name, raw)
         return default
+
+
+@dataclass(frozen=True)
+class Calibration:
+    """Affine calibration in logit space: ``sigmoid(a * logit(p) + b)``.
+
+    Temperature scaling is this with ``b = 0``. The offset matters: every backend
+    measured so far needed it before a reject bar meant anything, because their
+    raw probabilities are compressed and shifted (mean probability 0.377 on true
+    gossip statements for the encoder, 0.347 for the Laya native yes/no form),
+    and a temperature cannot move a crossover point. Fitted parameters are
+    per provider and per question, from labelled data; see
+    ``docs/decision-layer.md``.
+    """
+
+    a: float = 1.0
+    b: float = 0.0
+
+    @property
+    def is_identity(self) -> bool:
+        return self.a == 1.0 and self.b == 0.0
+
+    def apply(self, probability: float) -> float:
+        p = max(0.0, min(1.0, float(probability)))
+        if self.is_identity:
+            return p
+        eps = 1e-6
+        p = min(max(p, eps), 1.0 - eps)
+        return 1.0 / (1.0 + math.exp(-(self.a * math.log(p / (1.0 - p)) + self.b)))
+
+    def apply_distribution(self, probabilities: Mapping[str, float]) -> Dict[str, float]:
+        """Calibrate each option independently, then renormalize to sum to 1.
+
+        Calibrating a distribution option by option and renormalizing keeps the
+        answer usable as a distribution; it is not the same as calibrating the
+        winner, which would throw away the information the policy reads. A
+        degenerate input (every option at zero) is returned untouched: calibration
+        must not invent a distribution a provider never gave.
+        """
+        if self.is_identity or sum(probabilities.values()) <= 0:
+            return dict(probabilities)
+        calibrated = {key: self.apply(value) for key, value in probabilities.items()}
+        total = sum(calibrated.values())
+        if total <= 0:
+            return dict(probabilities)
+        return {key: value / total for key, value in calibrated.items()}
 
 
 @dataclass
@@ -366,6 +460,11 @@ class DecisionPolicy:
     pii_reject_at: float = 0.75
     language_min_confidence: float = 0.40
     language_id_min_confidence: float = 0.25
+    # Per-question affine calibration, applied to the provider's probabilities
+    # before any threshold is compared. Empty means "no calibration fitted yet",
+    # which is the honest default: raw probabilities from every backend we have
+    # measured miss most true positives at the bars above.
+    calibration: Dict[str, Calibration] = field(default_factory=dict)
 
     @classmethod
     def from_env(cls) -> "DecisionPolicy":
@@ -374,6 +473,7 @@ class DecisionPolicy:
             gossip_reject_at=_env_float("THREADWEAVE_DECISION_GOSSIP_REJECT_AT", 0.80),
             gossip_review_at=_env_float("THREADWEAVE_DECISION_GOSSIP_REVIEW_AT", 0.50),
             pii_reject_at=_env_float("THREADWEAVE_DECISION_PII_REJECT_AT", 0.75),
+            calibration=_env_calibration(),
             language_min_confidence=_env_float(
                 "THREADWEAVE_DECISION_LANGUAGE_MIN_CONFIDENCE", 0.40
             ),
