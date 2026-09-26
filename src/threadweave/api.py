@@ -228,6 +228,7 @@ class DetectResponse(BaseModel):
     suggested_title: str
     has_pii: bool
     has_gossip: bool = False
+    language: str = ""  # ISO 639-1 from the detector; drives ingest translation
 
 
 class SaveRequest(BaseModel):
@@ -869,6 +870,11 @@ async def detect_content(req: DetectRequest):
         suggested_scope=result.suggested_scope,
         suggested_title=result.suggested_title,
         has_pii=result.has_pii,
+        # Both were computed but dropped before: gossip is a hard reject at
+        # ingest, and language is what decides whether the message gets
+        # translated, so a caller debugging capture needs to see them.
+        has_gossip=result.has_gossip,
+        language=result.language,
     )
 
 
