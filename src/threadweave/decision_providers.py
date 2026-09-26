@@ -9,7 +9,11 @@ Two backends behind one interface (:class:`~threadweave.decisions.DecisionProvid
   One batched call to ``/api/chat`` with a JSON schema pinned as the response
   format, so the model must answer in the shape the policy expects. All the
   questions for one message ride in a single request; that batching is the
-  whole point of the layer.
+  whole point of the layer. Its probabilities are self-reported by a generative
+  model, which makes its confidences uncalibrated by construction.
+* ``EncoderDecisionProvider`` (``decision_encoder.py``) — a small local NLI
+  classifier that returns real distributions computed from logits. One call per
+  question, because the softmax semantics only hold inside a question.
 * ``TypeSafeDecisionProvider`` — the seam for a hosted "System One" decision
   model (Jev, https://docs.typesafe.ai). It is implemented against the
   documented ``POST /v1/systemone`` contract and is OFF unless remote
@@ -525,9 +529,11 @@ def get_decision_provider() -> Optional[DecisionProvider]:
     """Build the configured provider, or None when the layer is disabled.
 
     ``THREADWEAVE_DECISION_PROVIDER`` selects the backend:
-    ``ollama`` (local), ``typesafe`` (hosted, needs the remote opt-in), or
-    empty/``off``/``none`` which leaves the typed layer switched off and the
-    existing detector path untouched.
+    ``encoder`` (local NLI classifier, real probability distributions),
+    ``ollama`` (local generative model, self-reported probabilities),
+    ``typesafe`` (hosted, needs the remote opt-in), or empty/``off``/``none``
+    which leaves the typed layer switched off and the existing detector path
+    untouched.
     """
     global _provider
     if _provider is not None:
@@ -536,6 +542,17 @@ def get_decision_provider() -> Optional[DecisionProvider]:
     choice = (os.environ.get("THREADWEAVE_DECISION_PROVIDER") or "").strip().lower()
     if choice in ("", "off", "none", "false", "0"):
         return None
+
+    if choice == "encoder":
+        from threadweave.decision_encoder import (
+            DEFAULT_ENCODER_MODEL,
+            EncoderDecisionProvider,
+        )
+
+        _provider = EncoderDecisionProvider(
+            model=os.environ.get("THREADWEAVE_DECISION_MODEL") or DEFAULT_ENCODER_MODEL,
+        )
+        return _provider
 
     if choice == "ollama":
         _provider = OllamaDecisionProvider(

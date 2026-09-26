@@ -400,6 +400,7 @@ async def health():
                 "gossip_review_at": gate.policy.gossip_review_at,
                 "pii_reject_at": gate.policy.pii_reject_at,
                 "language_min_confidence": gate.policy.language_min_confidence,
+                "language_id_min_confidence": gate.policy.language_id_min_confidence,
             }
     except Exception:
         decision_provider = ""

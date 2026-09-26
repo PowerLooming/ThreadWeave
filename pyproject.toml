@@ -57,6 +57,10 @@ email = [
 outlook = [
     "pywin32>=306",
 ]
+decisions = [
+    "transformers>=4.44",
+    "torch>=2.2",
+]
 all-connectors = [
     "botbuilder-core>=4.15",
     "botbuilder-integration-aiohttp>=4.15",

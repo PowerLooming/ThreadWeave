@@ -614,16 +614,33 @@ class TestGatePolicy:
         assert any("pii_uncertain" in s for s in result.signals)
 
     @pytest.mark.asyncio
-    async def test_unknown_language_option_leaves_language_empty(self):
+    async def test_unknown_language_option_falls_back_to_the_detector(self):
+        # "other" means the model could not place it; the deterministic
+        # detector still answers, because translation routing needs a language.
         gate, _ = gate_for({"language": choice_answer("other", 0.95)})
         result = await gate.detect(DECISION_TEXT)
-        assert result.language == ""
+        assert result.language == "en"
+        assert any(sig.startswith("language_id=") for sig in result.signals)
 
     @pytest.mark.asyncio
-    async def test_low_confidence_language_is_not_reported(self):
+    async def test_low_confidence_language_falls_back_to_the_detector(self):
         gate, _ = gate_for({"language": choice_answer("no", 0.2)})
         result = await gate.detect(DECISION_TEXT)
-        assert result.language == ""
+        assert result.language == "en"  # detector, not the model's weak guess
+        assert any(sig.startswith("language_id=") for sig in result.signals)
+
+    @pytest.mark.asyncio
+    async def test_provider_that_cannot_answer_language_is_not_asked(self):
+        engine = DecisionEngine(FakeProvider({"content_type": choice_answer("decision", 0.9)}))
+        engine.provider.answers_language = False
+        gate = DecisionGate(engine, policy=DecisionPolicy(), escalate=None)
+        assert "language" not in gate.questions
+        # give it a Norwegian message so the detector has to do the work
+        result = await gate.detect(
+            "Etter tre uker med lasttesting besluttet vi å flytte sesjonscachen til "
+            "Redis fordi Postgres-låsene ble flaskehalsen ved rundt 2000 forespørsler."
+        )
+        assert result.language == "no"
 
     @pytest.mark.asyncio
     async def test_short_text_never_calls_the_model(self):

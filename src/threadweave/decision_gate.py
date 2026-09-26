@@ -171,6 +171,9 @@ def build_ingest_questions(
                 "Criticises work, systems, code, deliverables or the situation "
                 "itself, which is normal professional communication"
             ),
+            statement=(
+                "The message contains gossip or an insult about a person."
+            ),
         ),
         "has_pii": Noul(
             instructions=(
@@ -183,6 +186,10 @@ def build_ingest_questions(
                 "Company and brand names, work email addresses, office addresses, "
                 "public organisation numbers, roles and titles, or professional "
                 "names in a work context"
+            ),
+            statement=(
+                "The message contains personal data such as a national identity "
+                "number or a private phone number."
             ),
         ),
     }
@@ -238,10 +245,13 @@ class DecisionGate:
         self.engine = engine
         self.policy = policy or engine.policy
         self.escalate = escalate
-        self.include_language = include_language
+        # A provider that cannot answer the language question is not asked:
+        # the deterministic detector in language_id.py answers it instead.
+        self.answers_language = bool(getattr(engine.provider, "answers_language", True))
+        self.include_language = include_language and self.answers_language
         self.include_scope = include_scope
         self.questions = build_ingest_questions(
-            include_language=include_language, include_scope=include_scope
+            include_language=self.include_language, include_scope=include_scope
         )
 
     @property
@@ -364,6 +374,10 @@ class DecisionGate:
         language = ""
         if lang_answer is not None and lang_answer.confidence >= policy.language_min_confidence:
             language = "" if lang_answer.choice == "other" else lang_answer.choice
+        if not language:
+            language, lang_signal = self._detect_language(text)
+            if lang_signal:
+                signals.append(lang_signal)
 
         scope = "team"
         if scope_answer is not None and scope_answer.confidence >= policy.min_confidence:
@@ -459,6 +473,25 @@ class DecisionGate:
         except Exception as exc:  # escalation must never break the gate
             logger.warning("escalation failed: %s", exc)
             return regex_detect(text, min_length)
+
+    def _detect_language(self, text: str) -> tuple[str, str]:
+        """Deterministic language fallback, used when the provider did not answer.
+
+        Returns ``(language, signal)``; an empty language means the guess was
+        below the threshold, and the caller then leaves translation alone.
+        """
+        try:
+            from threadweave.language_id import identify
+
+            guess = identify(
+                text, min_confidence=self.policy.language_id_min_confidence
+            )
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.debug("language detector failed: %s", exc)
+            return "", ""
+        if not guess.language:
+            return "", ""
+        return guess.language, f"language_id={guess.language}@{guess.confidence:.2f}"
 
     # ── helpers ──────────────────────────────────────────────
 

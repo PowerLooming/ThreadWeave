@@ -137,11 +137,20 @@ def _check_question_id(qid: str) -> str:
 
 @dataclass(frozen=True)
 class Noul:
-    """A yes/no question. Answers with the probability that it is true."""
+    """A yes/no question. Answers with the probability that it is true.
+
+    ``instructions`` is the question as a model trained on questions should see
+    it ("Is this message about a person rather than the work?"). ``statement``
+    is the same judgment as a declarative sentence, which entailment-style
+    providers need ("This message is about a person rather than the work.").
+    Providers that do not use it ignore it; it is never sent to TypeSafe, whose
+    schema takes instructions only.
+    """
 
     instructions: str
     true_meaning: str = ""
     false_meaning: str = ""
+    statement: str = ""
 
     type: str = field(default="noul", init=False)
 
@@ -291,6 +300,13 @@ class DecisionProvider:
     name: str = "abstract"
     model: str = ""
 
+    # False when the backend answers language questions badly. An entailment
+    # classifier is the case in point: measured on bge-m3-zeroshot-v2.0-c, a
+    # Choice over language names picked the right language 0.17-0.23 of the
+    # time. The gate then leaves that question out and uses the deterministic
+    # detector in language_id.py instead.
+    answers_language: bool = True
+
     def is_available(self) -> bool:  # pragma: no cover - overridden
         raise NotImplementedError
 
@@ -337,6 +353,11 @@ class DecisionPolicy:
                                deliberately conservative.
     * ``language_min_confidence`` — a language guess only steers translation;
                                a wrong guess costs a re-translation, not data.
+    * ``language_id_min_confidence`` — the deterministic detector reports a
+                               MARGIN between its two best candidates, which is
+                               a different scale from a model's probability
+                               distribution, so it gets its own threshold rather
+                               than sharing one and being wrong twice.
     """
 
     min_confidence: float = 0.55
@@ -344,6 +365,7 @@ class DecisionPolicy:
     gossip_review_at: float = 0.50
     pii_reject_at: float = 0.75
     language_min_confidence: float = 0.40
+    language_id_min_confidence: float = 0.25
 
     @classmethod
     def from_env(cls) -> "DecisionPolicy":
@@ -354,6 +376,9 @@ class DecisionPolicy:
             pii_reject_at=_env_float("THREADWEAVE_DECISION_PII_REJECT_AT", 0.75),
             language_min_confidence=_env_float(
                 "THREADWEAVE_DECISION_LANGUAGE_MIN_CONFIDENCE", 0.40
+            ),
+            language_id_min_confidence=_env_float(
+                "THREADWEAVE_DECISION_LANGUAGE_ID_MIN_CONFIDENCE", 0.25
             ),
         )
 
