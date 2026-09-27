@@ -14,10 +14,17 @@ call fails. No new mandatory dependencies — uses httpx which is already
 in the project.
 
 Configuration (environment variables):
-    THREADWEAVE_LLM_API_KEY    API key (falls back to OPENAI_API_KEY)
-    THREADWEAVE_LLM_BASE_URL   Base URL (falls back to OPENAI_BASE_URL)
-    THREADWEAVE_LLM_MODEL      Model name (default: gpt-4o-mini)
+    THREADWEAVE_LLM_API_KEY    API key for the endpoint, if it needs one
+    THREADWEAVE_LLM_BASE_URL   Endpoint you run yourself (required to enable)
+    THREADWEAVE_LLM_MODEL      Model name (default: llama3.1:8b)
     THREADWEAVE_LLM_PROVIDER   Provider hint (default: openai)
+
+Only the THREADWEAVE_LLM_* names are read. The OpenAI SDK's own env vars
+(OPENAI_API_KEY, OPENAI_BASE_URL) are deliberately ignored: an environment
+that happens to carry a cloud key must not be able to route captured content
+off the machine, least of all silently. Set the base URL to a server you run,
+or leave it unset and the detector stays on regex. There is no vendor
+endpoint default either: a base URL is the only way an endpoint gets named.
 """
 
 from __future__ import annotations
@@ -133,7 +140,7 @@ class LLMConfig:
     """LLM detector configuration — all from env vars with sensible defaults."""
 
     provider: str = "openai"
-    model: str = "gpt-4o-mini"
+    model: str = "llama3.1:8b"
     api_key: Optional[str] = None
     base_url: Optional[str] = None
     max_tokens: int = 500
@@ -144,17 +151,14 @@ class LLMConfig:
 
     @classmethod
     def from_env(cls) -> "LLMConfig":
-        api_key = (
-            os.environ.get("THREADWEAVE_LLM_API_KEY")
-            or os.environ.get("OPENAI_API_KEY")
-        )
-        base_url = (
-            os.environ.get("THREADWEAVE_LLM_BASE_URL")
-            or os.environ.get("OPENAI_BASE_URL")
-        )
+        # ThreadWeave's own names only: OPENAI_API_KEY / OPENAI_BASE_URL are
+        # ignored on purpose, so a cloud credential in the environment can
+        # never point this detector at a machine we do not run.
+        api_key = os.environ.get("THREADWEAVE_LLM_API_KEY") or None
+        base_url = os.environ.get("THREADWEAVE_LLM_BASE_URL") or None
         model = (
             os.environ.get("THREADWEAVE_LLM_MODEL")
-            or os.environ.get("LLM_MODEL", "gpt-4o-mini")
+            or os.environ.get("LLM_MODEL", "llama3.1:8b")
         )
         provider = os.environ.get("THREADWEAVE_LLM_PROVIDER", "openai")
         return cls(
@@ -171,8 +175,8 @@ class LLMConfig:
 class LLMDetector:
     """LLM-powered content classifier.
 
-    Uses any OpenAI-compatible chat/completions API (OpenAI, Azure OpenAI,
-    Ollama, vLLM, Groq, Together, local models via llama.cpp server, etc.).
+    Uses any OpenAI-compatible chat/completions API you run yourself
+    (Ollama, vLLM, LiteLLM, llama.cpp server, a corporate gateway).
 
     Falls back to regex heuristics when:
     - No API key is configured
@@ -199,8 +203,13 @@ class LLMDetector:
 
     @property
     def available(self) -> bool:
-        """LLM is configured (has API key and/or local base URL)."""
-        return bool(self.config.api_key or self.config.base_url)
+        """Whether an endpoint has been named.
+
+        A base URL is the whole test: there is no vendor default endpoint, and
+        an API key on its own points at nothing, so a half-configured box
+        stays on regex instead of guessing at a host.
+        """
+        return bool(self.config.base_url)
 
     @staticmethod
     def _effective_min_length(text: str, min_length: int) -> int:
@@ -275,6 +284,8 @@ class LLMDetector:
         if not text or not self.available:
             return None
         url = self._resolve_url()
+        if url is None:
+            return None
         messages = [
             {
                 "role": "system",
@@ -350,8 +361,13 @@ class LLMDetector:
             )
         return self._client
 
-    def _resolve_url(self) -> str:
-        """Resolve the chat endpoint from config (per-provider)."""
+    def _resolve_url(self) -> Optional[str]:
+        """Resolve the chat endpoint from config (per-provider).
+
+        No vendor default. ``ollama`` without a base URL means the local
+        daemon; any other provider without one has no endpoint at all, so a
+        deployment cannot post content to a host nobody named.
+        """
         if self.config.provider == "ollama":
             # Ollama native /api/chat. Accept the OpenAI-compat base URL
             # (…/v1) and strip the /v1 to reach the host root, since the
@@ -360,16 +376,14 @@ class LLMDetector:
             if base.endswith("/v1"):
                 base = base[:-3]
             return f"{base}/api/chat"
-        if self.config.base_url:
-            base = self.config.base_url.rstrip("/")
-        elif self.config.provider == "anthropic":
-            base = "https://api.anthropic.com/v1"
-        else:
-            base = "https://api.openai.com/v1"
-        return f"{base}/chat/completions"
+        if not self.config.base_url:
+            return None
+        return f"{self.config.base_url.rstrip('/')}/chat/completions"
 
     async def _classify_via_llm(self, text: str) -> DetectionResult:
         url = self._resolve_url()
+        if url is None:  # no endpoint was named; the caller falls back to regex
+            raise RuntimeError("no LLM endpoint configured")
         messages = [
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": f"Classify this text:\n\n{text}"},
@@ -509,11 +523,16 @@ _lock = asyncio.Lock()
 
 
 def get_llm_detector() -> Optional[LLMDetector]:
-    """Get or create the shared LLM detector (sync accessor)."""
+    """Get or create the shared LLM detector (sync accessor).
+
+    Created only when a base URL is set, because that is the only thing that
+    names an endpoint. An API key on its own leaves the detector off and the
+    pipeline on regex, instead of reaching for a vendor default host.
+    """
     global _detector
     if _detector is None:
         config = LLMConfig.from_env()
-        if config.api_key or config.base_url:
+        if config.base_url:
             _detector = LLMDetector(config)
     return _detector
 

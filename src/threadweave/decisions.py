@@ -10,13 +10,16 @@ and they are currently answered by one monolithic "classify this text"
 prompt whose JSON is parsed back with regex fallbacks.
 
 This module makes them what they are: typed decisions the code can branch
-on. The three primitives mirror the TypeSafe AI "System One" contract
-(https://docs.typesafe.ai/primitives) so a hosted decision model can be
-dropped in behind the same interface later:
+on. The three primitives mirror the published TypeSafe AI "System One"
+contract (https://docs.typesafe.ai/primitives), which is where the shapes
+and the confidence derivation come from:
 
     Noul   -> probability the statement is true (0.0 - 1.0)
     Choice -> one option from a set, plus probabilities + confidence
     Score  -> a level on an ordered rubric, plus probabilities + confidence
+
+Everything here is local: the contract is borrowed for its shapes and its
+arithmetic, not as an integration, and no provider sends content anywhere.
 
 Confidence is derived from the probability distribution the same way
 TypeSafe documents it: all mass on one option is 1.0, an even split is 0.0.
@@ -144,8 +147,8 @@ class Noul:
     it ("Is this message about a person rather than the work?"). ``statement``
     is the same judgment as a declarative sentence, which entailment-style
     providers need ("This message is about a person rather than the work.").
-    Providers that do not use it ignore it; it is never sent to TypeSafe, whose
-    schema takes instructions only.
+    Providers that do not use it ignore it; the wire form carries the
+    instructions only.
     """
 
     instructions: str

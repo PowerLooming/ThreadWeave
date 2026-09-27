@@ -3,7 +3,8 @@
 """
 Decision providers — who actually answers the typed questions.
 
-Two backends behind one interface (:class:`~threadweave.decisions.DecisionProvider`):
+Three backends behind one interface, all of them on-prem
+(:class:`~threadweave.decisions.DecisionProvider`):
 
 * ``OllamaDecisionProvider`` — local, on-prem, no content leaves the machine.
   One batched call to ``/api/chat`` with a JSON schema pinned as the response
@@ -16,11 +17,6 @@ Two backends behind one interface (:class:`~threadweave.decisions.DecisionProvid
 * ``EncoderDecisionProvider`` (``decision_encoder.py``) — a small local NLI
   classifier that returns real distributions computed from logits. One call per
   question, because the softmax semantics only hold inside a question.
-* ``TypeSafeDecisionProvider`` — the seam for a hosted "System One" decision
-  model (Jev, https://docs.typesafe.ai). It is implemented against the
-  documented ``POST /v1/systemone`` contract and is OFF unless remote
-  content is explicitly allowed, because ThreadWeave's contract is that
-  message content stays on-premise. See ``_require_remote_allowed``.
 
 Providers are synchronous by design (easy to fake in tests, no event-loop
 juggling); the gate calls them from a worker thread.
@@ -49,7 +45,6 @@ from threadweave.decisions import (
     Score,
     ScoreAnswer,
     confidence_from_probabilities,
-    env_flag,
     normalize_probabilities,
 )
 
@@ -57,19 +52,12 @@ logger = logging.getLogger(__name__)
 
 __all__ = [
     "OllamaDecisionProvider",
-    "TypeSafeDecisionProvider",
-    "RemoteContentNotAllowed",
     "get_decision_provider",
     "reset_decision_provider",
 ]
 
-TYPESAFE_ENDPOINT = "https://api.typesafe.ai/v1/systemone"
 DEFAULT_OLLAMA_URL = "http://localhost:11434"
 DEFAULT_OLLAMA_MODEL = "qwen3.5:9b"
-
-
-class RemoteContentNotAllowed(RuntimeError):
-    """A remote provider was asked to evaluate content without opt-in."""
 
 
 def _extract_json_object(content: str) -> Dict[str, Any]:
@@ -368,160 +356,6 @@ class OllamaDecisionProvider(DecisionProvider):
         return answers
 
 
-# ── TypeSafe (hosted seam, off by default) ───────────────────
-
-
-class TypeSafeDecisionProvider(DecisionProvider):
-    """Hosted System One decision model (Jev).
-
-    Implemented against the documented API: ``POST /v1/systemone`` with
-    ``{state, model, questions}`` and answers keyed by question id. It is
-    never used for content unless ``THREADWEAVE_DECISION_ALLOW_REMOTE`` is
-    truthy, because ThreadWeave's privacy contract is one-way and on-prem:
-    content does not leave the machine it was captured on.
-    """
-
-    name = "typesafe"
-
-    def __init__(
-        self,
-        api_key: Optional[str] = None,
-        model: str = "jev-latest",
-        allow_remote: Optional[bool] = None,
-        timeout: float = 20.0,
-        client: Optional[httpx.Client] = None,
-    ) -> None:
-        self.api_key = api_key or ""
-        self.model = model
-        self.allow_remote = (
-            env_flag("THREADWEAVE_DECISION_ALLOW_REMOTE") if allow_remote is None
-            else allow_remote
-        )
-        self.timeout = timeout
-        self._client = client
-        self.requests = 0
-
-    def _get_client(self) -> httpx.Client:
-        if self._client is None:
-            self._client = httpx.Client(
-                timeout=httpx.Timeout(self.timeout),
-                headers={
-                    "Authorization": f"Bearer {self.api_key}",
-                    "Content-Type": "application/json",
-                },
-            )
-        return self._client
-
-    def close(self) -> None:
-        if self._client is not None:
-            self._client.close()
-            self._client = None
-
-    def is_available(self) -> bool:
-        return bool(self.api_key and self.allow_remote)
-
-    def _require_remote_allowed(self) -> None:
-        if not self.allow_remote:
-            raise RemoteContentNotAllowed(
-                "TypeSafe is a hosted API and ThreadWeave content stays on-prem. "
-                "Set THREADWEAVE_DECISION_ALLOW_REMOTE=1 only for states that carry "
-                "no message content, or keep the local provider."
-            )
-
-    def evaluate(
-        self, state: str, questions: Mapping[str, Question]
-    ) -> DecisionResponse:
-        self._require_remote_allowed()
-        if not self.api_key:
-            raise RuntimeError("THREADWEAVE_DECISION_API_KEY is not set")
-
-        payload = {
-            "state": state,
-            "model": self.model,
-            "questions": {qid: q.to_wire() for qid, q in questions.items()},
-        }
-        started = time.perf_counter()
-        client = self._get_client()
-        response = client.post(TYPESAFE_ENDPOINT, json=payload)
-        if response.status_code in (429, 529):
-            time.sleep(1.0)
-            response = client.post(TYPESAFE_ENDPOINT, json=payload)
-        response.raise_for_status()
-        data = response.json()
-        self.requests += 1
-
-        return DecisionResponse(
-            provider=self.name,
-            model=data.get("model") or self.model,
-            answers=self._build_answers(data.get("answers") or {}, questions),
-            usage={
-                "input_tokens": int((data.get("usage") or {}).get("input_tokens") or 0),
-                "output_tokens": int((data.get("usage") or {}).get("output_tokens") or 0),
-            },
-            latency_ms=(time.perf_counter() - started) * 1000.0,
-        )
-
-    @staticmethod
-    def _build_answers(
-        parsed: Mapping[str, Any], questions: Mapping[str, Question]
-    ) -> Dict[str, Answer]:
-        answers: Dict[str, Answer] = {}
-        for qid, question in questions.items():
-            raw = parsed.get(qid)
-            if not isinstance(raw, Mapping):
-                continue
-            if isinstance(question, Noul):
-                if raw.get("noul") is None:
-                    continue
-                answers[qid] = NoulAnswer(noul=_as_probability(raw.get("noul")))
-                continue
-            if isinstance(question, Choice):
-                options = question.option_keys()
-                chosen = str(raw.get("choice", "")).strip()
-                if chosen not in options:
-                    continue
-                probs_raw = raw.get("probabilities")
-                probs = (
-                    normalize_probabilities(probs_raw, options)
-                    if isinstance(probs_raw, Mapping)
-                    else {opt: 1.0 if opt == chosen else 0.0 for opt in options}
-                )
-                confidence = raw.get("confidence")
-                answers[qid] = ChoiceAnswer(
-                    choice=chosen,
-                    probabilities=probs,
-                    confidence=(
-                        _as_probability(confidence)
-                        if confidence is not None
-                        else confidence_from_probabilities(probs.values())
-                    ),
-                )
-                continue
-            levels = question.level_keys()
-            try:
-                score = float(raw.get("score"))
-            except (TypeError, ValueError):
-                continue
-            probs_raw = raw.get("probabilities")
-            probs = (
-                normalize_probabilities(probs_raw, levels)
-                if isinstance(probs_raw, Mapping)
-                else normalize_probabilities({str(int(round(score))): 1.0}, levels)
-            )
-            confidence = raw.get("confidence")
-            answers[qid] = ScoreAnswer(
-                score=score,
-                legend={idx: label for idx, label in enumerate(question.levels)},
-                probabilities=probs,
-                confidence=(
-                    _as_probability(confidence)
-                    if confidence is not None
-                    else confidence_from_probabilities(probs.values())
-                ),
-            )
-        return answers
-
-
 # ── Factory ──────────────────────────────────────────────────
 
 _provider: Optional[DecisionProvider] = None
@@ -533,10 +367,10 @@ def get_decision_provider() -> Optional[DecisionProvider]:
     ``THREADWEAVE_DECISION_PROVIDER`` selects the backend:
     ``encoder`` (local NLI classifier, real probability distributions),
     ``laya`` (local non-autoregressive decision model, one pass per message),
-    ``ollama`` (local generative model, self-reported probabilities),
-    ``typesafe`` (hosted, needs the remote opt-in), or empty/``off``/``none``
-    which leaves the typed layer switched off and the existing detector path
-    untouched.
+    ``ollama`` (local generative model, self-reported probabilities), or
+    empty/``off``/``none`` which leaves the typed layer switched off and the
+    existing detector path untouched. There is no hosted backend: every
+    provider runs on the machine the content was captured on.
     """
     global _provider
     if _provider is not None:
@@ -591,18 +425,6 @@ def get_decision_provider() -> Optional[DecisionProvider]:
                 or DEFAULT_OLLAMA_MODEL
             ),
             timeout=float(os.environ.get("THREADWEAVE_DECISION_TIMEOUT", "60")),
-        )
-        return _provider
-
-    if choice == "typesafe":
-        _provider = TypeSafeDecisionProvider(
-            api_key=(
-                os.environ.get("THREADWEAVE_DECISION_API_KEY")
-                or os.environ.get("TYPESAFE_API_KEY")
-                or ""
-            ),
-            model=os.environ.get("THREADWEAVE_DECISION_MODEL") or "jev-latest",
-            timeout=float(os.environ.get("THREADWEAVE_DECISION_TIMEOUT", "20")),
         )
         return _provider
 

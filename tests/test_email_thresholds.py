@@ -51,7 +51,6 @@ def test_normal_email_is_not_bounce():
 async def test_process_message_skips_bounce(monkeypatch):
     monkeypatch.delenv("THREADWEAVE_LLM_API_KEY", raising=False)
     monkeypatch.delenv("THREADWEAVE_LLM_BASE_URL", raising=False)
-    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     from threadweave.llm_detector import reset_llm_detector
     reset_llm_detector()
 
@@ -69,7 +68,6 @@ async def test_process_message_skips_bounce(monkeypatch):
 async def test_process_thread_skips_bounce_when_any_message_bounced(monkeypatch):
     monkeypatch.delenv("THREADWEAVE_LLM_API_KEY", raising=False)
     monkeypatch.delenv("THREADWEAVE_LLM_BASE_URL", raising=False)
-    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     from threadweave.llm_detector import reset_llm_detector
     reset_llm_detector()
 
@@ -123,7 +121,6 @@ async def test_async_save_threshold_is_threaded(monkeypatch):
     # path end to end.
     monkeypatch.delenv("THREADWEAVE_LLM_API_KEY", raising=False)
     monkeypatch.delenv("THREADWEAVE_LLM_BASE_URL", raising=False)
-    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     from threadweave.llm_detector import reset_llm_detector
     reset_llm_detector()
 

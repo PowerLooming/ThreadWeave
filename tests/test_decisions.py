@@ -23,8 +23,6 @@ from threadweave.decision_gate import (
 )
 from threadweave.decision_providers import (
     OllamaDecisionProvider,
-    RemoteContentNotAllowed,
-    TypeSafeDecisionProvider,
 )
 from threadweave.decisions import (
     Choice,
@@ -52,7 +50,6 @@ def isolated_decision_state(tmp_path, monkeypatch):
     """Keep the audit file and provider singletons out of real state."""
     monkeypatch.setenv("THREADWEAVE_DECISION_AUDIT", str(tmp_path / "decisions.jsonl"))
     monkeypatch.delenv("THREADWEAVE_DECISION_PROVIDER", raising=False)
-    monkeypatch.delenv("THREADWEAVE_DECISION_ALLOW_REMOTE", raising=False)
     gate_mod.reset_decision_gate()
     prov_mod.reset_decision_provider()
     yield tmp_path / "decisions.jsonl"
@@ -141,7 +138,7 @@ class TestNormalizeProbabilities:
 
 
 class TestQuestionWireFormat:
-    def test_noul_matches_typesafe_shape(self):
+    def test_noul_wire_shape(self):
         q = Noul(instructions="Is this urgent?", true_meaning="time critical")
         wire = q.to_wire()
         assert wire["type"] == "noul"
@@ -411,72 +408,6 @@ class TestProviderFactory:
         assert isinstance(provider, OllamaDecisionProvider)
         assert provider.model == "qwen3.5:9b"
         assert provider._endpoint() == "http://localhost:11434/api/chat"
-
-
-# ── TypeSafe seam (privacy-gated) ────────────────────────────
-
-
-class TestTypeSafeProvider:
-    def test_unavailable_without_key_or_remote_optin(self):
-        assert TypeSafeDecisionProvider(api_key="k", allow_remote=False).is_available() is False
-        assert TypeSafeDecisionProvider(api_key="", allow_remote=True).is_available() is False
-
-    def test_refuses_content_when_remote_is_not_allowed(self):
-        provider = TypeSafeDecisionProvider(api_key="k", allow_remote=False)
-        with pytest.raises(RemoteContentNotAllowed):
-            provider.evaluate("Teams message body", {"is_gossip": Noul(instructions="?")})
-
-    def test_posts_documented_shape_and_parses_documented_answer(self):
-        client = FakeClient(
-            [
-                FakeResponse(
-                    {
-                        "model": "jev-1.13.0",
-                        "answers": {
-                            "content_type": {
-                                "type": "choice",
-                                "choice": "decision",
-                                "probabilities": {"decision": 0.88, "answer": 0.12},
-                                "confidence": 0.81,
-                            },
-                            "is_gossip": {"type": "noul", "noul": 0.95},
-                        },
-                        "usage": {"input_tokens": 296, "output_tokens": 20},
-                    }
-                )
-            ]
-        )
-        provider = TypeSafeDecisionProvider(api_key="k", allow_remote=True, client=client)
-        response = provider.evaluate(
-            "state",
-            {
-                "content_type": Choice(instructions="?", options={"decision": "", "answer": ""}),
-                "is_gossip": Noul(instructions="?", true_meaning="gossip"),
-            },
-        )
-
-        assert client.calls[0]["url"] == prov_mod.TYPESAFE_ENDPOINT
-        body = client.calls[0]["json"]
-        assert body["model"] == "jev-latest"
-        assert body["questions"]["is_gossip"]["type"] == "noul"
-        assert body["questions"]["content_type"]["criteria"] == {"decision": None, "answer": None}
-        assert response.model == "jev-1.13.0"
-        assert response.usage == {"input_tokens": 296, "output_tokens": 20}
-        assert response.answers["content_type"].confidence == pytest.approx(0.81)
-        assert response.answers["is_gossip"].noul == pytest.approx(0.95)
-
-    def test_remote_optin_via_env(self, monkeypatch):
-        monkeypatch.setenv("THREADWEAVE_DECISION_ALLOW_REMOTE", "1")
-        provider = TypeSafeDecisionProvider(api_key="k")
-        assert provider.is_available() is True
-
-    def test_typesafe_selected_from_env(self, monkeypatch):
-        monkeypatch.setenv("THREADWEAVE_DECISION_PROVIDER", "typesafe")
-        monkeypatch.setenv("THREADWEAVE_DECISION_API_KEY", "k")
-        monkeypatch.setenv("THREADWEAVE_DECISION_ALLOW_REMOTE", "yes")
-        provider = prov_mod.get_decision_provider()
-        assert isinstance(provider, TypeSafeDecisionProvider)
-        assert provider.is_available() is True
 
 
 # ── Gate policy ──────────────────────────────────────────────
