@@ -6,6 +6,17 @@ uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **A push that publishes nothing no longer scans the whole tree.** Pushing a
+  branch that is level with or behind its remote (a rejected non-fast-forward,
+  after CI had added a version bump commit the local clone could not see yet)
+  left the gate without a sha to diff against, and it fell through to the one
+  path that scans everything: 197 commits, 16 blocking findings and 86 warnings
+  over content that was already public, with no mention of the actual state.
+  An empty pushed set is now its own case, reported as "nothing new to publish"
+  instead of reviewed as new content.
+
 ## [0.4.11] — 2026-09-27
 
 ### Removed
