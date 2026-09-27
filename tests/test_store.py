@@ -164,3 +164,66 @@ def test_sql_compiles_for_postgresql_dialect():
     assert "ON CONFLICT" in compiled
     # Named params become PG-style %(name)s
     assert "%(id)s" in compiled
+
+
+def test_refinement_notes_roundtrip(store):
+    """Author refinement notes persist through the store (they used to live
+    only in the process's memory: no column, no read path)."""
+    entry = _entry()
+    entry["refinement_notes"] = [
+        {"by": "alice", "at": "2026-09-27T10:00:00+00:00", "text": "scope widened"}
+    ]
+    store.save(entry)
+
+    fetched = store.get(entry["id"])
+    assert fetched["refinement_notes"][0]["text"] == "scope widened"
+    assert store.load_all()[0]["refinement_notes"] == entry["refinement_notes"]
+
+    # Entries without notes stay an empty list, never None
+    plain = _entry(eid="plain1")
+    store.save(plain)
+    assert store.get("plain1")["refinement_notes"] == []
+
+
+def test_legacy_db_gains_refinement_notes_column(tmp_path):
+    """A store created before the column existed is migrated on open."""
+    import sqlite3
+
+    path = tmp_path / "legacy.sqlite3"
+    con = sqlite3.connect(path)
+    con.execute(
+        """
+CREATE TABLE entries (
+    id TEXT PRIMARY KEY,
+    content TEXT NOT NULL,
+    content_en TEXT DEFAULT '',
+    wing TEXT DEFAULT '',
+    room TEXT DEFAULT 'general',
+    scope TEXT DEFAULT 'team',
+    source_type TEXT DEFAULT 'manual',
+    author_id TEXT DEFAULT 'unknown',
+    title TEXT DEFAULT '',
+    created_at TEXT,
+    entities TEXT DEFAULT '[]',
+    content_type TEXT DEFAULT 'answer',
+    has_pii INTEGER DEFAULT 0,
+    tenant_id TEXT DEFAULT 'default',
+    source_metadata TEXT DEFAULT '{}',
+    sensitivity TEXT DEFAULT 'internal',
+    client_id TEXT,
+    allowed_people TEXT DEFAULT '[]',
+    acl TEXT DEFAULT '{}',
+    version_of TEXT
+)
+        """
+    )
+    con.commit()
+    con.close()
+
+    store = EntryStore(url=f"sqlite:///{path}")
+    assert "refinement_notes" in [c["name"] for c in store._columns()]
+
+    entry = _entry(eid="legacy1")
+    entry["refinement_notes"] = [{"by": "bob", "text": "legacy note"}]
+    store.save(entry)
+    assert store.get("legacy1")["refinement_notes"][0]["text"] == "legacy note"

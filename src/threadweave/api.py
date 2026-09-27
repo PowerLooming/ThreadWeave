@@ -273,6 +273,7 @@ class EntryResponse(BaseModel):
     author_id: str
     created_at: str
     entities: list[dict]
+    refinement_notes: list[dict] = []
     version_of: str = ""
 
 
@@ -978,6 +979,7 @@ async def get_entry(
         room=entry["room"], scope=entry["scope"],
         source_type=entry["source_type"], author_id=entry["author_id"],
         created_at=entry["created_at"], entities=entry["entities"],
+        refinement_notes=entry.get("refinement_notes", []) or [],
         version_of=entry.get("version_of", "") or "",
     )
 
@@ -1166,6 +1168,7 @@ async def refine_entry(
         "title": entry.get("title", ""),
         "room": entry["room"],
         "scope": entry.get("scope", ""),
+        "refinement_notes": entry.get("refinement_notes", []) or [],
         "refined": True,
     }
 
