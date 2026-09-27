@@ -59,6 +59,37 @@ class TestBundleTopics:
         topics = bundle_topics(entries, include_people=True)
         assert any(t["name"] == "adele" for t in topics)
 
+    def test_person_topic_survives_the_near_duplicate_merge(self):
+        """Person buckets must not be absorbed by a keyword bucket covering the
+        same entries. The keyword name is longer, so it won the merge and the
+        person topic vanished — include_people was a silent no-op on real
+        corpora, where anyone named in an entry is also named in its title."""
+        entries = [
+            _entry("e1", "Deadline review for the firewall change",
+                   [{"type": "person", "value": "adele"}]),
+            _entry("e2", "Deadline review for the audit export",
+                   [{"type": "person", "value": "adele"}]),
+        ]
+        assert not any(t["name"] == "adele" for t in bundle_topics(entries))
+
+        topics = bundle_topics(entries, include_people=True)
+        adele = next((t for t in topics if t["name"] == "adele"), None)
+        assert adele is not None
+        assert set(adele["entry_ids"]) == {"e1", "e2"}
+
+    def test_person_topic_does_not_absorb_subject_topics(self):
+        """Both axes survive together: the person and the subject."""
+        entries = [
+            _entry("e1", "Postgres upgrade window",
+                   [{"type": "person", "value": "adele"},
+                    {"type": "technology", "value": "postgresql"}]),
+            _entry("e2", "Postgres upgrade rollback",
+                   [{"type": "person", "value": "adele"},
+                    {"type": "technology", "value": "postgresql"}]),
+        ]
+        names = {t["name"] for t in bundle_topics(entries, include_people=True)}
+        assert {"adele", "postgresql"} <= names
+
     def test_groups_by_title_keyword(self):
         entries = [
             _entry("e1", "Database migration plan"),
