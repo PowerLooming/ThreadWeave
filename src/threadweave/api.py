@@ -10,6 +10,7 @@ Multi-tenant aware. Content deduplication. PII filtering.
 import hashlib
 import logging
 import os
+import re
 import time
 import uuid
 from contextlib import asynccontextmanager
@@ -112,19 +113,39 @@ def _request_ip_hash(request: Request) -> str:
 
 
 def _citation_url(metadata: dict) -> str:
-    """P2: resolve the deep-link source URL for an entry's citation.
+    """P2: resolve the deep link back to an entry's source.
 
     Prefers the Teams message ``webUrl`` (message_url), falling back to a
-    ``source_file`` pointer, then a ``url`` if present. Returns "" when the
-    source carries no link (e.g. a manual entry).
+    ``url``, then a ``source_file`` pointer. Returns "" when the source
+    carries nothing to trace back to (e.g. a manual entry).
+
+    ``source_file`` is frequently a filesystem pointer rather than a URL —
+    a SharePoint sync folder, a OneDrive mount, a network share — so
+    path-shaped values are returned as they are. A citation that cannot be
+    pasted into a browser still points at where the knowledge came from,
+    and filtering those out is what left folder-sourced captures with no
+    citation at all.
     """
     if not metadata:
         return ""
     for key in ("message_url", "webUrl", "url", "source_file"):
         val = metadata.get(key) or ""
-        if isinstance(val, str) and val.startswith(("http", "https")):
+        if not isinstance(val, str):
+            continue
+        val = val.strip()
+        if val.startswith(("http://", "https://")) or _is_source_path(val):
             return val
     return ""
+
+
+# Drive-letter, UNC, POSIX and file:// pointers. Deliberately not matching
+# bare relative names: too many free-text values would qualify.
+_SOURCE_PATH_RE = re.compile(r"^(?:[A-Za-z]:[\\/]|\\\\|//|/|file://)")
+
+
+def _is_source_path(value: str) -> bool:
+    """True when ``value`` looks like a filesystem source pointer."""
+    return bool(_SOURCE_PATH_RE.match(value))
 
 
 def _materialize_acl(acl: Optional[dict]) -> dict:

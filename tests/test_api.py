@@ -1174,6 +1174,55 @@ class TestP2Citation:
         md = {"url": "https://example.com/doc.pdf"}
         assert api_mod._citation_url(md) == "https://example.com/doc.pdf"
 
+    def test_citation_url_accepts_filesystem_source_file(self):
+        """A SharePoint sync folder or mounted share is a citation the author
+        can actually follow, even though it is not a URL. Filtering those out
+        left folder-sourced captures with no citation at all."""
+        import threadweave.api as api_mod
+        assert api_mod._citation_url(
+            {"source_file": "C:/sharepoint/documents/deploy-runbook.md"}
+        ) == "C:/sharepoint/documents/deploy-runbook.md"
+        assert api_mod._citation_url(
+            {"source_file": r"\\fileserver\share\runbook.md"}
+        ) == r"\\fileserver\share\runbook.md"
+        assert api_mod._citation_url(
+            {"source_file": "/mnt/share/runbook.md"}
+        ) == "/mnt/share/runbook.md"
+        assert api_mod._citation_url(
+            {"source_file": "file:///C:/docs/runbook.md"}
+        ) == "file:///C:/docs/runbook.md"
+
+    def test_citation_url_ignores_plain_text_source_file(self):
+        """Free text must not become a citation."""
+        import threadweave.api as api_mod
+        assert api_mod._citation_url({"source_file": "quarterly report draft"}) == ""
+        assert api_mod._citation_url({"source_file": "   "}) == ""
+
+    def test_search_result_cites_a_filesystem_source(self):
+        resp = client.post("/api/v1/ingest", json={
+            "content": (
+                "We decided to publish the build runbook to the synced "
+                "SharePoint folder and this decision is now finalized."
+            ),
+            "source": "sharepoint",
+            "tenant_id": "acme-corp",
+            "metadata": {
+                "wing": "engineering", "room": "documents",
+                "source_file": "C:/sharepoint/documents/build-runbook.md",
+            },
+        })
+        assert resp.status_code == 201
+        eid = resp.json()["id"]
+
+        r = client.post("/api/v1/search", json={
+            "query": "build runbook synced SharePoint folder",
+            "tenant_id": "acme-corp",
+            "requester_team": "someone",
+        })
+        hits = [x for x in r.json()["results"] if x["id"] == eid]
+        assert hits
+        assert hits[0].get("source_url") == "C:/sharepoint/documents/build-runbook.md"
+
     def test_citation_url_empty_for_no_link(self):
         import threadweave.api as api_mod
         assert api_mod._citation_url({}) == ""
