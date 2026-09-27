@@ -111,10 +111,14 @@ NAMED_PATTERNS = [
      r"(?P<act>[a-z0-9][a-z0-9\s,.;'\-]{3,})\b", "named"),
     (r"\b(?P<owner>[A-Za-z][a-z]+)\s+(?:is|are|to|will)\s+(?:on|own(?:ing)?|"
      r"responsible\s+for)\s+(?P<act>[a-z0-9][a-z0-9\s,.;'\-]{3,})\b", "named"),
-    # "NAME should/has to handle X" — obligation on a named person
-    (r"\b(?P<owner>[A-Za-z][a-z]+)\s+(?:should|needs\s+to|has\s+to|must)\s+"
-     r"(?:handle|take|own|look\s+into|chase|follow\s+up\s+on|be\s+on)\s+"
-     r"(?P<act>[a-z0-9][a-z0-9\s,.;'\-]{3,})\b", "named"),
+    # "NAME must/should/needs to/has to/is to <verb phrase>" — obligation on a
+    # named person. The verb is deliberately unrestricted: tasks are phrased
+    # with every verb there is ("Adele must deliver the Q3 report by Friday"),
+    # and the previous verb allow-list silently dropped those, so a named
+    # assignment produced no task at all. "will" stays out of this pattern
+    # (predictive, not an obligation) and is only honoured by the rule above.
+    (r"\b(?P<owner>[A-Za-z][a-z]+)\s+(?:must|should|needs\s+to|has\s+to|is\s+to|"
+     r"is\s+going\s+to)\s+(?P<act>[a-z][a-z0-9\s,.;'\-]{4,})\b", "named"),
 ]
 
 # Ownership / follow-up obligations: "you need to X", "please follow up on X"
@@ -315,7 +319,16 @@ def extract_action_items(
                 # already handled by the direct pattern. Skip non-person owners.
                 if owner.lower() in _NON_PERSON_OWNERS:
                     continue
-                owner_id, disp, resolved = _resolve_named_owner(owner, org)
+                # Patterns are matched against the lowercased text, so recover
+                # the name's original casing from the source span: the owner id
+                # stays lowercase, the display name stays as the author wrote it.
+                try:
+                    owner_display = text[m.start("owner"):m.end("owner")]
+                except (IndexError, ValueError):
+                    owner_display = owner
+                owner_id, disp, resolved = _resolve_named_owner(
+                    owner_display or owner, org
+                )
                 items.append(ActionItem(
                     owner=owner_id,
                     owner_name=disp or owner,
