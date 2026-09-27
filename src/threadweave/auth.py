@@ -206,6 +206,17 @@ def get_tenant_id(request: Request) -> str:
     tid = getattr(request.state, "tenant_id", "default")
     return "default" if tid == "*" else tid
 
+def validate_key(key: str) -> Optional[KeyInfo]:
+    """Validate a raw API key against the loaded key store.
+
+    Public seam for surfaces that authenticate the same keys as the REST
+    API (the MCP server), so a key can never be valid on one surface and
+    not the other.
+    """
+    if not key:
+        return None
+    return _keystore.validate(key)
+
 def require_role(request: Request, role: str) -> bool:
     if not AUTH_ENABLED:
         return True

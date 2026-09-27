@@ -6,6 +6,25 @@ uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **MCP server: the memory as agent tools.** `threadweave mcp` serves
+  ThreadWeave over Model Context Protocol (Streamable HTTP) at `/mcp`, so a
+  Copilot Studio agent, Microsoft 365 Copilot through a federated connector,
+  GitHub Copilot or Claude Code can search decisions, read an entry's
+  provenance, list open commitments, classify text before capture, and write
+  back what it concluded. Nine tools (`search_memory`, `get_decisions`,
+  `get_entry`, `entry_provenance`, `who_knows`, `list_open_commitments`,
+  `classify_text`, `capture_knowledge`, `browse_topics`) are a stateless shim
+  over the REST API: each call carries the caller's own API key, so tenant
+  scoping, confidentiality ACLs, the gossip gate, the opt-out registry and the
+  audit trail are unchanged, and an agent read is audited like a human read.
+  Auth reuses the API key store, and `THREADWEAVE_MCP_ALLOWED_HOSTS` /
+  `THREADWEAVE_MCP_ALLOWED_ORIGINS` open the endpoint to a published hostname,
+  because the SDK's DNS-rebinding guard admits loopback only. The MCP SDK ships
+  as the optional `[mcp]` extra, so a plain install is unaffected. See
+  `docs/mcp-server.md`.
+
 ### Fixed
 
 - **A push that publishes nothing no longer scans the whole tree.** Pushing a
@@ -16,6 +35,12 @@ uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   over content that was already public, with no mention of the actual state.
   An empty pushed set is now its own case, reported as "nothing new to publish"
   instead of reviewed as new content.
+
+- **Hybrid search hits carried no content type.** The MemPalace search path
+  returned hits without `content_type` while the keyword fallback reported it,
+  so any caller filtering on type (an agent asking for decisions only) saw
+  `unknown` for every hybrid hit. A hit now carries the type of the entry it
+  came from.
 
 ## [0.4.11] — 2026-09-27
 
@@ -45,6 +70,7 @@ uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   decision backends (`encoder`, `laya`, `ollama`) are unchanged and all local;
   `THREADWEAVE_DECISION_PROVIDER=typesafe` now falls through to the existing
   "unknown provider, layer disabled" warning.
+
 
 ## [0.4.10] — 2026-09-27
 

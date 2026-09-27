@@ -1644,6 +1644,12 @@ async def search(req: SearchRequest, request: Request):
                     "created_at": mr.created_at,
                     "author_team": mr.wing,
                     "author_id": getattr(mr, "author_id", "") or "",
+                    # Content type travels with the search hit: agents
+                    # filter on it ("only decisions"), and the keyword
+                    # path already reported it while this one reported
+                    # nothing, so a typed query silently returned
+                    # "unknown" for every MemPalace hit.
+                    "content_type": _src.get("content_type", "unknown"),
                     "version_of": getattr(mr, "version_of", "") or "",
                     "relevance_score": round(mr.similarity, 3),
                     "bm25_score": mr.bm25_score,

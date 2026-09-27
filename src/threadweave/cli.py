@@ -89,6 +89,28 @@ def cmd_save(args):
         sys.exit(1)
 
 
+def cmd_mcp(args):
+    """Start the MCP server (agent tools over Streamable HTTP)."""
+    try:
+        from threadweave.mcp_server import serve
+    except ModuleNotFoundError as exc:
+        # The MCP SDK lives in an optional extra. Say which one instead of
+        # dying on a bare "No module named 'mcp'".
+        if (exc.name or "").split(".")[0] == "mcp":
+            print(
+                "The MCP server needs the optional extra:\n"
+                "  pip install \"threadweave-memory[mcp]\"\n"
+                "  uv sync --extra mcp   (uv checkout)",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        raise
+
+    if getattr(args, "api_url", None):
+        os.environ["THREADWEAVE_API_BASE_URL"] = args.api_url
+    serve(host=args.host, port=args.port)
+
+
 def cmd_serve(args):
     """Start the ThreadWeave API server."""
     import logging
@@ -891,6 +913,18 @@ def build_parser() -> argparse.ArgumentParser:
         help="Runtime profile (overrides THREADWEAVE_PROFILE): "
              "'personal' runs single-user, owner-scoped mode.")
 
+    # mcp — agent tools (MCP over Streamable HTTP) for Copilot Studio,
+    # M365 Copilot federated connectors and any other MCP client
+    p_mcp = sub.add_parser(
+        "mcp", help="Start the MCP server (agent tools over Streamable HTTP)")
+    p_mcp.add_argument("--host", default="127.0.0.1")
+    p_mcp.add_argument("--port", type=int, default=8100)
+    p_mcp.add_argument(
+        "--api-url",
+        default=os.environ.get("THREADWEAVE_API_BASE_URL", "http://127.0.0.1:8000"),
+        help="ThreadWeave REST API the tools call (default: "
+             "THREADWEAVE_API_BASE_URL or http://127.0.0.1:8000)")
+
     # graph — M365 Copilot connector
     p_graph = sub.add_parser("graph", help="Microsoft 365 Copilot Graph connector")
     graph_sub = p_graph.add_subparsers(dest="graph_command")
@@ -1160,6 +1194,8 @@ def main() -> None:
         cmd_save(args)
     elif args.command == "serve":
         cmd_serve(args)
+    elif args.command == "mcp":
+        cmd_mcp(args)
     elif args.command == "teams":
         if args.teams_command == "package":
             cmd_teams_package(args)
