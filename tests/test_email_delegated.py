@@ -206,3 +206,58 @@ def test_personal_watch_fails_fast_without_a_token(monkeypatch, capsys):
         cli_mod.cmd_email_watch(args)
     assert exc.value.code == 1
     assert "threadweave email login" in capsys.readouterr().err
+
+
+def test_tenant_env_aliases(monkeypatch, tmp_path):
+    """One .env must serve the daemon and the standalone harvester."""
+    from threadweave.connectors.email import delegated as d
+
+    seen = {}
+
+    class FakeApp:  # msal resolves the authority over the network; don't
+        def __init__(self, client_id, authority, token_cache):
+            seen["authority"] = authority
+
+        def get_accounts(self):
+            return []
+
+    monkeypatch.setattr(d.msal, "PublicClientApplication", FakeApp)
+    cache = str(tmp_path / "c.json")
+
+    monkeypatch.delenv("AZURE_TENANT_ID", raising=False)
+    monkeypatch.setenv("THREADWEAVE_MAIL_TENANT_ID", "t-1")
+    d.DelegatedMailAuth(cache_file=cache)
+    assert seen["authority"].endswith("/t-1")
+
+    monkeypatch.delenv("THREADWEAVE_MAIL_TENANT_ID")
+    monkeypatch.setenv("AZURE_TENANT_ID", "t-2")
+    d.DelegatedMailAuth(cache_file=cache)
+    assert seen["authority"].endswith("/t-2")
+
+    monkeypatch.delenv("AZURE_TENANT_ID")
+    d.DelegatedMailAuth(cache_file=cache)
+    assert seen["authority"].endswith("/common")
+
+
+def test_refused_device_flow_says_what_to_change():
+    """'unauthorized_client' and AADSTS65002 are what an operator sees."""
+    from threadweave.connectors.email.delegated import DelegatedMailAuth
+
+    auth = DelegatedMailAuth.__new__(DelegatedMailAuth)
+    auth.client_id = "11111111-2222-3333-4444-555555555555"
+
+    blocked = auth._device_flow_hint({
+        "error": "unauthorized_client",
+        "error_description": "AADSTS700016: Application not found",
+    })
+    assert "Allow public client flows" in blocked
+    assert "THREADWEAVE_MAIL_CLIENT_ID" in blocked
+
+    first_party = auth._device_flow_hint({
+        "error": "invalid_client",
+        "error_description": "AADSTS65002: Consent between first party "
+                             "application and resource must be configured",
+    })
+    assert "first-party" in first_party
+
+    assert auth._device_flow_hint({"error": "weird"}) == "Device flow failed: weird"

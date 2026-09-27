@@ -43,7 +43,14 @@ class DelegatedMailAuth:
         tenant_id: Optional[str] = None,
         cache_file: Optional[str] = None,
     ):
-        self.tenant_id = tenant_id or os.environ.get("AZURE_TENANT_ID", "")
+        # THREADWEAVE_MAIL_TENANT_ID is what the standalone harvester uses;
+        # AZURE_TENANT_ID is what the app-only connectors use. Accept both so
+        # one .env serves either mode, and fall back to "common" (multi-tenant).
+        self.tenant_id = (
+            tenant_id
+            or os.environ.get("THREADWEAVE_MAIL_TENANT_ID")
+            or os.environ.get("AZURE_TENANT_ID", "")
+        )
         self.client_id = (
             client_id
             or os.environ.get("THREADWEAVE_MAIL_CLIENT_ID")
@@ -95,6 +102,34 @@ class DelegatedMailAuth:
 
     # ---- tokens ----
 
+    def _device_flow_hint(self, flow: dict) -> str:
+        """Turn the two ways a device sign-in gets refused into instructions.
+
+        A bare 'unauthorized_client' or an AADSTS65002 code is what an operator
+        actually sees, and neither says what to change in Entra.
+        """
+        error = str(flow.get("error", ""))
+        description = str(flow.get("error_description", ""))
+        if "65002" in description or "65002" in error:
+            return (
+                f"Graph refused the sign-in for client {self.client_id} "
+                "(AADSTS65002): Microsoft's own first-party clients are blocked "
+                "for Mail.Read. Register an app of your own, give it the "
+                "delegated Mail.Read permission, and set "
+                "THREADWEAVE_MAIL_CLIENT_ID to its application (client) id."
+            )
+        if error == "unauthorized_client":
+            return (
+                f"Client {self.client_id} is not allowed to use the device "
+                "sign-in flow. In Entra, open that app registration, then "
+                "Authentication, and set 'Allow public client flows' to Yes; "
+                "it also needs the delegated Mail.Read permission. Microsoft's "
+                f"public Azure CLI client (the {DEFAULT_CLIENT_ID} default) is "
+                "not usable for mail, so point THREADWEAVE_MAIL_CLIENT_ID at an "
+                "app you registered."
+            )
+        return f"Device flow failed: {error or flow}"
+
     def get_token(self, interactive: bool = False) -> str:
         """Return a delegated Mail.Read token for the signed-in owner.
 
@@ -119,7 +154,7 @@ class DelegatedMailAuth:
 
         flow = self._app.initiate_device_flow(scopes=MAIL_SCOPES)
         if "user_code" not in flow:
-            raise RuntimeError(f"Device flow failed: {flow.get('error')}")
+            raise RuntimeError(self._device_flow_hint(flow))
 
         print("\nSign in to read your own mailbox with ThreadWeave:")
         print(f"  1. Open:  {flow['verification_uri']}")
