@@ -18,6 +18,8 @@ uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   THREADWEAVE_EMAIL_NOISE_FILTER=0 to switch the filter off, and read the
   cycle line's noise=N to tell a filtered mailbox from an empty one.
 
+## [0.4.9] — 2026-09-27
+
 ## [0.4.8] — 2026-09-27
 
 ### Added
