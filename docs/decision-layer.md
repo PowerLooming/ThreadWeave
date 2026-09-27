@@ -168,7 +168,7 @@ Set the fitted parameters per question, either as JSON or as a path to a JSON fi
 
 ```bash
 set THREADWEAVE_DECISION_CALIBRATION={"is_gossip":{"a":2.95,"b":6.5},"has_pii":{"a":0.8,"b":1.5}}
-set THREADWEAVE_DECISION_CALIBRATION=C:\Users\Haral\.threadweave\calibration.json
+set THREADWEAVE_DECISION_CALIBRATION=%USERPROFILE%\.threadweave\calibration.json
 ```
 
 The gate applies them to the provider's answers before any threshold comparison, for
@@ -179,8 +179,7 @@ nothing. Parameters are per provider and per question: they do not transfer betw
 backends, and they must be fitted on your own corpus, because they describe your
 distribution of messages, not the model's.
 
-Fitting harness and raw numbers live outside the repository in
-`~/threadweave-docs/calibration/` (corpus, `fit_temperatures.py`, `results.json`,
+Fitting harness and raw numbers live outside the repository (corpus, `fit_temperatures.py`, `results.json`,
 `FINDINGS.md`), because they are measurements of one deployment rather than product
 code. Practical note from that run: the strongest ranking came from Laya's
 typed-decisions checkpoint with the native yes/no form (AUC 0.977 gossip, 0.984 PII

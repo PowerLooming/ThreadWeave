@@ -6,6 +6,17 @@ uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **Pre-push hygiene gate** — `scripts/prepush_gate.py` plus a versioned
+  `.githooks/pre-push` (install with `sh scripts/install_prepush_hook.sh`).
+  Deterministic rules block a push that would publish credential shapes,
+  organisation or tenant identifiers, absolute home paths or files that must
+  never leave (`keys.json`, `.env`, local stores), with site-specific terms
+  injected from a private overlay that is never committed. An optional
+  `--advisory` pass asks the local encoder a few fuzzy hygiene questions about
+  commit messages and comments and only warns. See `docs/pre-push-gate.md`.
+
 ## [0.4.7] — 2026-08-23
 
 ### Added
