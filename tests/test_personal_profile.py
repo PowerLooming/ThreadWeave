@@ -159,3 +159,85 @@ def test_private_channel_still_denies_non_owner(monkeypatch):
         "allowed_people": ["harald"],
     }
     assert ctx.can_see(entry) is False
+
+
+# ---- personal-mode ACL: the owner is the only reader ----
+
+
+def test_personal_acl_resolves_grants_to_the_owner(monkeypatch):
+    """A group grant the owner cannot satisfy must not hide their own capture."""
+    from threadweave.api import _personal_acl
+
+    monkeypatch.setenv("THREADWEAVE_PROFILE", "personal")
+    monkeypatch.setenv("THREADWEAVE_OWNER_ID", "owner@acme.no")
+    acl = {
+        "allowed_groups": ["a24d9307-ada6-4ce3-b9b5-8c54782bce22"],
+        "allowed_users": [],
+        "deny_users": ["someone-else"],
+    }
+    out = _personal_acl(acl)
+    assert out["allowed_users"] == ["owner@acme.no"]
+    assert "allowed_groups" not in out
+    assert out["deny_users"] == ["someone-else"]   # deny stays authoritative
+    assert acl["allowed_groups"] == [              # input not mutated
+        "a24d9307-ada6-4ce3-b9b5-8c54782bce22"
+    ]
+
+
+def test_personal_acl_keeps_an_existing_owner_grant(monkeypatch):
+    from threadweave.api import _personal_acl
+
+    monkeypatch.setenv("THREADWEAVE_PROFILE", "personal")
+    monkeypatch.setenv("THREADWEAVE_OWNER_ID", "owner@acme.no")
+    out = _personal_acl({"allowed_users": ["owner@acme.no"]})
+    assert out["allowed_users"] == ["owner@acme.no"]
+
+
+def test_org_mode_leaves_the_acl_untouched(monkeypatch):
+    from threadweave.api import _personal_acl
+
+    monkeypatch.setenv("THREADWEAVE_PROFILE", "org")
+    acl = {"allowed_groups": ["g1"]}
+    assert _personal_acl(acl) == acl
+
+
+def test_empty_acl_is_not_stamped(monkeypatch):
+    """No source ACL keeps the normal clearance path exactly as before."""
+    from threadweave.api import _personal_acl
+
+    monkeypatch.setenv("THREADWEAVE_PROFILE", "personal")
+    assert _personal_acl({}) == {}
+
+
+def test_owner_can_read_a_group_gated_capture_in_personal_mode(monkeypatch):
+    """End to end: ingest with a group ACL, read it back as the owner."""
+    from fastapi.testclient import TestClient
+
+    from threadweave.api import _memory_store, app
+
+    monkeypatch.setenv("THREADWEAVE_PROFILE", "personal")
+    monkeypatch.setenv("THREADWEAVE_OWNER_ID", "owner@acme.no")
+    client = TestClient(app)
+
+    resp = client.post("/api/v1/ingest", json={
+        "content": (
+            "We have decided to standardise the group-only procurement "
+            "ritual and this decision is now finalized and documented."
+        ),
+        "source": "teams",
+        "tenant_id": "personal",
+        "metadata": {
+            "wing": "procurement", "room": "contracts",
+            "sensitivity": "confidential",
+            "acl": {"allowed_groups": ["a24d9307-ada6-4ce3-b9b5-8c54782bce22"]},
+        },
+    })
+    assert resp.status_code == 201
+    eid = resp.json()["id"]
+
+    stored = _memory_store[eid]
+    assert stored["acl"]["allowed_users"] == ["owner@acme.no"]
+    assert "allowed_groups" not in stored["acl"]
+
+    got = client.get(f"/api/v1/entries/{eid}?person_id=owner@acme.no")
+    assert got.status_code == 200

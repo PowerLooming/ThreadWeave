@@ -149,6 +149,31 @@ def _is_source_path(value: str) -> bool:
     return bool(_SOURCE_PATH_RE.match(value))
 
 
+def _personal_acl(acl: dict) -> dict:
+    """Resolve a source ACL for the single-user profile.
+
+    In personal mode the owner is the only reader, and a capture can only
+    exist because the owner's own credentials read it. A grant the owner
+    cannot satisfy — a group id, when personal mode performs no directory
+    lookup and therefore carries no group memberships — would hide the entry
+    from the person who captured it. Grants are resolved to the owner;
+    denials and revocations stay authoritative, so a deny still wins.
+
+    Empty ACLs are passed through untouched: no ACL means the normal
+    clearance path, and stamping one would change that behaviour.
+    """
+    if not acl or not is_personal():
+        return acl
+    out = dict(acl)
+    out.pop("allowed_groups", None)
+    users = list(out.get("allowed_users") or [])
+    owner = get_owner_id()
+    if owner and owner not in users:
+        users.append(owner)
+    out["allowed_users"] = users
+    return out
+
+
 def _materialize_acl(acl: Optional[dict]) -> dict:
     """Normalize a per-source ACL block into a stored, enforced form.
 
@@ -748,7 +773,7 @@ async def ingest_content(req: IngestRequest, request: Request):
         # Per-source ACL materialized at ingest (allowed_users/groups,
         # deny_users/groups, revoked_at, acl_granted_at). Enforced by the
         # confidentiality gate with deny-overrides-grant.
-        "acl": _materialize_acl(req.metadata.get("acl")),
+        "acl": _personal_acl(_materialize_acl(req.metadata.get("acl"))),
     }
 
     # Action-item capture — attach detected responsibility assignments to

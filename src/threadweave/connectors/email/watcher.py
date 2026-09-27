@@ -107,12 +107,51 @@ class MailWatcher:
         tenant_id: str | None = None,
         client_id: str | None = None,
         client_secret: str | None = None,
+        delegated: bool = False,
     ):
-        self.graph = GraphClient(
-            tenant_id=tenant_id,
-            client_id=client_id,
-            client_secret=client_secret,
-        )
+        """``delegated=True`` reads the signed-in owner's own mailbox.
+
+        Personal profile behaviour: /me endpoints with a device-code token
+        from the owner, no application permission and no configured mailbox.
+        The app-only GraphClient is not built in that mode, so no client
+        secret is needed either.
+        """
+        self.delegated = delegated
+        self._delegated_auth = None
+        if delegated:
+            from threadweave.connectors.email.delegated import DelegatedMailAuth
+
+            self._delegated_auth = DelegatedMailAuth()
+            self.graph = None
+        else:
+            self.graph = GraphClient(
+                tenant_id=tenant_id,
+                client_id=client_id,
+                client_secret=client_secret,
+            )
+
+    # ---- delegated transport ----
+
+    def delegated_account(self) -> str:
+        """The signed-in owner, or "" when nobody signed in yet."""
+        return self._delegated_auth.account() if self._delegated_auth else ""
+
+    async def _delegated_request(
+        self, method: str, path: str, params: dict | None = None,
+        json_body: dict | None = None,
+    ) -> dict:
+        """Call Graph as the signed-in owner (delegated Mail.Read)."""
+        import httpx
+
+        token = self._delegated_auth.get_token()
+        headers = {"Authorization": f"Bearer {token}"}
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            resp = await client.request(
+                method, f"{GRAPH_API_BASE}{path}",
+                params=params, headers=headers, json=json_body,
+            )
+            resp.raise_for_status()
+            return resp.json() if resp.content else {}
 
     # ---- Mailbox Operations ----
 
@@ -127,7 +166,8 @@ class MailWatcher:
         Fetch unread emails from a mailbox.
 
         Args:
-            mailbox: Email address or user principal name
+            mailbox: Email address or user principal name (ignored in
+                delegated mode, which always reads the signed-in owner)
             folder: Mail folder (inbox, archive, etc.)
             max_results: Maximum emails to return
             max_age_days: Only process emails newer than this
@@ -138,7 +178,11 @@ class MailWatcher:
             f"isRead eq false and receivedDateTime ge {since.isoformat()}"
         )
 
-        path = f"/users/{mailbox}/mailFolders/{folder}/messages"
+        path = (
+            f"/me/mailFolders/{folder}/messages"
+            if self.delegated
+            else f"/users/{mailbox}/mailFolders/{folder}/messages"
+        )
         params = {
             "$filter": filter_query,
             "$orderby": "receivedDateTime desc",
@@ -150,7 +194,10 @@ class MailWatcher:
             ),
         }
 
-        data = await self.graph._request("GET", path, params=params)
+        if self.delegated:
+            data = await self._delegated_request("GET", path, params=params)
+        else:
+            data = await self.graph._request("GET", path, params=params)
         messages = []
 
         for item in data.get("value", []):
@@ -171,7 +218,9 @@ class MailWatcher:
         knowledge mailbox on reply #5, we need the full thread
         (messages 1-5) for context.
         """
-        path = f"/users/{mailbox}/messages"
+        path = (
+            "/me/messages" if self.delegated else f"/users/{mailbox}/messages"
+        )
         params = {
             "$filter": f"conversationId eq '{conversation_id}'",
             "$top": 100,
@@ -182,7 +231,10 @@ class MailWatcher:
             ),
         }
 
-        data = await self.graph._request("GET", path, params=params)
+        if self.delegated:
+            data = await self._delegated_request("GET", path, params=params)
+        else:
+            data = await self.graph._request("GET", path, params=params)
         messages = [self._parse_message(item) for item in data.get("value", [])]
         # Graph rejects $orderby combined with a conversationId filter
         # (InefficientFilter) — sort client-side instead.
@@ -217,11 +269,17 @@ class MailWatcher:
         """Mark processed emails as read."""
         for mid in message_ids:
             try:
-                await self.graph._request(
-                    "PATCH",
-                    f"/users/{mailbox}/messages/{mid}",
-                    json_body={"isRead": True},
-                )
+                if self.delegated:
+                    await self._delegated_request(
+                        "PATCH", f"/me/messages/{mid}",
+                        json_body={"isRead": True},
+                    )
+                else:
+                    await self.graph._request(
+                        "PATCH",
+                        f"/users/{mailbox}/messages/{mid}",
+                        json_body={"isRead": True},
+                    )
             except Exception as e:
                 logger.warning("Failed to mark %s as read: %s", mid, e)
 
@@ -318,9 +376,15 @@ class MailWatcher:
     ) -> list[dict]:
         """Fetch attachment metadata for a message."""
         path = (
-            f"/users/{mailbox}/messages/{message_id}/attachments"
+            f"/me/messages/{message_id}/attachments"
+            if self.delegated
+            else f"/users/{mailbox}/messages/{message_id}/attachments"
         )
-        data = await self.graph._request("GET", path)
+        data = (
+            await self._delegated_request("GET", path)
+            if self.delegated
+            else await self.graph._request("GET", path)
+        )
         return data.get("value", [])
 
     async def download_attachment(

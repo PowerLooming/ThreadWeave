@@ -105,8 +105,10 @@ DAEMONS: dict[str, dict] = {
 WINDOWS_TASK_PREFIX = "ThreadWeave-"
 
 # Daemons allowed in personal (single-user) mode. Only the owner-scoped
-# capture connectors belong here: they use delegated read of the user's
-# own mailbox/data, never org-wide RSC grants or Group.ReadWrite.All.
+# capture connectors belong here: in personal mode email-watch reads the
+# signed-in owner's own mailbox with a delegated device-code token
+# (`threadweave email login`, THREADWEAVE_MAIL_AUTH=delegated is the profile
+# default), so no app-only secret and no org-wide RSC grants are involved.
 # own-calendar will be added here when that connector ships.
 PERSONAL_DAEMON_NAMES = {"email-watch"}
 

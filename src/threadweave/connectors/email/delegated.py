@@ -1,0 +1,134 @@
+# SPDX-License-Identifier: MIT
+# Copyright (C) 2026 ThreadWeave contributors
+"""Delegated mail access — the owner's own credentials, not an application's.
+
+The managed tier reads a mailbox with app-only client credentials, which is
+right for an org-wide capture connector. The single-user tier must not: its
+promise is that the owner's own consent and the owner's own access bring the
+data in, with nothing an admin had to grant and nothing the owner could not
+already read in Outlook themselves.
+
+This mirrors the OneNote delegated flow (msal public client, device-code
+sign-in, shared token cache) so one sign-in on a machine covers every
+delegated connector, and it keeps `ingest_graph_mail.py`'s client id and
+scope so existing standalone setups keep working.
+"""
+
+from __future__ import annotations
+
+import logging
+import os
+from pathlib import Path
+from typing import Optional
+
+import msal
+
+logger = logging.getLogger(__name__)
+
+# The same public client the standalone mail harvester uses; overridable for
+# tenants that registered their own device-code app.
+DEFAULT_CLIENT_ID = "04b07795-8ddb-461a-bbee-02f9e1bf7b46"
+MAIL_SCOPES = ["Mail.Read"]
+DEFAULT_CACHE = "~/.threadweave/msal_cache.json"
+
+
+class DelegatedMailAuth:
+    """Device-code sign-in for the mailbox owner's own Graph access."""
+
+    def __init__(
+        self,
+        client_id: Optional[str] = None,
+        tenant_id: Optional[str] = None,
+        cache_file: Optional[str] = None,
+    ):
+        self.tenant_id = tenant_id or os.environ.get("AZURE_TENANT_ID", "")
+        self.client_id = (
+            client_id
+            or os.environ.get("THREADWEAVE_MAIL_CLIENT_ID")
+            or DEFAULT_CLIENT_ID
+        )
+        self.cache_file = os.path.expanduser(
+            cache_file
+            or os.environ.get("THREADWEAVE_MSAL_CACHE")
+            or DEFAULT_CACHE
+        )
+        self._cache = msal.SerializableTokenCache()
+        if os.path.exists(self.cache_file):
+            try:
+                self._cache.deserialize(
+                    Path(self.cache_file).read_text(encoding="utf-8")
+                )
+            except Exception as exc:  # a corrupt cache must not be fatal
+                logger.warning("Failed to load MSAL cache: %s", exc)
+
+        authority = (
+            f"https://login.microsoftonline.com/{self.tenant_id}"
+            if self.tenant_id
+            else "https://login.microsoftonline.com/common"
+        )
+        self._app = msal.PublicClientApplication(
+            client_id=self.client_id,
+            authority=authority,
+            token_cache=self._cache,
+        )
+
+    # ---- cache ----
+
+    def _save_cache(self) -> None:
+        if not self._cache.has_state_changed:
+            return
+        try:
+            Path(self.cache_file).parent.mkdir(parents=True, exist_ok=True)
+            Path(self.cache_file).write_text(self._cache.serialize(), encoding="utf-8")
+            os.chmod(self.cache_file, 0o600)
+        except Exception as exc:
+            logger.warning("Failed to save MSAL cache: %s", exc)
+
+    def account(self) -> str:
+        """The signed-in account, or "" when nobody has signed in yet."""
+        accounts = self._app.get_accounts()
+        if not accounts:
+            return ""
+        return accounts[0].get("username", "") or ""
+
+    # ---- tokens ----
+
+    def get_token(self, interactive: bool = False) -> str:
+        """Return a delegated Mail.Read token for the signed-in owner.
+
+        Silent refresh first. Without a cached account this raises unless
+        ``interactive`` is set, because a daemon must never block waiting for
+        a sign-in that nobody is watching.
+        """
+        accounts = self._app.get_accounts()
+        result = None
+        if accounts:
+            result = self._app.acquire_token_silent(MAIL_SCOPES, account=accounts[0])
+        if result and "access_token" in result:
+            self._save_cache()
+            return result["access_token"]
+
+        if not interactive:
+            raise RuntimeError(
+                "No delegated mail token. Run 'threadweave email login' once "
+                "as the mailbox owner to sign in (device code); the daemon "
+                "then refreshes silently."
+            )
+
+        flow = self._app.initiate_device_flow(scopes=MAIL_SCOPES)
+        if "user_code" not in flow:
+            raise RuntimeError(f"Device flow failed: {flow.get('error')}")
+
+        print("\nSign in to read your own mailbox with ThreadWeave:")
+        print(f"  1. Open:  {flow['verification_uri']}")
+        print(f"  2. Enter code:  {flow['user_code']}")
+        print("  Waiting for sign-in...\n")
+
+        result = self._app.acquire_token_by_device_flow(flow)
+        if "access_token" not in result:
+            raise RuntimeError(
+                f"Sign-in failed: {result.get('error_description', result)}"
+            )
+        self._save_cache()
+        print("Signed in. Token cached — the daemon refreshes it silently.\n")
+        return result["access_token"]
