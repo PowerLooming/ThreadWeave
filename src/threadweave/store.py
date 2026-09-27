@@ -92,6 +92,7 @@ CREATE TABLE IF NOT EXISTS {self.table_name} (
     client_id TEXT,
     allowed_people TEXT DEFAULT '[]',
     acl TEXT DEFAULT '{{}}',
+    refinement_notes TEXT DEFAULT '[]',
     version_of TEXT
 )
 """,
@@ -134,6 +135,17 @@ CREATE TABLE IF NOT EXISTS {self.table_name} (
                         f"ALTER TABLE {self.table_name} ADD COLUMN "
                         "content_en TEXT DEFAULT ''"
                     ))
+                # Migration for existing DBs: add refinement_notes if missing
+                # (author refinement notes were memory-only before this).
+                has_refinement_notes = any(
+                    col["name"] == "refinement_notes"
+                    for col in self._columns()
+                )
+                if not has_refinement_notes:
+                    conn.execute(text(
+                        f"ALTER TABLE {self.table_name} ADD COLUMN "
+                        "refinement_notes TEXT DEFAULT '[]'"
+                    ))
         except Exception as exc:
             logger.warning(
                 "Entry DB unavailable at %s (%s) — entries will be "
@@ -173,6 +185,7 @@ CREATE TABLE IF NOT EXISTS {self.table_name} (
             "client_id": entry.get("client_id"),
             "allowed_people": json.dumps(entry.get("allowed_people", [])),
             "acl": json.dumps(entry.get("acl", {})),
+            "refinement_notes": json.dumps(entry.get("refinement_notes", [])),
             "version_of": entry.get("version_of"),
         }
 
@@ -198,6 +211,7 @@ CREATE TABLE IF NOT EXISTS {self.table_name} (
             "client_id": row["client_id"],
             "allowed_people": json.loads(row["allowed_people"] or "[]"),
             "acl": json.loads(row["acl"] or "{}"),
+            "refinement_notes": json.loads(row["refinement_notes"] or "[]"),
             "version_of": row["version_of"],
         }
 

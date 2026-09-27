@@ -68,6 +68,29 @@ class TestExtractActionItems:
         assert it.owner == "adele"
         assert it.owner_resolved is True
 
+    def test_named_owner_with_arbitrary_verb(self):
+        """An obligation phrased with a verb outside any allow-list still
+        becomes a task. Before the general modal pattern, "Adele must deliver
+        ... by Friday" produced no action item at all."""
+        items = extract_action_items(
+            "Adele must deliver the Q3 procurement vendor report by Friday, "
+            "this is confirmed and agreed.",
+            author_id="harald",
+        )
+        assert len(items) == 1
+        it = items[0]
+        assert it.owner == "adele"
+        assert it.owner_name == "Adele"     # original casing, not the lowered text
+        assert it.owner_resolved is True
+        assert it.deadline                  # next Friday
+
+    def test_predictive_will_is_not_an_obligation(self):
+        """'will <verb>' is predictive, not an assignment: no task."""
+        items = extract_action_items(
+            "Megan will be at the offsite next week.", author_id="harald"
+        )
+        assert items == []
+
     def test_ambiguous_someone_is_unresolved(self):
         text = "Someone should fix the flaky test in CI."
         items = extract_action_items(text, author_id="harald")

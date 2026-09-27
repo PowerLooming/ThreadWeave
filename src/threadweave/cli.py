@@ -91,7 +91,23 @@ def cmd_save(args):
 
 def cmd_serve(args):
     """Start the ThreadWeave API server."""
+    import logging
     import uvicorn
+
+    # Startup lines are the only record of how the server came up (which entry
+    # store, how many rows were restored from it). Python's logging defaults to
+    # WARNING, so those INFO lines never reached the log: the only thing an
+    # operator ever saw was a swallowed warning. Give the application logger a
+    # handler at INFO unless something already configured one.
+    app_logger = logging.getLogger("threadweave")
+    if not app_logger.handlers:
+        handler = logging.StreamHandler()
+        handler.setFormatter(
+            logging.Formatter("%(levelname)s %(name)s: %(message)s")
+        )
+        app_logger.addHandler(handler)
+    app_logger.setLevel(logging.INFO)
+
     print(f"ThreadWeave API starting on http://{args.host}:{args.port}")
     print(f"Docs: http://{args.host}:{args.port}/docs")
     uvicorn.run(

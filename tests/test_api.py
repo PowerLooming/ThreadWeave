@@ -1298,9 +1298,19 @@ class TestP5AuthorConfirmation:
             "notes": "Approved by steering committee",
         }, params={"person_id": "alice"})
         assert r.status_code == 200
+        assert r.json()["refinement_notes"][0]["text"] == "Approved by steering committee"
         from threadweave.api import _memory_store
         notes = _memory_store.get(eid).get("refinement_notes", [])
         assert notes and notes[0]["text"] == "Approved by steering committee"
+        # Readable through the API ...
+        got = client.get(f"/api/v1/entries/{eid}")
+        assert got.status_code == 200
+        assert got.json()["refinement_notes"][0]["text"] == "Approved by steering committee"
+        # ... and durable, not memory-only (regression: the notes key had no
+        # column, so write-through dropped them and no read path exposed them).
+        from threadweave.store import EntryStore
+        reloaded = EntryStore().get(eid)
+        assert reloaded["refinement_notes"][0]["text"] == "Approved by steering committee"
 
     def test_refine_denied_for_non_author(self):
         eid = self._ingest(
