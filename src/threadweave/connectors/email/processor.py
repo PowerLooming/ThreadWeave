@@ -216,6 +216,7 @@ class EmailProcessor:
                 content_type=detection.content_type.value,
                 scope=detection.suggested_scope,
                 thread_messages=thread_message_count,
+                web_link=email.web_link,
             )
             result.drawer_ids = drawer_ids
             self.stats["knowledge_extracted"] += 1
@@ -286,11 +287,31 @@ class EmailProcessor:
     async def _mine_to_mempalace(
         self, text, subject, sender, conversation_id, participants,
         received_at, content_type="answer", scope="team", thread_messages=1,
+        web_link: str = "",
     ) -> list[str]:
         """Submit email knowledge to the central ingestion pipeline."""
         import httpx
 
         wing = await self._resolve_wing(sender, recipients=participants)
+
+        metadata = {
+            "wing": wing,
+            "room": content_type,
+            "title": subject,
+            "email_sender": sender,
+            "email_conversation_id": conversation_id,
+            "email_participants": ",".join(participants[:20]),
+            "email_received_at": received_at,
+            "email_thread_messages": str(thread_messages),
+            "scope": scope,
+            "content_type": content_type,
+        }
+        # P2 citation: the Outlook deep link to this message. Graph only
+        # returns it when the caller asks for webLink, and without it mail
+        # captures came out with an empty source_url — a citation that was
+        # available and thrown away.
+        if web_link:
+            metadata["message_url"] = web_link
 
         try:
             async with httpx.AsyncClient(timeout=30.0) as client:
@@ -301,18 +322,7 @@ class EmailProcessor:
                         "content": text,
                         "source": "email",
                         "tenant_id": "default",
-                        "metadata": {
-                            "wing": wing,
-                            "room": content_type,
-                            "title": subject,
-                            "email_sender": sender,
-                            "email_conversation_id": conversation_id,
-                            "email_participants": ",".join(participants[:20]),
-                            "email_received_at": received_at,
-                            "email_thread_messages": str(thread_messages),
-                            "scope": scope,
-                            "content_type": content_type,
-                        },
+                        "metadata": metadata,
                     },
                 )
                 resp.raise_for_status()
