@@ -8,6 +8,14 @@ uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Personal mode reads mail as the owner** — the single-user profile now
+  reads the signed-in owner's own mailbox with a delegated device-code token
+  (`threadweave email login` once, then silent refresh) instead of borrowing
+  the managed tier's app-only mailbox access. `THREADWEAVE_MAIL_AUTH`
+  (`app` | `delegated`) selects the mode, `--mail-auth` overrides it, and
+  `delegated` is the default whenever the runtime profile is `personal`, so
+  the tier's no-org-wide-grants claim is true rather than aspirational. The
+  watcher uses `/me` endpoints in that mode and no client secret is needed.
 - **Typed decision layer** — the ingest judgments (worth saving, gossip, PII,
   language, scope) are asked as typed questions (`Noul`, `Choice`, `Score`) and
   answered with probability distributions instead of being fished back out of a
@@ -66,6 +74,13 @@ uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   root logger, so it stayed at WARNING and the daemons' own log files received
   no sync statistics at all: a daemon that worked looked dead, and one that had
   stopped was indistinguishable from an idle one.
+- **Personal mode: the owner always sees their own captures** — a capture can
+  only exist because the owner's own credentials read it, so a group grant the
+  single-user profile cannot expand (no directory lookups) used to return 403
+  for the very person who captured it. Grants are now resolved to the owner at
+  ingest and unverifiable group grants are dropped; denials and revocations
+  stay authoritative. Empty ACLs are untouched, so the normal clearance path is
+  unchanged.
 
 ## [0.4.7] — 2026-08-23
 

@@ -31,6 +31,7 @@ def watcher():
     Nothing in _parse_message needs instance state."""
     w = MailWatcher.__new__(MailWatcher)
     w.graph = None
+    w.delegated = False   # app-only mode, as in the managed tier
     return w
 
 

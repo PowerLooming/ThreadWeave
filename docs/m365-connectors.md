@@ -151,7 +151,16 @@ uv run python -m threadweave.cli email watch \
   --mailbox Admin@your-tenant.com --interval 300
 ```
 
-Polls unread mail, groups conversations into threads, runs detection, and ingests knowledge. Flags: `--interval` (300s), `--max-results` (20), `--mark-read` (default OFF), `--no-threads` (skip thread grouping). Safe to restart anytime: in-memory dedup (1000) prevents re-processing within a run.
+Polls unread mail, groups conversations into threads, runs detection, and ingests knowledge. Flags: `--interval` (300s), `--max-results` (20), `--mark-read` (default OFF), `--no-threads` (skip thread grouping), `--mail-auth app|delegated`. Safe to restart anytime: in-memory dedup (1000) prevents re-processing within a run.
+
+**Single-user (personal) profile.** `/api/v1/health` reports the active profile, and with `THREADWEAVE_PROFILE=personal` the watcher reads the signed-in owner's own mailbox instead of a configured one: `/me/mailFolders/inbox/messages` with a delegated token, no client secret and no application permission. One-time sign-in, device code, MFA supported:
+
+```bash
+uv run python -m threadweave.cli email login      # signs in, caches the token
+THREADWEAVE_PROFILE=personal uv run python -m threadweave.cli daemon run email-watch
+```
+
+The mode is `delegated` by default under the personal profile, `app` under `org`; `--mail-auth` or `THREADWEAVE_MAIL_AUTH` forces either. Grants on captured items are resolved to the owner in personal mode (a group grant the owner cannot satisfy would otherwise hide their own capture from them); denials still win.
 
 ### SharePoint Watch (continuous document harvesting)
 

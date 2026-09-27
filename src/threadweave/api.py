@@ -41,6 +41,7 @@ from threadweave.confidentiality import (
 )
 from threadweave.store import get_entry_store
 from threadweave.notify import get_notification_store
+from threadweave.profile import get_owner_id, is_personal
 
 logger = logging.getLogger("threadweave.api")
 
@@ -148,6 +149,31 @@ def _is_source_path(value: str) -> bool:
     return bool(_SOURCE_PATH_RE.match(value))
 
 
+def _personal_acl(acl: dict) -> dict:
+    """Resolve a source ACL for the single-user profile.
+
+    In personal mode the owner is the only reader, and a capture can only
+    exist because the owner's own credentials read it. A grant the owner
+    cannot satisfy — a group id, when personal mode performs no directory
+    lookup and therefore carries no group memberships — would hide the entry
+    from the person who captured it. Grants are resolved to the owner;
+    denials and revocations stay authoritative, so a deny still wins.
+
+    Empty ACLs are passed through untouched: no ACL means the normal
+    clearance path, and stamping one would change that behaviour.
+    """
+    if not acl or not is_personal():
+        return acl
+    out = dict(acl)
+    out.pop("allowed_groups", None)
+    users = list(out.get("allowed_users") or [])
+    owner = get_owner_id()
+    if owner and owner not in users:
+        users.append(owner)
+    out["allowed_users"] = users
+    return out
+
+
 def _materialize_acl(acl: Optional[dict]) -> dict:
     """Normalize a per-source ACL block into a stored, enforced form.
 
@@ -187,7 +213,21 @@ def _requester_from_request(
     comes from the key and unauthenticated body/query claims are ignored.
     When it is absent (auth disabled), body/query claims are honored for
     development use.
+
+    In personal (single-user) mode the requester is ALWAYS the owner, with
+    admin clearance: key/body claims are ignored. The owner has nothing to
+    hide from themselves, so this is the one place the personal tier
+    branches — every endpoint gets its gate from here, and the gate logic
+    itself is untouched.
     """
+    if is_personal():
+        return RequesterContext(
+            person_id=get_owner_id(),
+            wing="",
+            role="admin",
+            groups=[],
+            clearance=SensitivityLevel.LEGAL_PRIVILEGED,
+        )
     key_role = getattr(request.state, "auth_role", None)
     if key_role is not None:
         return RequesterContext(
@@ -733,7 +773,7 @@ async def ingest_content(req: IngestRequest, request: Request):
         # Per-source ACL materialized at ingest (allowed_users/groups,
         # deny_users/groups, revoked_at, acl_granted_at). Enforced by the
         # confidentiality gate with deny-overrides-grant.
-        "acl": _materialize_acl(req.metadata.get("acl")),
+        "acl": _personal_acl(_materialize_acl(req.metadata.get("acl"))),
     }
 
     # Action-item capture — attach detected responsibility assignments to

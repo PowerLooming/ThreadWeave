@@ -17,7 +17,7 @@ import sys
 from datetime import datetime, timezone, timedelta
 
 from threadweave.detector import detect, is_worth_saving
-from threadweave.daemons import DAEMONS  # noqa: E402  (registered before parser)
+from threadweave.daemons import DAEMONS, daemons_for_profile  # noqa: E402
 
 
 def cmd_detect(args):
@@ -92,6 +92,14 @@ def cmd_save(args):
 def cmd_serve(args):
     """Start the ThreadWeave API server."""
     import logging
+
+    # --profile overrides the env var for this process so the API module
+    # (imported below by uvicorn) sees it. get_profile() is authoritative;
+    # an explicit flag just sets the same env it reads.
+    if getattr(args, "profile", None):
+        os.environ["THREADWEAVE_PROFILE"] = args.profile
+    from threadweave.profile import get_profile
+    profile = get_profile()
     import uvicorn
 
     # Startup lines are the only record of how the server came up (which entry
@@ -109,6 +117,7 @@ def cmd_serve(args):
     app_logger.setLevel(logging.INFO)
 
     print(f"ThreadWeave API starting on http://{args.host}:{args.port}")
+    print(f"Profile: {profile}")
     print(f"Docs: http://{args.host}:{args.port}/docs")
     uvicorn.run(
         "threadweave.api:app",
@@ -459,8 +468,7 @@ def cmd_daemon_uninstall(args):
 def cmd_daemon_status(args):
     from threadweave.daemons import status
     if args.name == "all":
-        from threadweave.daemons import DAEMONS
-        for name in DAEMONS:
+        for name in daemons_for_profile():
             st = status(name)
             print(f"{name}: {'installed' if st.get('installed') else 'not installed'}")
         return
@@ -524,22 +532,54 @@ def cmd_sharepoint_onenote_login(args):
 
 # ── Email Commands ────────────────────────────────────────────────
 
+def _resolve_mail_auth(explicit: str | None = None) -> str:
+    """Mail access mode: "app" (client credentials) or "delegated" (as the owner).
+
+    Precedence: explicit flag, then THREADWEAVE_MAIL_AUTH, then the runtime
+    profile — the personal profile reads mail as the signed-in owner, which is
+    what makes its no-org-wide-grants claim true.
+    """
+    from threadweave.profile import is_personal
+
+    mode = (explicit or os.environ.get("THREADWEAVE_MAIL_AUTH", "") or "").strip().lower()
+    if mode in ("app", "delegated"):
+        return mode
+    return "delegated" if is_personal() else "app"
+
+
 def cmd_email_watch(args):
     """Run continuous email polling (M365 -> on-prem, one-way)."""
     import asyncio
+    from threadweave.profile import get_owner_id
     from threadweave.connectors.email.watcher import MailWatcher
     from threadweave.connectors.email.processor import EmailProcessor
     from threadweave.connectors.email.daemon import EmailWatchDaemon
-    from threadweave.connectors.sharepoint.watcher import GraphClient
 
-    if not args.mailbox:
+    delegated = _resolve_mail_auth(getattr(args, "mail_auth", None)) == "delegated"
+
+    if delegated:
+        # The whole point of the mode: no configured mailbox and no client
+        # secret, just the owner's own consent.
+        args.mailbox = args.mailbox or get_owner_id()
+    elif not args.mailbox:
         print("Email watcher requires --mailbox (or THREADWEAVE_MAILBOX).",
               file=sys.stderr)
         sys.exit(1)
 
-    watcher = MailWatcher()
+    watcher = MailWatcher(delegated=delegated)
+    if delegated:
+        account = watcher.delegated_account()
+        if not account:
+            print(
+                "No signed-in mailbox owner. Run 'threadweave email login' "
+                "once, then start the watcher.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        print(f"Delegated mail access as {account}")
     # Pass a Graph client so the processor can map sender -> department
-    # -> wing (palace model). Same credentials as the watcher.
+    # -> wing (palace model). Same credentials as the watcher. In delegated
+    # mode there is none: every mail lands in the fallback wing.
     processor = EmailProcessor(graph_client=watcher.graph)
     daemon = EmailWatchDaemon(
         watcher=watcher,
@@ -551,6 +591,15 @@ def cmd_email_watch(args):
         use_threads=not args.no_threads,
     )
     asyncio.run(daemon.run())
+
+
+def cmd_email_login(args):
+    """One-time device-code sign-in so mail can be read as the owner."""
+    from threadweave.connectors.email.delegated import DelegatedMailAuth
+
+    auth = DelegatedMailAuth(cache_file=args.cache_file)
+    auth.get_token(interactive=True)
+    print(f"Signed in as {auth.account() or '(unknown account)'}")
 
 
 # ── Google Workspace Commands ──────────────────────────────────────
@@ -838,6 +887,10 @@ def build_parser() -> argparse.ArgumentParser:
     p_serve.add_argument("--host", default="0.0.0.0")
     p_serve.add_argument("--port", type=int, default=8000)
     p_serve.add_argument("--reload", action="store_true")
+    p_serve.add_argument(
+        "--profile", choices=["org", "personal"], default=None,
+        help="Runtime profile (overrides THREADWEAVE_PROFILE): "
+             "'personal' runs single-user, owner-scoped mode.")
 
     # graph — M365 Copilot connector
     p_graph = sub.add_parser("graph", help="Microsoft 365 Copilot Graph connector")
@@ -928,6 +981,17 @@ def build_parser() -> argparse.ArgumentParser:
     p_email_watch.add_argument("--no-threads", action="store_true",
                                help="Process messages individually, skip "
                                     "conversation thread grouping")
+    p_email_watch.add_argument(
+        "--mail-auth", choices=["app", "delegated"], default=None,
+        help="app = client-credentials over a configured mailbox; "
+             "delegated = read the signed-in owner's own mailbox "
+             "(personal-profile default; overrides THREADWEAVE_MAIL_AUTH)")
+    p_email_login = email_sub.add_parser(
+        "login", help="One-time device-code sign-in for delegated mail access")
+    p_email_login.add_argument(
+        "--cache-file",
+        default=os.path.expanduser("~/.threadweave/msal_cache.json"),
+        help="MSAL token cache path")
 
     p_sharepoint = sub.add_parser("sharepoint",
                                   help="Microsoft 365 SharePoint connector")
@@ -1059,23 +1123,23 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_d_run = daemon_sub.add_parser(
         "run", help="Run a daemon with its env file (used by services)")
-    p_d_run.add_argument("name", choices=list(DAEMONS))
+    p_d_run.add_argument("name", choices=list(daemons_for_profile()))
 
     p_d_install = daemon_sub.add_parser(
         "install", help="Register a daemon as a scheduled task / systemd unit")
-    p_d_install.add_argument("name", choices=list(DAEMONS))
+    p_d_install.add_argument("name", choices=list(daemons_for_profile()))
 
     p_d_uninstall = daemon_sub.add_parser(
         "uninstall", help="Remove a daemon's service registration")
-    p_d_uninstall.add_argument("name", choices=list(DAEMONS))
+    p_d_uninstall.add_argument("name", choices=list(daemons_for_profile()))
 
     p_d_status = daemon_sub.add_parser(
         "status", help="Show daemon service status")
-    p_d_status.add_argument("name", choices=["all"] + list(DAEMONS))
+    p_d_status.add_argument("name", choices=["all"] + list(daemons_for_profile()))
 
     p_d_config = daemon_sub.add_parser(
         "config", help="Read/write a daemon's env file")
-    p_d_config.add_argument("name", choices=list(DAEMONS))
+    p_d_config.add_argument("name", choices=list(daemons_for_profile()))
     p_d_config.add_argument("--set", action="append", nargs="+", default=[],
                             help="KEY=VALUE to set (repeatable, "
                                  "space-separated values)")
@@ -1168,6 +1232,8 @@ def main() -> None:
     elif args.command == "email":
         if args.email_command == "watch":
             cmd_email_watch(args)
+        elif args.email_command == "login":
+            cmd_email_login(args)
         else:
             p_email.print_help()
     elif args.command == "sharepoint":
