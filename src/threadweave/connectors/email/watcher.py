@@ -60,6 +60,7 @@ class EmailMessage:
     received_at: str = ""
     is_read: bool = False
     importance: str = "normal"
+    web_link: str = ""  # Outlook deep link to this message (Graph webLink)
     thread_position: int = 0  # Position in conversation (1 = first)
 
 
@@ -145,7 +146,7 @@ class MailWatcher:
             "$select": (
                 "id,conversationId,subject,from,toRecipients,"
                 "ccRecipients,body,hasAttachments,receivedDateTime,"
-                "isRead,importance,internetMessageHeaders"
+                "isRead,importance,internetMessageHeaders,webLink"
             ),
         }
 
@@ -177,7 +178,7 @@ class MailWatcher:
             "$select": (
                 "id,conversationId,subject,from,toRecipients,"
                 "ccRecipients,body,hasAttachments,receivedDateTime,"
-                "isRead,importance"
+                "isRead,importance,webLink"
             ),
         }
 
@@ -309,6 +310,7 @@ class MailWatcher:
             received_at=item.get("receivedDateTime", ""),
             is_read=item.get("isRead", False),
             importance=item.get("importance", "normal"),
+            web_link=item.get("webLink", "") or "",
         )
 
     async def fetch_attachments(
