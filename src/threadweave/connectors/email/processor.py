@@ -72,6 +72,43 @@ MIN_BODY_LENGTH = 100          # skip bodies shorter than this (chars)
 # without a code edit (pilot calibration).
 _ENV_MIN_CONFIDENCE = "THREADWEAVE_EMAIL_MIN_CONFIDENCE"
 _ENV_MIN_BODY_LENGTH = "THREADWEAVE_EMAIL_MIN_BODY_LENGTH"
+_ENV_API_URL = "THREADWEAVE_API_URL"
+_ENV_INGEST_TIMEOUT = "THREADWEAVE_INGEST_TIMEOUT"
+_ENV_TENANT = "THREADWEAVE_TENANT"
+
+
+def _api_url() -> str:
+    """The ThreadWeave API to submit to (the other daemons honour the same var)."""
+    return os.environ.get(_ENV_API_URL, "http://localhost:8000").rstrip("/")
+
+
+def _ingest_timeout() -> float:
+    """Seconds to wait for a capture to be accepted.
+
+    The server runs detection (possibly a local LLM) and the MemPalace write
+    inside the request, so a 30s ceiling timed out on healthy captures: the
+    entry was stored while the watcher reported it as failed.
+    """
+    try:
+        return float(os.environ.get(_ENV_INGEST_TIMEOUT, "180"))
+    except ValueError:
+        return 180.0
+
+
+def _tenant() -> str:
+    """Which tenant a captured mail belongs to.
+
+    The managed tier files under "default". A personal deployment is read as
+    the "personal" tenant, and a search that names a tenant excludes every
+    other one, so filing personal captures under "default" would hide the
+    owner's own mail from their own searches.
+    """
+    explicit = os.environ.get(_ENV_TENANT)
+    if explicit:
+        return explicit
+    from threadweave.profile import is_personal
+
+    return "personal" if is_personal() else "default"
 
 
 from dataclasses import dataclass, field
@@ -221,8 +258,12 @@ class EmailProcessor:
             result.drawer_ids = drawer_ids
             self.stats["knowledge_extracted"] += 1
         except Exception as e:
-            logger.error("Failed to save to MemPalace: %s", e)
-            result.errors.append(str(e))
+            # The capture went to the API, not to MemPalace directly; name the
+            # failure and keep the exception type, because httpx timeouts
+            # stringify to "" and an empty error tells nobody anything.
+            logger.error("Failed to save capture (%s): %s",
+                         type(e).__name__, e or "<no message>")
+            result.errors.append(f"{type(e).__name__}: {e or '<no message>'}")
         return result
 
     def _is_bounce(self, email: EmailMessage) -> bool:
@@ -314,14 +355,14 @@ class EmailProcessor:
             metadata["message_url"] = web_link
 
         try:
-            async with httpx.AsyncClient(timeout=30.0) as client:
+            async with httpx.AsyncClient(timeout=_ingest_timeout()) as client:
                 resp = await client.post(
-                    "http://localhost:8000/api/v1/ingest",
+                    f"{_api_url()}/api/v1/ingest",
                     headers=api_headers(),
                     json={
                         "content": text,
                         "source": "email",
-                        "tenant_id": "default",
+                        "tenant_id": _tenant(),
                         "metadata": metadata,
                     },
                 )
@@ -329,7 +370,8 @@ class EmailProcessor:
                 data = resp.json()
                 return [data.get("id", "")] if data.get("should_save") else []
         except Exception as e:
-            logger.error("Ingest API call failed: %s", e)
+            logger.error("Ingest API call failed (%s): %s",
+                         type(e).__name__, e or "<no message>")
             raise
 
     async def _resolve_wing(self, sender: str, recipients: list | None = None) -> str:

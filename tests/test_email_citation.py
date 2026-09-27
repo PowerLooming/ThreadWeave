@@ -75,6 +75,7 @@ class FakeResponse:
 
 class FakeAsyncClient:
     last_json = None
+    last_url = None
 
     def __init__(self, *args, **kwargs):
         pass
@@ -87,6 +88,7 @@ class FakeAsyncClient:
 
     async def post(self, url, headers=None, json=None):
         FakeAsyncClient.last_json = json
+        FakeAsyncClient.last_url = url
         return FakeResponse()
 
 
@@ -95,6 +97,7 @@ def fake_http(monkeypatch):
     import httpx
 
     FakeAsyncClient.last_json = None
+    FakeAsyncClient.last_url = None
     monkeypatch.setattr(httpx, "AsyncClient", FakeAsyncClient)
     return FakeAsyncClient
 
@@ -179,3 +182,118 @@ async def test_the_link_travels_from_message_to_payload(fake_http):
     else:
         # detection declined the body, so nothing was submitted
         assert fake_http.last_json is None
+
+
+@pytest.mark.asyncio
+async def test_personal_mode_files_captures_in_the_personal_tenant(fake_http, monkeypatch):
+    """A search naming a tenant excludes every other one, so the tier's own
+    captures must not land under the managed tier's tenant."""
+    monkeypatch.setenv("THREADWEAVE_PROFILE", "personal")
+    monkeypatch.delenv("THREADWEAVE_TENANT", raising=False)
+
+    await EmailProcessor()._mine_to_mempalace(
+        text="We decided to standardise the checklist.",
+        subject="Vendor onboarding checklist",
+        sender="h@x.com",
+        conversation_id="c1",
+        participants=["h@x.com"],
+        received_at="2026-09-27T13:29:04Z",
+    )
+
+    assert fake_http.last_json["tenant_id"] == "personal"
+
+
+@pytest.mark.asyncio
+async def test_org_mode_keeps_the_default_tenant(fake_http, monkeypatch):
+    monkeypatch.setenv("THREADWEAVE_PROFILE", "org")
+    monkeypatch.delenv("THREADWEAVE_TENANT", raising=False)
+
+    await EmailProcessor()._mine_to_mempalace(
+        text="We decided to standardise the checklist.",
+        subject="Vendor onboarding checklist",
+        sender="h@x.com",
+        conversation_id="c1",
+        participants=["h@x.com"],
+        received_at="2026-09-27T13:29:04Z",
+    )
+
+    assert fake_http.last_json["tenant_id"] == "default"
+
+
+@pytest.mark.asyncio
+async def test_api_url_is_configurable(fake_http, monkeypatch):
+    """Pointing a capture run at another instance must not need a code edit."""
+    monkeypatch.setenv("THREADWEAVE_API_URL", "http://127.0.0.1:8123/")
+
+    await EmailProcessor()._mine_to_mempalace(
+        text="We decided to standardise the checklist.",
+        subject="Vendor onboarding checklist",
+        sender="h@x.com",
+        conversation_id="c1",
+        participants=["h@x.com"],
+        received_at="2026-09-27T13:29:04Z",
+    )
+
+    assert fake_http.last_url == "http://127.0.0.1:8123/api/v1/ingest"
+
+
+def test_ingest_timeout_is_generous_and_tunable(monkeypatch):
+    """The server does detection and the palace write inside the request."""
+    from threadweave.connectors.email.processor import _ingest_timeout
+
+    monkeypatch.delenv("THREADWEAVE_INGEST_TIMEOUT", raising=False)
+    assert _ingest_timeout() >= 120
+
+    monkeypatch.setenv("THREADWEAVE_INGEST_TIMEOUT", "45")
+    assert _ingest_timeout() == 45.0
+
+    monkeypatch.setenv("THREADWEAVE_INGEST_TIMEOUT", "not-a-number")
+    assert _ingest_timeout() >= 120
+
+
+@pytest.mark.asyncio
+async def test_a_timed_out_capture_says_so_instead_of_logging_nothing(monkeypatch, caplog):
+    """httpx timeouts stringify to "", so the type is the only useful part."""
+    from types import SimpleNamespace
+
+    import httpx
+
+    from threadweave.connectors.email import processor as mod
+
+    class TimeoutClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return False
+
+        async def post(self, url, headers=None, json=None):
+            raise httpx.ReadTimeout("")
+
+    detection = SimpleNamespace(
+        content_type=SimpleNamespace(value="decision"),
+        confidence=0.9,
+        suggested_scope="team",
+        has_pii=False,
+    )
+
+    async def worth_saving(*args, **kwargs):
+        return True, detection
+
+    monkeypatch.setattr(mod, "is_worth_saving_async", worth_saving)
+    monkeypatch.setattr(httpx, "AsyncClient", TimeoutClient)
+
+    with caplog.at_level("ERROR"):
+        result = await mod.EmailProcessor()._detect_and_save(
+            text="We decided to standardise the checklist.",
+            source="single",
+            email=watcher()._parse_message(graph_item()),
+        )
+
+    messages = " | ".join(r.getMessage() for r in caplog.records)
+    assert "ReadTimeout" in messages
+    assert result.errors, "a failed capture must not report an empty error"
+    assert all(e.strip() and e != ":" for e in result.errors)
