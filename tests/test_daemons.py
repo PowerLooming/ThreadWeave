@@ -140,7 +140,6 @@ def test_run_daemon_enables_info_logging(monkeypatch):
     try:
         root.handlers = []
         root.setLevel(logging.WARNING)
-        monkeypatch.setattr("threadweave.daemons.daemon_available", lambda name: True)
         assert run_daemon("nope") == 2, "unknown daemon still exits 2"
         assert root.handlers, "daemon run must attach a handler"
         assert root.level == logging.INFO, "INFO lines (sync stats) must reach the log file"
@@ -160,7 +159,6 @@ def test_run_daemon_logging_keeps_caller_configuration(monkeypatch):
         marker = logging.NullHandler()
         root.handlers = [marker]
         root.setLevel(logging.ERROR)
-        monkeypatch.setattr("threadweave.daemons.daemon_available", lambda name: True)
         run_daemon("nope")
         assert root.handlers == [marker], "must not clobber an existing logging setup"
         assert root.level == logging.ERROR
