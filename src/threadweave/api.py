@@ -364,7 +364,7 @@ async def lifespan(app: FastAPI):
         if persisted:
             logger.info(
                 "Restored %d entries from %s", len(persisted),
-                get_entry_store().path,
+                get_entry_store().url,
             )
     except Exception as exc:
         logger.warning("Entry store reload failed: %s", exc)
