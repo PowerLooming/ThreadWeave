@@ -25,8 +25,10 @@ import msal
 
 logger = logging.getLogger(__name__)
 
-# The same public client the standalone mail harvester uses; overridable for
-# tenants that registered their own device-code app.
+# Microsoft's public Azure CLI client id, the same one the standalone mail
+# harvester, the OneNote and the Teams publishing flows already default to:
+# it is Microsoft's own registration, carries no tenant identity, and is
+# overridable for tenants that registered their own device-code app.
 DEFAULT_CLIENT_ID = "04b07795-8ddb-461a-bbee-02f9e1bf7b46"
 MAIL_SCOPES = ["Mail.Read"]
 DEFAULT_CACHE = "~/.threadweave/msal_cache.json"

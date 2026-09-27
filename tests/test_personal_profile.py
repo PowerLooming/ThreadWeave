@@ -51,8 +51,8 @@ def test_profile_case_insensitive(monkeypatch):
 def test_owner_id_default_and_override(monkeypatch):
     monkeypatch.delenv("THREADWEAVE_OWNER_ID", raising=False)
     assert get_owner_id() == DEFAULT_OWNER_ID
-    monkeypatch.setenv("THREADWEAVE_OWNER_ID", "harald@acme.no")
-    assert get_owner_id() == "harald@acme.no"
+    monkeypatch.setenv("THREADWEAVE_OWNER_ID", "harald@example.com")
+    assert get_owner_id() == "harald@example.com"
 
 
 # ---- daemon registry filter ----
@@ -169,18 +169,18 @@ def test_personal_acl_resolves_grants_to_the_owner(monkeypatch):
     from threadweave.api import _personal_acl
 
     monkeypatch.setenv("THREADWEAVE_PROFILE", "personal")
-    monkeypatch.setenv("THREADWEAVE_OWNER_ID", "owner@acme.no")
+    monkeypatch.setenv("THREADWEAVE_OWNER_ID", "owner@example.com")
     acl = {
-        "allowed_groups": ["a24d9307-ada6-4ce3-b9b5-8c54782bce22"],
+        "allowed_groups": ["22222222-3333-4444-5555-666666666666"],
         "allowed_users": [],
         "deny_users": ["someone-else"],
     }
     out = _personal_acl(acl)
-    assert out["allowed_users"] == ["owner@acme.no"]
+    assert out["allowed_users"] == ["owner@example.com"]
     assert "allowed_groups" not in out
     assert out["deny_users"] == ["someone-else"]   # deny stays authoritative
     assert acl["allowed_groups"] == [              # input not mutated
-        "a24d9307-ada6-4ce3-b9b5-8c54782bce22"
+        "22222222-3333-4444-5555-666666666666"
     ]
 
 
@@ -188,9 +188,9 @@ def test_personal_acl_keeps_an_existing_owner_grant(monkeypatch):
     from threadweave.api import _personal_acl
 
     monkeypatch.setenv("THREADWEAVE_PROFILE", "personal")
-    monkeypatch.setenv("THREADWEAVE_OWNER_ID", "owner@acme.no")
-    out = _personal_acl({"allowed_users": ["owner@acme.no"]})
-    assert out["allowed_users"] == ["owner@acme.no"]
+    monkeypatch.setenv("THREADWEAVE_OWNER_ID", "owner@example.com")
+    out = _personal_acl({"allowed_users": ["owner@example.com"]})
+    assert out["allowed_users"] == ["owner@example.com"]
 
 
 def test_org_mode_leaves_the_acl_untouched(monkeypatch):
@@ -216,7 +216,7 @@ def test_owner_can_read_a_group_gated_capture_in_personal_mode(monkeypatch):
     from threadweave.api import _memory_store, app
 
     monkeypatch.setenv("THREADWEAVE_PROFILE", "personal")
-    monkeypatch.setenv("THREADWEAVE_OWNER_ID", "owner@acme.no")
+    monkeypatch.setenv("THREADWEAVE_OWNER_ID", "owner@example.com")
     client = TestClient(app)
 
     resp = client.post("/api/v1/ingest", json={
@@ -229,15 +229,15 @@ def test_owner_can_read_a_group_gated_capture_in_personal_mode(monkeypatch):
         "metadata": {
             "wing": "procurement", "room": "contracts",
             "sensitivity": "confidential",
-            "acl": {"allowed_groups": ["a24d9307-ada6-4ce3-b9b5-8c54782bce22"]},
+            "acl": {"allowed_groups": ["22222222-3333-4444-5555-666666666666"]},
         },
     })
     assert resp.status_code == 201
     eid = resp.json()["id"]
 
     stored = _memory_store[eid]
-    assert stored["acl"]["allowed_users"] == ["owner@acme.no"]
+    assert stored["acl"]["allowed_users"] == ["owner@example.com"]
     assert "allowed_groups" not in stored["acl"]
 
-    got = client.get(f"/api/v1/entries/{eid}?person_id=owner@acme.no")
+    got = client.get(f"/api/v1/entries/{eid}?person_id=owner@example.com")
     assert got.status_code == 200

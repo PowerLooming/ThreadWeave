@@ -55,12 +55,12 @@ def make_auth(monkeypatch, tmp_path, app):
 
 def test_silent_token_from_the_cache(monkeypatch, tmp_path):
     app = FakeMsalApp(
-        accounts=[{"username": "owner@acme.no"}],
+        accounts=[{"username": "owner@example.com"}],
         silent={"access_token": "tok-cached"},
     )
     auth = make_auth(monkeypatch, tmp_path, app)
     assert auth.get_token() == "tok-cached"
-    assert auth.account() == "owner@acme.no"
+    assert auth.account() == "owner@example.com"
 
 
 def test_no_account_tells_the_operator_to_sign_in(monkeypatch, tmp_path):
