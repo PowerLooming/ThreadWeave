@@ -6,6 +6,35 @@ uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Removed
+
+- **Implicit cloud credentials in the LLM detector.** `LLMConfig.from_env()`
+  no longer reads `OPENAI_API_KEY` or `OPENAI_BASE_URL`, `docker-compose.yml`
+  no longer passes `OPENAI_API_KEY` into the API container, and the endpoint
+  resolution no longer falls back to `https://api.openai.com/v1` or
+  `https://api.anthropic.com/v1`. A base URL you set is now the only thing
+  that names an LLM endpoint, and an API key on its own enables nothing: the
+  detector is created only when `THREADWEAVE_LLM_BASE_URL` is set, so a box
+  carrying a cloud credential in its environment stays on regex instead of
+  silently posting captured content to a vendor host. The default model name
+  follows the deployment that ships with the project (`llama3.1:8b`, the
+  model the Docker Compose LLM profile pulls) rather than a hosted model.
+  Nothing in the running configuration changes: every documented deployment
+  already sets `THREADWEAVE_LLM_BASE_URL`.
+
+- **The hosted decision provider.** `TypeSafeDecisionProvider` and the remote
+  opt-in that gated it (`THREADWEAVE_DECISION_ALLOW_REMOTE`, plus the
+  `THREADWEAVE_DECISION_API_KEY` / `TYPESAFE_API_KEY` read) are gone, along with
+  `TYPESAFE_ENDPOINT`, `RemoteContentNotAllowed` and its tests. It was the one
+  code path that could send captured content off the machine, it was never run
+  against the live service, and ThreadWeave's contract is one-way and on-prem,
+  so the switch is removed rather than left for someone to flip. The three
+  decision backends (`encoder`, `laya`, `ollama`) are unchanged and all local;
+  `THREADWEAVE_DECISION_PROVIDER=typesafe` now falls through to the existing
+  "unknown provider, layer disabled" warning.
+
+## [0.4.10] — 2026-09-27
+
 ### Changed
 
 - **System mail no longer reaches the detector.** The email connector sent

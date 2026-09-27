@@ -457,9 +457,11 @@ async def detect_async(text: str, min_length: int = 50) -> DetectionResult:
     a model reply; it returns the same DetectionResult the callers already
     expect, so nothing downstream changes.
 
-    To enable the LLM detector, set one of:
-        THREADWEAVE_LLM_API_KEY / OPENAI_API_KEY
-        + optionally THREADWEAVE_LLM_BASE_URL / THREADWEAVE_LLM_MODEL
+    To enable the LLM detector, set THREADWEAVE_LLM_BASE_URL to an endpoint
+    you run, plus THREADWEAVE_LLM_API_KEY only if that endpoint needs a key.
+    Those are the only names read: nothing reads OPENAI_API_KEY or
+    OPENAI_BASE_URL, and there is no vendor endpoint default, so an
+    environment carrying a cloud credential cannot route content anywhere.
     """
     try:
         from threadweave.decision_gate import get_decision_gate

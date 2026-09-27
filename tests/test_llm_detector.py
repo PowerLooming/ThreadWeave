@@ -264,10 +264,11 @@ class TestLLMDetectorMocked:
         reset_llm_detector()
 
     def make_detector(self, **overrides) -> LLMDetector:
-        """Create a detector with a fake API key (will never be called in tests
-        unless we set _client manually)."""
+        """Create a detector pointed at a fake endpoint (its HTTP client is
+        swapped out by each test; nothing is ever sent anywhere)."""
         config = LLMConfig(
             api_key="sk-test-fake",
+            base_url="http://localhost:11434/v1",
             model="gpt-4o-mini",
             max_retries=0,
         )
@@ -572,13 +573,17 @@ class TestFallbackBehavior:
 class TestLLMConfig:
     """Tests for LLMConfig.from_env()."""
 
-    def test_from_env_openai_defaults(self):
+    def test_from_env_ignores_openai_credentials(self):
+        # An environment carrying a cloud key must not configure the detector:
+        # no vendored SDK env var is read, and no endpoint is implied either.
         with patch.dict("os.environ", {
             "OPENAI_API_KEY": "sk-test-key",
+            "OPENAI_BASE_URL": "https://api.openai.com/v1",
         }, clear=True):
             config = LLMConfig.from_env()
-            assert config.api_key == "sk-test-key"
-            assert config.model == "gpt-4o-mini"
+            assert config.api_key is None
+            assert config.base_url is None
+            assert config.model == "llama3.1:8b"
             assert config.provider == "openai"
 
     def test_from_env_custom_prefix(self):
@@ -592,13 +597,28 @@ class TestLLMConfig:
             assert config.base_url == "https://llm.internal/v1"
             assert config.model == "llama-3-70b"
 
-    def test_from_env_threadweave_takes_priority(self):
+    def test_from_env_threadweave_names_win(self):
         with patch.dict("os.environ", {
             "OPENAI_API_KEY": "sk-openai",
             "THREADWEAVE_LLM_API_KEY": "sk-threadweave",
         }, clear=True):
             config = LLMConfig.from_env()
             assert config.api_key == "sk-threadweave"
+
+    def test_endpoint_named_by_base_url_not_by_api_key(self):
+        # A key alone names no host, so the detector stays off and the
+        # pipeline keeps using regex rather than guessing at a vendor host.
+        with patch.dict("os.environ", {
+            "THREADWEAVE_LLM_API_KEY": "sk-threadweave",
+        }, clear=True):
+            reset_llm_detector()
+            assert get_llm_detector() is None
+        with patch.dict("os.environ", {
+            "THREADWEAVE_LLM_BASE_URL": "http://localhost:11434/v1",
+        }, clear=True):
+            reset_llm_detector()
+            assert get_llm_detector() is not None
+        reset_llm_detector()
 
 
 # ── API Ingest with LLM (integration) ──────────────────────────
@@ -615,13 +635,14 @@ class TestIngestWithLLM:
 
     @pytest.mark.asyncio
     async def test_ingest_uses_llm_when_configured(self):
-        """When an API key is set, the ingest pipeline uses LLM detection."""
+        """An endpoint is configured, so the ingest pipeline uses LLM detection."""
         from fastapi.testclient import TestClient
         from threadweave.api import app
 
         client = TestClient(app)
 
         with patch.dict("os.environ", {
+            "THREADWEAVE_LLM_BASE_URL": "http://localhost:11434/v1",
             "THREADWEAVE_LLM_API_KEY": "sk-test",
         }, clear=True):
             reset_llm_detector()
@@ -660,7 +681,10 @@ class TestIngestWithLLM:
 
         client = TestClient(app)
 
-        with patch.dict("os.environ", {"THREADWEAVE_LLM_API_KEY": "sk-test"}):
+        with patch.dict("os.environ", {
+            "THREADWEAVE_LLM_BASE_URL": "http://localhost:11434/v1",
+            "THREADWEAVE_LLM_API_KEY": "sk-test",
+        }):
             reset_llm_detector()
             llm = get_llm_detector()
             llm._client = _make_mock_client(_make_llm_response(
@@ -798,7 +822,7 @@ class TestLanguageDetection:
 
     @pytest.mark.asyncio
     async def test_language_parsed_from_llm_response(self):
-        detector = LLMDetector(LLMConfig(api_key="sk-test", model="gpt-4o-mini", max_retries=0))
+        detector = LLMDetector(LLMConfig(api_key="sk-test", base_url="http://localhost:11434/v1", model="gpt-4o-mini", max_retries=0))
         detector._client = _make_mock_client(_make_llm_response(
             content_type="decision", confidence=0.9, language="zh",
         ))
@@ -810,7 +834,7 @@ class TestLanguageDetection:
 
     @pytest.mark.asyncio
     async def test_language_defaults_empty_for_english(self):
-        detector = LLMDetector(LLMConfig(api_key="sk-test", model="gpt-4o-mini", max_retries=0))
+        detector = LLMDetector(LLMConfig(api_key="sk-test", base_url="http://localhost:11434/v1", model="gpt-4o-mini", max_retries=0))
         detector._client = _make_mock_client(_make_llm_response(
             content_type="answer", confidence=0.9, language="en",
         ))
@@ -822,7 +846,7 @@ class TestLanguageDetection:
 
     @pytest.mark.asyncio
     async def test_invalid_language_normalized_to_empty(self):
-        detector = LLMDetector(LLMConfig(api_key="sk-test", model="gpt-4o-mini", max_retries=0))
+        detector = LLMDetector(LLMConfig(api_key="sk-test", base_url="http://localhost:11434/v1", model="gpt-4o-mini", max_retries=0))
         detector._client = _make_mock_client(_make_llm_response(
             content_type="answer", confidence=0.9, language="English!!",
         ))

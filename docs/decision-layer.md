@@ -10,8 +10,9 @@ pipeline uses the LLM detector and the regex classifier exactly as before.
 
 ## Primitives
 
-Three question types, mirroring the TypeSafe AI "System One" contract so a
-hosted decision model can be dropped in behind the same interface:
+Three question types, mirroring the published TypeSafe AI "System One"
+contract, which is where the shapes and the confidence derivation come from.
+Every backend runs locally: nothing in this layer sends content anywhere.
 
 | Type | Question | Answer |
 |---|---|---|
@@ -31,7 +32,12 @@ matter which provider answered.
 | `encoder` | local, on-prem | a small NLI classifier (`transformers` + `torch`). Returns real distributions computed from logits, needs no GPU, and asks one question per call. Default model `MoritzLaurer/bge-m3-zeroshot-v2.0-c` (MIT, multilingual, covers Norwegian). |
 | `laya` | local, on-prem | `laya` (Apache-2.0), a non-autoregressive decision model that answers every question in one forward pass. By far the fastest backend (0.05 s per message for four questions), and the only one with a checkpoint trained on typed decisions. Opt-in, because on our own battery it is not more accurate than the encoder: see the Laya section below. |
 | `ollama` | local, on-prem | one batched call to `/api/chat` with a JSON schema pinned as the response format. Fastest on a GPU, but its probabilities are self-reported by a generative model, so its confidences are uncalibrated by construction. |
-| `typesafe` | hosted (api.typesafe.ai) | the seam for Jev. Refuses to run unless `THREADWEAVE_DECISION_ALLOW_REMOTE` is truthy, because content does not leave the machine it was captured on. |
+
+All three providers run on the machine the content was captured on. A hosted
+decision API was prototyped behind the same interface and has been removed: it
+was never run against the live service, and ThreadWeave's contract is that
+content does not leave the premises, so the remote opt-in that gated it is
+gone rather than left as a switch someone could flip.
 
 ```bash
 # encoder (no GPU needed)

@@ -20,11 +20,12 @@ services:
       # Auth (optional — leave empty to disable)
       - THREADWEAVE_REQUIRE_AUTH
       - THREADWEAVE_API_KEYS
-      # LLM detection (optional — leave empty for regex)
+      # LLM detection (optional — leave empty for regex). The base URL is
+      # required: it is the only thing that names an endpoint. Nothing reads
+      # OPENAI_API_KEY or OPENAI_BASE_URL.
       - THREADWEAVE_LLM_API_KEY
       - THREADWEAVE_LLM_BASE_URL
       - THREADWEAVE_LLM_MODEL
-      - OPENAI_API_KEY
     env_file:
       - .env  # optional, ignored if not present
     restart: unless-stopped

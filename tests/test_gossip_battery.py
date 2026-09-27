@@ -93,12 +93,10 @@ LLM_LEGIT_CASES = [
 
 
 def _llm_available() -> bool:
+    """The base URL is what names an endpoint, so it is the whole test."""
     import os
 
-    return bool(
-        os.environ.get("THREADWEAVE_LLM_BASE_URL")
-        or os.environ.get("THREADWEAVE_LLM_API_KEY")
-    )
+    return bool(os.environ.get("THREADWEAVE_LLM_BASE_URL"))
 
 
 @pytest.mark.skipif(not _llm_available(), reason="LLM detector not configured")
