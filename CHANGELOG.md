@@ -6,6 +6,8 @@ uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.4.11] — 2026-09-27
+
 ### Removed
 
 - **Implicit cloud credentials in the LLM detector.** `LLMConfig.from_env()`
