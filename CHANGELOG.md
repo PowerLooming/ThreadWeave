@@ -6,6 +6,8 @@ uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.4.10] — 2026-09-27
+
 ### Changed
 
 - **System mail no longer reaches the detector.** The email connector sent
