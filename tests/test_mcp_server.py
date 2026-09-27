@@ -383,6 +383,37 @@ class TestAuth:
             assert other.call("search_memory", {"query": "Postgres"})["total"] == 0
 
 
+class TestOptionalExtra:
+    """The MCP SDK is an extra: say which one instead of a bare ImportError."""
+
+    def test_missing_extra_prints_the_install_hint(self, monkeypatch, capsys):
+        import argparse
+        import builtins
+        import sys
+
+        from threadweave import cli
+
+        real_import = builtins.__import__
+
+        def guarded(name, *args, **kwargs):
+            if name == "mcp" or name.startswith("mcp."):
+                raise ModuleNotFoundError(f"No module named {name!r}", name=name)
+            return real_import(name, *args, **kwargs)
+
+        # The module is already imported in this process; drop it so the tool
+        # import runs again, this time against a machine without the extra.
+        monkeypatch.delitem(sys.modules, "threadweave.mcp_server", raising=False)
+        monkeypatch.setattr(builtins, "__import__", guarded)
+
+        with pytest.raises(SystemExit) as exc:
+            cli.cmd_mcp(argparse.Namespace(host="127.0.0.1", port=8100, api_url=""))
+
+        assert exc.value.code == 1
+        stderr = capsys.readouterr().err
+        assert "optional extra" in stderr
+        assert 'threadweave-memory[mcp]' in stderr
+
+
 class TestTransportFailures:
     """An agent must not read 'no knowledge found' when the API is down."""
 

@@ -91,7 +91,20 @@ def cmd_save(args):
 
 def cmd_mcp(args):
     """Start the MCP server (agent tools over Streamable HTTP)."""
-    from threadweave.mcp_server import serve
+    try:
+        from threadweave.mcp_server import serve
+    except ModuleNotFoundError as exc:
+        # The MCP SDK lives in an optional extra. Say which one instead of
+        # dying on a bare "No module named 'mcp'".
+        if (exc.name or "").split(".")[0] == "mcp":
+            print(
+                "The MCP server needs the optional extra:\n"
+                "  pip install \"threadweave-memory[mcp]\"\n"
+                "  uv sync --extra mcp   (uv checkout)",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        raise
 
     if getattr(args, "api_url", None):
         os.environ["THREADWEAVE_API_BASE_URL"] = args.api_url

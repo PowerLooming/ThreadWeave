@@ -10,9 +10,13 @@ Claude Code, or your own client.
 Two commands run the whole thing:
 
 ```bash
+pip install "threadweave-memory[mcp]"   # or, in a uv checkout: uv sync --extra mcp
 threadweave serve            # the REST API + store  (http://127.0.0.1:8000)
 threadweave mcp              # the agent tool surface (http://127.0.0.1:8100/mcp)
 ```
+
+The MCP SDK is an optional extra, so a plain install serves the API, the
+connectors and the bots without it.
 
 ## Why a shim, not a second memory
 
