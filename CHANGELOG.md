@@ -6,6 +6,8 @@ uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.4.8] — 2026-09-27
+
 ### Added
 
 - **Typed decision layer** — the ingest judgments (worth saving, gossip, PII,
