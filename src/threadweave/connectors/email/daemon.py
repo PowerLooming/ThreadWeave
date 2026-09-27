@@ -68,6 +68,7 @@ class EmailWatchDaemon:
             "threads_processed": 0,
             "knowledge_extracted": 0,
             "skipped": 0,
+            "noise_skipped": 0,
             "errors": 0,
         }
 
@@ -102,7 +103,7 @@ class EmailWatchDaemon:
         self.stats["polls"] += 1
         result = {
             "fetched": 0, "processed": 0, "submitted": 0,
-            "skipped": 0, "errors": 0,
+            "skipped": 0, "noise_skipped": 0, "errors": 0,
         }
 
         messages = []
@@ -212,6 +213,9 @@ class EmailWatchDaemon:
         else:
             result["skipped"] += 1
             self.stats["skipped"] += 1
+            if getattr(processed, "noise", False):
+                result["noise_skipped"] += 1
+                self.stats["noise_skipped"] += 1
 
     def _is_duplicate(self, message) -> bool:
         """True if this message was already processed in a previous poll."""
@@ -233,9 +237,14 @@ class EmailWatchDaemon:
 
     @staticmethod
     def _summarize(stats: dict) -> str:
-        return (
+        # noise= is reported separately because "skipped" alone cannot tell an
+        # operator whether the mailbox held nothing or the filter ate it.
+        line = (
             f"fetched={stats.get('fetched', stats.get('messages_fetched', 0))} "
             f"processed={stats.get('processed', stats.get('threads_processed', 0))} "
             f"submitted={stats.get('submitted', stats.get('knowledge_extracted', 0))} "
-            f"skipped={stats.get('skipped', 0)} errors={stats.get('errors', 0)}"
+            f"skipped={stats.get('skipped', 0)}"
         )
+        if "noise_skipped" in stats:
+            line += f" noise={stats['noise_skipped']}"
+        return line + f" errors={stats.get('errors', 0)}"

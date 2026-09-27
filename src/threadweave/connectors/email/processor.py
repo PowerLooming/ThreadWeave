@@ -74,6 +74,29 @@ _ENV_MIN_CONFIDENCE = "THREADWEAVE_EMAIL_MIN_CONFIDENCE"
 _ENV_MIN_BODY_LENGTH = "THREADWEAVE_EMAIL_MIN_BODY_LENGTH"
 _ENV_API_URL = "THREADWEAVE_API_URL"
 _ENV_INGEST_TIMEOUT = "THREADWEAVE_INGEST_TIMEOUT"
+_ENV_NOISE_FILTER = "THREADWEAVE_EMAIL_NOISE_FILTER"
+
+# System mail that is never organizational knowledge: password-expiry notices,
+# vendor security digests, ticketing notifications. A local LLM used to read
+# every one of them in full before detection discarded them, which is how a
+# five-message cycle took twenty minutes. The patterns are deliberately narrow:
+# a person who signs a message is never skipped by the sender rule, and the
+# subject rule needs a cadence word (weekly digest) or the word newsletter,
+# not the word digest on its own.
+_AUTOMATED_LOCAL = re.compile(
+    r"(?:^|[-_.])(?:no[-_.]?reply|do[-_.]?not[-_.]?reply|donotreply|"
+    r"mailer[-_.]?daemon|postmaster|bounce[sd]?|notifications?|alerts?)"
+    r"(?:$|[-_.])",
+    re.IGNORECASE,
+)
+_REPLY_PREFIX = re.compile(r"^(?:re|fw|fwd|aw|sv|vs)\s*:", re.IGNORECASE)
+_DIGEST_SUBJECT = re.compile(
+    r"\b(?:weekly|monthly|daily|quarterly)\b[^.]{0,40}?"
+    r"\b(?:digest|report|roundup|bulletin)\b"
+    r"|\bnewsletter\b"
+    r"|\bdigest\s+for\b",
+    re.IGNORECASE,
+)
 _ENV_TENANT = "THREADWEAVE_TENANT"
 
 
@@ -125,6 +148,11 @@ class ProcessedEmail:
     should_save: bool = False
     drawer_ids: list[str] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
+    # Why a message was not even offered to the detector. "noise" marks system
+    # mail the filter recognised, which the daemons report separately so an
+    # operator can tell an empty mailbox from a filtered one.
+    skipped_reason: str = ""
+    noise: bool = False
 
 
 class EmailProcessor:
@@ -150,12 +178,35 @@ class EmailProcessor:
         # Without it, all email lands in the "email" wing (fallback).
         self.graph = graph_client
         self._wing_cache: dict[str, str] = {}
+        # On by default: skipping automated mail before the detector is both
+        # faster and free of judgment, and an operator who wants the old
+        # behaviour can set THREADWEAVE_EMAIL_NOISE_FILTER=0.
+        self.noise_filter_enabled = os.environ.get(
+            _ENV_NOISE_FILTER, "1"
+        ).strip().lower() not in {"0", "false", "no", "off"}
         self.stats = {
             "emails_processed": 0,
             "threads_processed": 0,
             "knowledge_extracted": 0,
             "skipped": 0,
+            "noise_skipped": 0,
         }
+
+    def _is_system_noise(self, email: EmailMessage) -> str:
+        """Why this message is system mail, or "" if it is worth detecting."""
+        if not self.noise_filter_enabled:
+            return ""
+        sender = (email.sender_email or "").strip().lower()
+        local = sender.split("@", 1)[0] if "@" in sender else sender
+        if _AUTOMATED_LOCAL.search(local):
+            return f"automated sender {sender}"
+        subject = email.subject or ""
+        # A reply or a forward means a person is in the conversation: someone
+        # answered the digest or passed it on, which is exactly the kind of
+        # message the recollection is for. Only the arriving copy is skipped.
+        if not _REPLY_PREFIX.match(subject) and _DIGEST_SUBJECT.search(subject):
+            return "recurring digest subject"
+        return ""
 
     async def process_message(self, email: EmailMessage) -> ProcessedEmail:
         """Process a single email message."""
@@ -168,6 +219,22 @@ class EmailProcessor:
                 participants=[email.sender_email] + email.recipients,
                 text_content="",
                 word_count=0,
+            )
+        noise = self._is_system_noise(email)
+        if noise:
+            self.stats["skipped"] += 1
+            self.stats["noise_skipped"] += 1
+            logger.info("Skipped system mail (%s): %s", noise,
+                        (email.subject or "")[:70])
+            return ProcessedEmail(
+                source="single",
+                conversation_id=email.conversation_id,
+                subject=email.subject,
+                participants=[email.sender_email] + email.recipients,
+                text_content="",
+                word_count=0,
+                skipped_reason=noise,
+                noise=True,
             )
         text = self._extract_body(email)
         if len(text) < self.min_body_length:
@@ -192,6 +259,19 @@ class EmailProcessor:
             return ProcessedEmail(
                 source="thread", conversation_id=thread.conversation_id,
                 subject=thread.subject, participants=[], text_content="", word_count=0,
+            )
+        # A thread of nothing but digests is a digest, not a conversation.
+        if all(self._is_system_noise(m) for m in thread.messages):
+            self.stats["skipped"] += 1
+            self.stats["noise_skipped"] += 1
+            logger.info("Skipped system thread: %s", (thread.subject or "")[:70])
+            return ProcessedEmail(
+                source="thread", conversation_id=thread.conversation_id,
+                subject=thread.subject,
+                participants=self._thread_participants(thread),
+                text_content="", word_count=0,
+                skipped_reason="all messages are system mail",
+                noise=True,
             )
         # An NDR in the thread means the whole exchange bounced; skip it
         # rather than extracting quoted headers that trip PII patterns.

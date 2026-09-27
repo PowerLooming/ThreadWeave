@@ -6,6 +6,18 @@ uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- **System mail no longer reaches the detector.** The email connector sent
+  every unread message to the detector, so a mailbox holding four Microsoft
+  security digests and one decision spent minutes of local inference on the
+  digests and then discarded all four. Automated senders (the no-reply forms)
+  and recurring digests (weekly or monthly digest or report, newsletters) are
+  now skipped before any model call, while a reply or a forward of the same
+  digest is still processed, because a person is in that conversation. Set
+  THREADWEAVE_EMAIL_NOISE_FILTER=0 to switch the filter off, and read the
+  cycle line's noise=N to tell a filtered mailbox from an empty one.
+
 ## [0.4.8] — 2026-09-27
 
 ### Added
