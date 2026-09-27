@@ -6,6 +6,8 @@ uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.4.8] — 2026-09-27
+
 ### Added
 
 - **Personal mode reads mail as the owner** — the single-user profile now
