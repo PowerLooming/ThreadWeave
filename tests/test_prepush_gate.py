@@ -350,6 +350,52 @@ def test_stdin_refs_new_branch_scans_whole_tree(repo, private_file):
     assert "private-block-1" in [f["rule_id"] for f in findings_of(proc, "block")]
 
 
+def test_push_already_on_the_remote_scans_nothing(repo, private_file):
+    """A branch level with, or behind, its remote publishes nothing new.
+
+    Live case: pushing master was rejected as non-fast-forward because CI had
+    added a version bump commit on the remote. That commit was not in the local
+    repository, so there was no sha to diff against, the pushed set came back
+    empty, and the gate fell through to a whole-tree scan of 197 commits and
+    16 blocking findings over content that was already public.
+    """
+    private = private_file("[block]\nnordvik\n")
+    commit(repo, "docs/legacy.md", "tenant nordvik appears here\n", message="Legacy note")
+    # This branch is already published: a remote-tracking ref holds it.
+    _git(repo, "update-ref", "refs/remotes/origin/main", "HEAD")
+    # The remote's newer tip is unknown locally, like CI's bump commit.
+    refs = tmp_refs(repo, "refs/heads/main", "refs/heads/main", "f" * 40)
+
+    proc = run_gate(repo, "--refs-file", str(refs), private=private)
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert findings_of(proc) == []
+    assert json.loads(proc.stdout)["stats"][0]["mode"] == "none"
+
+
+def test_nothing_new_is_reported_in_words(repo):
+    _git(repo, "update-ref", "refs/remotes/origin/main", "HEAD")
+    refs = tmp_refs(repo, "refs/heads/main", "refs/heads/main", "f" * 40)
+
+    proc = run_gate(repo, "--refs-file", str(refs), json_out=False)
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "nothing new to publish" in proc.stdout
+
+
+def test_resolve_base_separates_nothing_new_from_an_unknown_base(repo):
+    """None means "scan the tree"; NOTHING_NEW means "there is nothing to scan"."""
+    _git(repo, "update-ref", "refs/remotes/origin/main", "HEAD")
+    sha = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=str(repo), capture_output=True, text=True
+    ).stdout.strip()
+
+    # Case 1: the remote has this exact commit, so diff against it.
+    assert prepush.resolve_base(str(repo), sha, sha, "origin") == sha
+    # Case 4: the remote has moved on to a commit we never fetched.
+    assert prepush.resolve_base(str(repo), sha, "f" * 40, "origin") is prepush.NOTHING_NEW
+
+
 def test_branch_deletion_is_skipped(repo):
     refs = tmp_refs(repo, "(delete)", "refs/heads/gone", "0" * 40, local_sha="0" * 40)
     proc = run_gate(repo, "--refs-file", str(refs))

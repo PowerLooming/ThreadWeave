@@ -52,6 +52,22 @@ from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 ZERO_SHA = "0" * 40
 DEFAULT_RULES_PATH = "scripts/prepush_rules.toml"
 PRIVATE_ENV = "THREADWEAVE_PREPUSH_PRIVATE"
+
+
+class _NothingNew:
+    """``resolve_base`` sentinel: this push publishes nothing new.
+
+    Distinct from ``None``, which means the base is unknown and the whole tree
+    is about to become public. A branch that is level with, or behind, its
+    remote falls here: every commit it carries is already published, so there
+    is no content to review.
+    """
+
+    def __repr__(self) -> str:  # pragma: no cover - debugging aid
+        return "NOTHING_NEW"
+
+
+NOTHING_NEW = _NothingNew()
 ADVISORY_THRESHOLD_ENV = "THREADWEAVE_PREPUSH_ADVISORY_THRESHOLD"
 LANGUAGE_MIN_CONFIDENCE_ENV = "THREADWEAVE_PREPUSH_LANGUAGE_MIN_CONFIDENCE"
 ADVISORY_DEFAULT_THRESHOLD = 0.60
@@ -190,10 +206,10 @@ def has_tracking_refs(repo: Optional[str], remote: str) -> bool:
 
 def resolve_base(
     repo: Optional[str], local_sha: str, remote_sha: str, remote: str
-) -> Optional[str]:
+) -> "str | _NothingNew | None":
     """The commit the pushed content is compared against, or None for a full tree.
 
-    Three cases, in order:
+    Four cases, in order:
 
     1. The remote already has this branch: compare against that sha, which is
        what a normal push of new commits means.
@@ -204,6 +220,14 @@ def resolve_base(
        content already published elsewhere is not what is being published here.
     3. Nothing is published anywhere, so the whole tree is about to become
        public. That is the one case that warrants scanning all of it.
+    4. Nothing this branch carries is new to that remote: a push of a branch
+       that is level with or behind its remote, which is what a rejected
+       non-fast-forward looks like from the hook. Returns ``NOTHING_NEW``
+       rather than the ``None`` of case 3: scanning the tree here reported
+       already-published history as if it were about to become public.
+       Case 1 cannot catch it, because the remote's newer tip (a CI version
+       bump, in the case that surfaced this) is not in the local repository
+       yet, so there is no sha to diff against.
     """
     if remote_sha and remote_sha != ZERO_SHA:
         exists = subprocess.run(
@@ -220,7 +244,7 @@ def resolve_base(
     else:
         pushed = git(["rev-list", local_sha, "--not", "--remotes"], repo=repo).split()
     if not pushed:
-        return None
+        return NOTHING_NEW
     oldest = pushed[-1]
     parents = git(["rev-list", "--parents", "-n", "1", oldest], repo=repo).split()
     return parents[1] if len(parents) > 1 else None
@@ -495,6 +519,21 @@ def scan_target(
     target: Target,
 ) -> Tuple[List[Finding], Dict[str, Any]]:
     base = resolve_base(repo, target.local_sha, target.remote_sha, target.remote)
+    if base is NOTHING_NEW:
+        # Nothing this branch carries is new to that remote: no diff to read and
+        # no tree to scan. Reporting findings here would flag already-published
+        # history as if the push were about to publish it.
+        return [], {
+            "base": None,
+            "head": target.local_sha,
+            "mode": "none",
+            # The ref line carries the remote *ref*; the pre-push hook does not
+            # forward the remote name, so this is not necessarily a remote name.
+            "remote_ref": target.remote_ref,
+            "added_lines": 0,
+            "files": 0,
+            "commits": 0,
+        }
     findings: List[Finding] = []
     stats: Dict[str, Any] = {
         "base": base,
@@ -665,6 +704,8 @@ def run_advisory(
     seen: set[str] = set()
     for target in targets:
         base = resolve_base(repo, target.local_sha, target.remote_sha, target.remote)
+        if base is NOTHING_NEW:
+            continue
         for location, text in advisory_texts(repo, base, target.local_sha, rules):
             key = f"{location}\x00{text[:80]}"
             if key in seen:
@@ -714,6 +755,12 @@ def run_advisory(
 def render(findings: List[Finding], stats: List[Dict[str, Any]], width: int = 26) -> str:
     lines: List[str] = []
     for stat in stats:
+        if stat.get("mode") == "none":
+            lines.append(
+                "prepush-gate: nothing new to publish ({head} is already on "
+                "the remote)".format(head=str(stat.get("head"))[:8])
+            )
+            continue
         lines.append(
             "prepush-gate: {commits} commit(s), {files} file(s), {added_lines} added line(s) "
             "({mode} scan {base}..{head})".format(
