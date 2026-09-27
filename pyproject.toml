@@ -18,6 +18,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+laya = [
+    "laya>=0.3.20",
+]
 postgres = [
     "psycopg2-binary>=2.9",
 ]
@@ -56,6 +59,10 @@ email = [
 ]
 outlook = [
     "pywin32>=306",
+]
+decisions = [
+    "transformers>=4.44",
+    "torch>=2.2",
 ]
 all-connectors = [
     "botbuilder-core>=4.15",

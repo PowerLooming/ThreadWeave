@@ -1,0 +1,261 @@
+# Rules for scripts/prepush_gate.py.
+#
+# SHAPES ONLY. This file is published, so it must not contain a single real
+# identifier: no tenant ids, no company names, no colleague names, no hostnames.
+# Site-specific terms live in the private overlay (default
+# ~/.threadweave/prepush-private.txt, override with THREADWEAVE_PREPUSH_PRIVATE
+# or --private), which is never committed. See docs/pre-push-gate.md.
+#
+# scope:    content | commit | path | any
+# severity: block (stops the push) | warn (prints, allows)
+# All patterns are regexes, case-insensitive, matched per line (or per path).
+# All strings are TOML literal strings, so backslashes are literal.
+#
+# The rule shapes below necessarily read like the things they match, so this
+# file exempts itself from exactly one of them (see docs/pre-push-gate.md).
+# prepush-allow-file: connection-string-secret
+
+[settings]
+# Lines longer than this are minified or generated data, not source.
+max_line_length = 1000
+# Content of these paths is not scanned (path rules still are).
+skip_content = [
+  "uv.lock",
+  "package-lock.json",
+  "*.lock",
+  "*.min.js",
+  "*.min.css",
+  "*.svg",
+  "*.png",
+  "*.jpg",
+  "*.jpeg",
+  "*.gif",
+  "*.ico",
+  "*.woff",
+  "*.woff2",
+  "*.pdf",
+  "*.ipynb",
+  "*.jsonl",
+  "dist/*",
+  ".venv/*",
+]
+
+[allow]
+# Suppression regexes, matched against the matched text (for path rules, the
+# path). Keep this list short: everything here is a hole in the gate.
+patterns = [
+  '\.env\.(example|sample|template)$',
+  '\.(example|sample|template|pub)$',
+  '@(example\.(com|org|net)|test|localhost|invalid|users\.noreply\.github\.com)',
+  '@[a-z]\.(com|org|net)$',                 # fixture mail addresses (a@x.com)
+  'noreply@github\.com',
+  'sk-(test|fake|dummy|example|placeholder)',
+  '(YOUR_|MY_|CHANGE_ME|REPLACE_ME|PLACEHOLDER|DUMMY_)',
+  '(example|sample|dummy|placeholder|redacted)',
+  '01019012345',                            # synthetic national id used by the PII tests
+  '\*\*\*@',                                # documented placeholder DSN (user:***@host)
+  '^(you|user|admin|someone|me|boss|save|knowledge)@',   # documentation mail addresses
+  '/(home|Users)/threadweave/',             # container path in the docs
+]
+
+# ── paths that must never be added ───────────────────────────
+
+[[rules]]
+id = "env-file"
+scope = "path"
+severity = "block"
+pattern = '(^|/)\.env(\.[A-Za-z0-9._-]+)?$'
+why = "environment file with real values"
+
+[[rules]]
+id = "key-material"
+scope = "path"
+severity = "block"
+pattern = '\.(pem|key|pfx|p12|jks|keystore|ppk)$'
+why = "key material"
+
+[[rules]]
+id = "ssh-private-key"
+scope = "path"
+severity = "block"
+pattern = '(^|/)id_(rsa|ed25519|ecdsa|dsa)$'
+why = "SSH private key"
+
+[[rules]]
+id = "local-key-store"
+scope = "path"
+severity = "block"
+pattern = '(^|/)(keys|credentials|msal_cache|token_cache|auth_cache|serviceaccount)\.json$'
+why = "local credential or token cache"
+
+[[rules]]
+id = "secret-file"
+scope = "path"
+severity = "warn"
+pattern = '(^|/)(secret|secrets|credentials)\.(ya?ml|toml|ini|txt)$'
+why = "looks like a secret file, confirm it is a template"
+
+[[rules]]
+id = "local-database"
+scope = "path"
+severity = "block"
+pattern = '\.(sqlite3|sqlite|db|mdb|dump|bak)$'
+why = "local store or dump, contains real records"
+
+[[rules]]
+id = "decision-audit"
+scope = "path"
+severity = "block"
+pattern = '(decision_audit|entries)\.jsonl$'
+why = "audit log with real content excerpts"
+
+[[rules]]
+id = "archive"
+scope = "path"
+severity = "warn"
+pattern = '\.(zip|7z|rar|tgz|tar\.gz)$'
+why = "archive, unreadable by this gate"
+
+# ── credential shapes ────────────────────────────────────────
+
+[[rules]]
+id = "private-key"
+scope = "content"
+severity = "block"
+pattern = '-----BEGIN [A-Z ]*PRIVATE KEY-----'
+why = "private key in a public repo"
+
+[[rules]]
+id = "openai-key"
+scope = "content"
+severity = "block"
+pattern = '\bsk-(proj-|svcacct-)?[A-Za-z0-9_-]{20,}'
+why = "API key shape"
+
+[[rules]]
+id = "anthropic-key"
+scope = "content"
+severity = "block"
+pattern = '\bsk-ant-[A-Za-z0-9_-]{16,}'
+why = "API key shape"
+
+[[rules]]
+id = "aws-access-key"
+scope = "content"
+severity = "block"
+pattern = '\b(AKIA|ASIA)[0-9A-Z]{16}\b'
+why = "cloud access key id"
+
+[[rules]]
+id = "github-token"
+scope = "content"
+severity = "block"
+pattern = '\b(gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,})'
+why = "repository token"
+
+[[rules]]
+id = "slack-token"
+scope = "content"
+severity = "block"
+pattern = '\bxox[abprs]-[A-Za-z0-9-]{10,}'
+why = "chat token"
+
+[[rules]]
+id = "google-api-key"
+scope = "content"
+severity = "block"
+pattern = '\bAIza[0-9A-Za-z_-]{35}\b'
+why = "API key shape"
+
+[[rules]]
+id = "hf-token"
+scope = "content"
+severity = "block"
+pattern = '\bhf_[A-Za-z0-9]{30,}'
+why = "model hub token"
+
+[[rules]]
+id = "bearer-token"
+scope = "content"
+severity = "block"
+pattern = '\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{5,}'
+why = "JWT, treat as a credential until proved otherwise"
+
+[[rules]]
+id = "connection-string-secret"
+scope = "content"
+severity = "block"
+pattern = '(AccountKey=[A-Za-z0-9+/=]{20,}|SharedAccessSignature=|BlobEndpoint=https://|DefaultEndpointsProtocol=https;)'
+why = "cloud storage connection string"
+
+[[rules]]
+id = "dsn-with-password"
+scope = "content"
+severity = "block"
+pattern = '\b(postgres(ql)?|mysql|mongodb(\+srv)?|redis|amqp)://[^\s:/@]+:[^\s@/]+@'
+why = "connection string with an inline password"
+
+[[rules]]
+id = "hardcoded-secret"
+scope = "content"
+severity = "warn"
+pattern = '(?i)\b(api[_-]?key|secret|password|passwd|token|client[_-]?secret)\s*[:=]\s*.{0,4}[A-Za-z0-9+/_-]*\d[A-Za-z0-9+/_-]{3,}'
+why = "looks like a literal credential in source"
+
+# ── identifiers that reveal an organisation or a person ──────
+
+[[rules]]
+id = "tenant-domain"
+scope = "any"
+severity = "block"
+pattern = '[A-Za-z0-9-]+\.onmicrosoft\.com'
+why = "Microsoft 365 tenant identifier"
+
+[[rules]]
+id = "entra-guid"
+scope = "any"
+severity = "warn"
+pattern = '\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b'
+why = "GUID, often a tenant, object or app id"
+
+[[rules]]
+id = "email-address"
+scope = "any"
+severity = "warn"
+pattern = '\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b'
+why = "real mail address in a public repo"
+
+[[rules]]
+id = "windows-user-path"
+scope = "content"
+severity = "block"
+pattern = '[A-Za-z]:\\{1,2}Users\\{1,2}[A-Za-z0-9._-]{2,}'
+why = "absolute path naming a person's machine"
+
+[[rules]]
+id = "posix-home-path"
+scope = "content"
+severity = "warn"
+pattern = '/(home|Users)/[A-Za-z0-9._-]{2,}/'
+why = "absolute home path, check the account name"
+
+[[rules]]
+id = "private-network-address"
+scope = "content"
+severity = "warn"
+pattern = '\b(10|192\.168|172\.(1[6-9]|2[0-9]|3[01]))\.\d{1,3}\.\d{1,3}\b'
+why = "internal network address"
+
+[[rules]]
+id = "norwegian-org-number"
+scope = "content"
+severity = "block"
+pattern = '(?i)(org\.?\s?nr\.?|organisasjonsnummer)[^\n]{0,20}\d{9}'
+why = "organisation number"
+
+[[rules]]
+id = "norwegian-national-id"
+scope = "content"
+severity = "block"
+pattern = '(?i)(fødselsnummer|fødselsnr\.?|personnummer|national id)[^\n]{0,20}\d{6}\s?\d{5}'
+why = "personal identifier"

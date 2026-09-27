@@ -1,0 +1,57 @@
+#!/bin/sh
+# Pre-push hygiene gate. Installed by scripts/install_prepush_hook.sh, which
+# points core.hooksPath at this directory.
+#
+# Design: the gate only blocks on deterministic findings (secrets, identifiers,
+# files that must not be published). It fails OPEN, loudly, if it cannot run at
+# all, because a broken seatbelt must not stop work.
+#
+#   bypass one push:  git push --no-verify
+#   disable for a shell: export THREADWEAVE_PREPUSH_DISABLE=1
+#   add the encoder pass: export THREADWEAVE_PREPUSH_ADVISORY=1
+#   pick the interpreter: export THREADWEAVE_PREPUSH_PYTHON=/path/to/python
+
+[ -n "$THREADWEAVE_PREPUSH_DISABLE" ] && exit 0
+
+repo_root=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0
+gate="$repo_root/scripts/prepush_gate.py"
+if [ ! -f "$gate" ]; then
+  echo "prepush-gate: $gate not found, skipping" >&2
+  exit 0
+fi
+
+if [ -n "$THREADWEAVE_PREPUSH_PYTHON" ]; then
+  py="$THREADWEAVE_PREPUSH_PYTHON"
+elif [ -x "$repo_root/.venv/Scripts/python.exe" ]; then
+  py="$repo_root/.venv/Scripts/python.exe"
+elif [ -x "$repo_root/.venv/bin/python" ]; then
+  py="$repo_root/.venv/bin/python"
+elif command -v python3 >/dev/null 2>&1; then
+  py=python3
+elif command -v python >/dev/null 2>&1; then
+  py=python
+else
+  echo "prepush-gate: no python interpreter found, skipping" >&2
+  exit 0
+fi
+
+case "$THREADWEAVE_PREPUSH_ADVISORY" in
+  1|true|yes|on) advisory="--advisory" ;;
+  *) advisory="" ;;
+esac
+
+"$py" "$gate" --stdin-refs $advisory
+status=$?
+
+if [ "$status" -eq 0 ]; then
+  exit 0
+fi
+if [ "$status" -eq 1 ]; then
+  echo "" >&2
+  echo "prepush-gate: push blocked. Fix the findings above," >&2
+  echo "prepush-gate: or bypass this one push with: git push --no-verify" >&2
+  exit 1
+fi
+
+echo "prepush-gate: the gate could not run (exit $status), allowing the push" >&2
+exit 0

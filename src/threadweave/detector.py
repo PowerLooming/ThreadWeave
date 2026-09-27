@@ -11,10 +11,13 @@ Heuristic-based (no LLM required for classification). Classifies text into:
 - REFERENCE: A link, pointer, or reference to external resource
 """
 
+import logging
 import re
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Optional
+
+logger = logging.getLogger(__name__)
 
 
 class ContentType(Enum):
@@ -446,16 +449,26 @@ def is_worth_saving(
 
 
 async def detect_async(text: str, min_length: int = 50) -> DetectionResult:
-    """Async version of detect() — tries LLM first, regex fallback.
+    """Async version of detect() — tries the typed decision layer first.
 
-    Uses the LLMDetector if an API key is configured AND the text is
-    long enough to justify the API call. Otherwise falls back to the
-    regex-based detect().
+    Engine order: typed decision gate (when THREADWEAVE_DECISION_PROVIDER is
+    configured), then the LLM detector, then regex. The gate answers the
+    ingest judgments as typed questions instead of parsing prose back out of
+    a model reply; it returns the same DetectionResult the callers already
+    expect, so nothing downstream changes.
 
-    To enable LLM detection, set one of:
+    To enable the LLM detector, set one of:
         THREADWEAVE_LLM_API_KEY / OPENAI_API_KEY
         + optionally THREADWEAVE_LLM_BASE_URL / THREADWEAVE_LLM_MODEL
     """
+    try:
+        from threadweave.decision_gate import get_decision_gate
+
+        gate = get_decision_gate()
+        if gate is not None:
+            return await gate.detect(text, min_length)
+    except Exception as exc:
+        logger.debug("decision gate unavailable, falling back: %s", exc)
     try:
         from threadweave.llm_detector import get_llm_detector
         llm = get_llm_detector()
@@ -469,12 +482,21 @@ async def detect_async(text: str, min_length: int = 50) -> DetectionResult:
 async def is_worth_saving_async(
     text: str, threshold: float = 0.40
 ) -> tuple[bool, DetectionResult]:
-    """Async version of is_worth_saving() — LLM first, regex fallback.
+    """Async version of is_worth_saving() — gate, LLM, then regex.
 
-    Uses the LLMDetector (multilingual) when a key/base URL is configured,
-    otherwise falls back to the regex classifier. The same ``threshold``
-    applies either way, so tuning is consistent across engines.
+    The typed decision gate wins when it is configured; otherwise the
+    LLMDetector (multilingual) is used when a key/base URL is configured,
+    and the regex classifier is the last resort. The same ``threshold``
+    applies to every engine, so tuning stays consistent across them.
     """
+    try:
+        from threadweave.decision_gate import get_decision_gate
+
+        gate = get_decision_gate()
+        if gate is not None:
+            return await gate.is_worth_saving(text, threshold=threshold)
+    except Exception as exc:
+        logger.debug("decision gate unavailable, falling back: %s", exc)
     try:
         from threadweave.llm_detector import get_llm_detector
         llm = get_llm_detector()

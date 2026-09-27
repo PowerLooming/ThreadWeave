@@ -159,6 +159,7 @@ Capture without disclosure is surveillance, so ThreadWeave ships a privacy layer
 - [Privacy Model](docs/privacy.md) — on-prem one-way contract, opt-out, right to delete, access control
 - [Distribution](docs/distribution.md) — how orgs get the app (manual upload, scripted publish, Teams Store), verified marketplace costs
 - [Enterprise Adoption Checklist](docs/enterprise-adoption.md) — tracked gates from the IT-manager review: permissions, licensing, vendor readiness, observability, data lifecycle
+- [Pre-push Gate](docs/pre-push-gate.md) — local hygiene hook before publishing: secrets, identifiers, files that must not leave
 - [Technical Specification](docs/technical-spec.md)
 
 ## Release process

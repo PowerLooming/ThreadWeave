@@ -34,5 +34,8 @@ Thumbs.db
 .env.local
 .env.production
 
+# Pre-push gate: local overlay of site-specific terms (never published)
+.prepush-private.txt
+
 # Hermes
 .hermes/

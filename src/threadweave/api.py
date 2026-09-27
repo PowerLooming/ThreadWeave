@@ -228,6 +228,7 @@ class DetectResponse(BaseModel):
     suggested_title: str
     has_pii: bool
     has_gossip: bool = False
+    language: str = ""  # ISO 639-1 from the detector; drives ingest translation
 
 
 class SaveRequest(BaseModel):
@@ -332,7 +333,9 @@ class HealthResponse(BaseModel):
     dedup_cache_size: int
     tenants_active: int
     uptime_seconds: float
-    detector: str = "regex"  # "llm" or "regex"
+    detector: str = "regex"  # "llm", "regex", or "decisions:<provider>"
+    decision_provider: str = ""  # typed decision layer provider, "" when off
+    decision_policy: dict = {}  # thresholds in force, for pilot calibration
 
 
 # ---- Startup ----
@@ -381,6 +384,33 @@ app.router.lifespan_context = lifespan
 
 @app.get("/api/v1/health", response_model=HealthResponse)
 async def health():
+    # The active classifier is worth reporting precisely: a serve started
+    # without the decision/LLM env silently runs regex, and that is exactly
+    # the "why is capture quiet" question a pilot operator asks.
+    decision_provider = ""
+    decision_policy: dict = {}
+    try:
+        from threadweave.decision_gate import get_decision_gate
+
+        gate = get_decision_gate()
+        if gate is not None:
+            decision_provider = gate.provider_name
+            decision_policy = {
+                "min_confidence": gate.policy.min_confidence,
+                "gossip_reject_at": gate.policy.gossip_reject_at,
+                "gossip_review_at": gate.policy.gossip_review_at,
+                "pii_reject_at": gate.policy.pii_reject_at,
+                "language_min_confidence": gate.policy.language_min_confidence,
+                "language_id_min_confidence": gate.policy.language_id_min_confidence,
+            }
+    except Exception:
+        decision_provider = ""
+
+    if decision_provider:
+        detector_mode = f"decisions:{decision_provider}"
+    else:
+        detector_mode = "llm" if get_llm_detector() else "regex"
+
     return HealthResponse(
         status="healthy",
         version="0.4.7",
@@ -389,7 +419,9 @@ async def health():
         dedup_cache_size=len(_dedup_hashes),
         tenants_active=len(_tenant_stores),
         uptime_seconds=(datetime.now(timezone.utc) - _start_time).total_seconds(),
-        detector="llm" if get_llm_detector() else "regex",
+        detector=detector_mode,
+        decision_provider=decision_provider,
+        decision_policy=decision_policy,
     )
 
 
@@ -838,6 +870,11 @@ async def detect_content(req: DetectRequest):
         suggested_scope=result.suggested_scope,
         suggested_title=result.suggested_title,
         has_pii=result.has_pii,
+        # Both were computed but dropped before: gossip is a hard reject at
+        # ingest, and language is what decides whether the message gets
+        # translated, so a caller debugging capture needs to see them.
+        has_gossip=result.has_gossip,
+        language=result.language,
     )
 
 

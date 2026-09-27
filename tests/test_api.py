@@ -57,6 +57,24 @@ class TestDetection:
         assert data["content_type"] == "decision"
         assert data["should_save"] is True
 
+    def test_detect_reports_gossip_and_language(self):
+        # Both fields are computed by the detector and used by ingest (gossip
+        # rejects, language triggers translation), so the endpoint must expose
+        # them or a caller cannot see why a message was handled that way.
+        response = client.post(
+            "/api/v1/detect",
+            json={
+                "text": (
+                    "Hva heter du egentlig, og hvor kommer du fra? Vi snakket om "
+                    "det i møtet i går og ble enige om å følge det opp senere."
+                )
+            },
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert "has_gossip" in data and "language" in data
+        assert data["has_gossip"] is False
+
     def test_detect_empty_text(self):
         response = client.post("/api/v1/detect", json={
             "text": "",
