@@ -32,7 +32,9 @@ jobs:
       - name: Read current version
         id: version
         run: |
-          VERSION=$(grep -m1 '^version = ' pyproject.toml | sed 's/^version = "\(.*\)"/\1/')
+          # A text file committed from Windows can carry CRLF, and a trailing CR
+          # makes the tag name invalid and hides a code change from the bump check.
+          VERSION=$(grep -m1 '^version = ' pyproject.toml | sed 's/^version = "\(.*\)"/\1/' | tr -d '\r')
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "latest tag: $(git tag -l 'v*' | sort -V | tail -1 || true)"
 
@@ -136,7 +138,7 @@ jobs:
               head + release_heading + tail.lstrip("\n")
           )
           EOF
-          VERSION=$(grep -m1 '^version = ' pyproject.toml | sed 's/^version = "\(.*\)"/\1/')
+          VERSION=$(grep -m1 '^version = ' pyproject.toml | sed 's/^version = "\(.*\)"/\1/' | tr -d '\r')
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"

@@ -1,4 +1,14 @@
-# Force LF line endings for shell scripts and Python files
+# Force LF line endings for text files. pyproject.toml was missing from this
+# list, was committed with CRLF, and broke the release workflow: the version
+# read picked up a trailing CR, the tag name was invalid, and the bump was
+# mis-detected as a manual one.
 *.sh text eol=lf
 *.py text eol=lf
 *.md text eol=lf
+*.toml text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.json text eol=lf
+*.cfg text eol=lf
+*.ini text eol=lf
+*.txt text eol=lf
