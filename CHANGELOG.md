@@ -6,6 +6,8 @@ uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.4.12] — 2026-09-27
+
 ### Added
 
 - **MCP server: the memory as agent tools.** `threadweave mcp` serves
