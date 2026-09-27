@@ -175,3 +175,34 @@ def test_org_profile_defaults_to_app(monkeypatch):
     monkeypatch.delenv("THREADWEAVE_MAIL_AUTH", raising=False)
     assert _resolve_mail_auth(None) == "app"
     assert _resolve_mail_auth("delegated") == "delegated"
+
+
+def test_personal_watch_fails_fast_without_a_token(monkeypatch, capsys):
+    """A missing delegated token must stop the start, not fail once per poll."""
+    from types import SimpleNamespace
+
+    import threadweave.cli as cli_mod
+    from threadweave.connectors.email import delegated as d
+
+    class NoToken(d.DelegatedMailAuth):
+        def __init__(self, *a, **k):
+            pass
+
+        def account(self):
+            return ""
+
+        def get_token(self, interactive=False):
+            raise RuntimeError(
+                "No delegated mail token. Run 'threadweave email login' once."
+            )
+
+    monkeypatch.setattr(d, "DelegatedMailAuth", NoToken)
+    monkeypatch.setenv("THREADWEAVE_PROFILE", "personal")
+    monkeypatch.delenv("THREADWEAVE_MAIL_AUTH", raising=False)
+    args = SimpleNamespace(mailbox="", interval=300, max_results=20,
+                           mark_read=False, no_threads=False, mail_auth=None)
+
+    with pytest.raises(SystemExit) as exc:
+        cli_mod.cmd_email_watch(args)
+    assert exc.value.code == 1
+    assert "threadweave email login" in capsys.readouterr().err

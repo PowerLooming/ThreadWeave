@@ -568,15 +568,14 @@ def cmd_email_watch(args):
 
     watcher = MailWatcher(delegated=delegated)
     if delegated:
-        account = watcher.delegated_account()
-        if not account:
-            print(
-                "No signed-in mailbox owner. Run 'threadweave email login' "
-                "once, then start the watcher.",
-                file=sys.stderr,
-            )
+        # Fail fast: a missing or unconsented token must stop the start, not
+        # surface once per poll in a daemon that otherwise looks healthy.
+        try:
+            watcher._delegated_auth.get_token()
+        except RuntimeError as exc:
+            print(str(exc), file=sys.stderr)
             sys.exit(1)
-        print(f"Delegated mail access as {account}")
+        print(f"Delegated mail access as {watcher.delegated_account() or '(account unresolved)'}")
     # Pass a Graph client so the processor can map sender -> department
     # -> wing (palace model). Same credentials as the watcher. In delegated
     # mode there is none: every mail lands in the fallback wing.
