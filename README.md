@@ -159,6 +159,7 @@ Capture without disclosure is surveillance, so ThreadWeave ships a privacy layer
 - [Privacy Model](docs/privacy.md) — on-prem one-way contract, opt-out, right to delete, access control
 - [Distribution](docs/distribution.md) — how orgs get the app (manual upload, scripted publish, Teams Store), verified marketplace costs
 - [Enterprise Adoption Checklist](docs/enterprise-adoption.md) — tracked gates from the IT-manager review: permissions, licensing, vendor readiness, observability, data lifecycle
+- [Typed Decision Layer](docs/decision-layer.md) — the ingest judgments asked as typed questions, the four provider backends (local NLI encoder, Laya, ollama, hosted TypeSafe seam), phrasing rules, calibration, and the measurements behind them
 - [Pre-push Gate](docs/pre-push-gate.md) — local hygiene hook before publishing: secrets, identifiers, files that must not leave
 - [Technical Specification](docs/technical-spec.md)
 
@@ -232,6 +233,7 @@ Translation and multilingual detection stay local — no data ever leaves the on
 ## What's Built
 
 - ✅ **Detection engine** — Regex + LLM two-tier classifier (ANSWER/DECISION/QUESTION/CHAT/REFERENCE)
+- ✅ **Typed decision layer** — the ingest judgments (worth saving, gossip, PII, language, scope) asked as typed questions and answered with probability distributions instead of parsed prose. One provider seam, four backends: a local NLI encoder (`bge-m3-zeroshot-v2.0-c`, distributions from logits, no GPU needed), the `laya` non-autoregressive decision model, ollama for comparison, and the hosted TypeSafe "System One" seam behind an explicit remote opt-in. Thresholds and escalation live in code, per-question affine calibration on logits, every evaluation written to an audit log, and content never leaves the machine unless remote is explicitly allowed. Off by default. See [docs/decision-layer.md](docs/decision-layer.md)
 - ✅ **PII detection** — International regex patterns (EN/NO/DE/FR/ES/IT) + LLM prompt hardening. Catches SSN, credit cards, IBAN, bank accounts, passport numbers, salary figures, home addresses, and medical data without false-flagging company names or workplace identifiers.
 - ✅ **Ingestion pipeline** — Central dedup → detect → PII gate → store
 - ✅ **MemPalace integration** — Hybrid search (BM25 + vector cosine)
@@ -259,7 +261,7 @@ Translation and multilingual detection stay local — no data ever leaves the on
 - ✅ **Teams app distribution** — deterministic package builder + scripted org-catalog publish (`threadweave teams package|publish`)
 - ✅ **OpenDocument support** — odt/ods/odp (LibreOffice native) extracted with stdlib only
 - ✅ **Visio + video/audio** — .vsdx diagram text extraction; on-prem video/audio transcription (ffmpeg + faster-whisper, CPU)
-- ✅ **459 tests** — full suite green
+- ✅ **834 tests** — full suite green (11 skipped)
 
 ## What's Next
 

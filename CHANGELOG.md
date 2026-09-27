@@ -8,6 +8,25 @@ uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Typed decision layer** — the ingest judgments (worth saving, gossip, PII,
+  language, scope) are asked as typed questions (`Noul`, `Choice`, `Score`) and
+  answered with probability distributions instead of being fished back out of a
+  prose reply. One provider seam, four backends: the local NLI encoder
+  (`MoritzLaurer/bge-m3-zeroshot-v2.0-c`, distributions computed from logits, no
+  GPU required), the `laya` non-autoregressive decision model (fastest measured,
+  opt-in), `ollama` for comparison, and the hosted TypeSafe "System One" seam
+  behind an explicit remote opt-in. Thresholds, escalation and the one-way
+  on-prem rule live in code, never in a prompt. Inert unless
+  `THREADWEAVE_DECISION_PROVIDER` is set. See `docs/decision-layer.md`.
+- **Deterministic language detection** — `language_id.py` identifies a message's
+  language from function-word profiles and script, because an NLI classifier
+  cannot (measured 0.17 to 0.23 at picking the right language name). The gate uses
+  it for every provider and for scope decisions.
+- **Per-question probability calibration** — measured on a labelled corpus: at the
+  shipped reject bars, raw provider probabilities missed 71 to 100 percent of true
+  positives. An affine fit on logits, `sigmoid(a * logit(p) + b)`, applied before
+  any threshold comparison, roughly halved held-out ECE in every backend tested.
+  Set per question via `THREADWEAVE_DECISION_CALIBRATION`.
 - **Pre-push hygiene gate** — `scripts/prepush_gate.py` plus a versioned
   `.githooks/pre-push` (install with `sh scripts/install_prepush_hook.sh`).
   Deterministic rules block a push that would publish credential shapes,
@@ -16,6 +35,20 @@ uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   injected from a private overlay that is never committed. An optional
   `--advisory` pass asks the local encoder a few fuzzy hygiene questions about
   commit messages and comments and only warns. See `docs/pre-push-gate.md`.
+
+### Fixed
+
+- **`POST /api/v1/detect`** now returns `has_gossip` and `language`; the gate
+  computed both and then dropped them from the response, so a caller debugging a
+  rejection had to read the signals strings.
+- **Entry store log line** — the API logged a non-existent `.path` on the store
+  instead of the entry database URL.
+- **Author refinement notes** — refinement notes are persisted with the entry
+  instead of being lost on restart.
+- **Action-item verbs** — named obligations are captured whatever the verb
+  ("Harald to chase the vendor", not only "should chase").
+- **Serve logging** — the serve command now configures the application logger, so
+  its INFO lines are visible instead of being swallowed by uvicorn's config.
 
 ## [0.4.7] — 2026-08-23
 
