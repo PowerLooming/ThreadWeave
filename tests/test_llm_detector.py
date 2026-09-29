@@ -398,7 +398,7 @@ class TestLLMDetectorMocked:
         ))
 
         result = await detector.detect(
-            "Please contact john.doe@gmail.com for access to the beta program "
+            "Please contact john.doe@example.com for access to the beta program "
             "and include your department ID in the subject line for tracking."
         )
         assert result.has_pii is True
@@ -674,8 +674,15 @@ class TestIngestWithLLM:
             assert data["deduplicated"] is False
 
     @pytest.mark.asyncio
-    async def test_ingest_with_pii_rejected_by_llm(self):
-        """LLM-detected PII should be rejected by the pipeline."""
+    async def test_ingest_with_pii_keeps_the_message(self, monkeypatch):
+        """An LLM PII verdict no longer destroys the message.
+
+        It used to reject the ingest outright. Redaction is the default now: a
+        model reporting "contains personal email" must not delete a message, and
+        an email address is deliberately not in the default redaction set (work
+        contact details are meant to be shared). The verdict is still reported,
+        and the message is stored.
+        """
         from fastapi.testclient import TestClient
         from threadweave.api import app
 
@@ -685,6 +692,7 @@ class TestIngestWithLLM:
             "THREADWEAVE_LLM_BASE_URL": "http://localhost:11434/v1",
             "THREADWEAVE_LLM_API_KEY": "sk-test",
         }):
+            monkeypatch.delenv("THREADWEAVE_PII_MODE", raising=False)
             reset_llm_detector()
             llm = get_llm_detector()
             llm._client = _make_mock_client(_make_llm_response(
@@ -695,13 +703,86 @@ class TestIngestWithLLM:
             ))
 
             resp = client.post("/api/v1/ingest", json={
-                "content": "Contact john.doe@gmail.com for personal inquiries.",
+                "content": "Contact john.doe@example.com for personal inquiries.",
                 "source": "email",
+                "tenant_id": "test-llm-pii-kept",
+            })
+            assert resp.status_code == 201
+            data = resp.json()
+            assert data["has_pii"] is True
+            assert data["should_save"] is True
+            assert data.get("redacted") is None
+
+    @pytest.mark.asyncio
+    async def test_ingest_with_pii_redacts_an_identifier(self, monkeypatch):
+        """The identifiers the redactor knows are replaced, the rest is kept."""
+        from fastapi.testclient import TestClient
+        from threadweave.api import app
+
+        client = TestClient(app)
+
+        with patch.dict("os.environ", {
+            "THREADWEAVE_LLM_BASE_URL": "http://localhost:11434/v1",
+            "THREADWEAVE_LLM_API_KEY": "sk-test",
+        }, clear=False):
+            monkeypatch.delenv("THREADWEAVE_PII_MODE", raising=False)
+            reset_llm_detector()
+            llm = get_llm_detector()
+            llm._client = _make_mock_client(_make_llm_response(
+                content_type="answer",
+                confidence=0.9,
+                has_pii=True,
+                reasoning="Contains a phone number.",
+            ))
+
+            resp = client.post("/api/v1/ingest", json={
+                "content": (
+                    "Ring prosjektlederen på +47 954 94 679 om sesjonscachen, "
+                    "beslutningen om Redis gjelder fra neste sprint og er "
+                    "dokumentert i arkitekturnotatet."
+                ),
+                "source": "email",
+                "tenant_id": "test-llm-pii-redacted",
+            })
+            assert resp.status_code == 201
+            data = resp.json()
+            assert data["has_pii"] is True
+            assert data["should_save"] is True
+            assert data["redacted"], "the phone number should have been replaced"
+            assert any("pii_redacted(" in s for s in data["signals"])
+
+    @pytest.mark.asyncio
+    async def test_ingest_with_pii_rejected_when_the_mode_is_reject(self):
+        """The destructive verdict is still available behind a flag."""
+        from fastapi.testclient import TestClient
+        from threadweave.api import app
+
+        client = TestClient(app)
+
+        with patch.dict("os.environ", {
+            "THREADWEAVE_LLM_BASE_URL": "http://localhost:11434/v1",
+            "THREADWEAVE_LLM_API_KEY": "sk-test",
+            "THREADWEAVE_PII_MODE": "reject",
+        }, clear=False):
+            reset_llm_detector()
+            llm = get_llm_detector()
+            llm._client = _make_mock_client(_make_llm_response(
+                content_type="answer",
+                confidence=0.9,
+                has_pii=True,
+                reasoning="Contains personal email.",
+            ))
+
+            resp = client.post("/api/v1/ingest", json={
+                "content": "Contact john.doe@example.com for personal inquiries.",
+                "source": "email",
+                "tenant_id": "test-llm-pii-reject",
             })
             assert resp.status_code == 201
             data = resp.json()
             assert data["should_save"] is False
             assert data["has_pii"] is True
+            assert data["id"] == "rejected_pii"
 
     @pytest.mark.asyncio
     async def test_ingest_regex_fallback_without_api_key(self):

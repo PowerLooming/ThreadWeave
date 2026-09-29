@@ -119,6 +119,7 @@ class PipelineMetrics:
     ingest_saved: int = 0
     ingest_skipped: int = 0
     ingest_rejected_pii: int = 0
+    ingest_redacted_pii: int = 0
     ingest_rejected_gossip: int = 0
     detect_llm_hits: int = 0
     detect_llm_misses: int = 0
@@ -137,7 +138,7 @@ class PipelineMetrics:
     # ── record helpers ─────────────────────────────────────────
 
     def record_ingest(self, *, saved: bool = False, skipped: bool = False,
-                      rejected_pii: bool = False,
+                      rejected_pii: bool = False, redacted_pii: bool = False,
                       rejected_gossip: bool = False) -> None:
         self.ingest_total += 1
         if saved:
@@ -146,6 +147,8 @@ class PipelineMetrics:
             self.ingest_skipped += 1
         if rejected_pii:
             self.ingest_rejected_pii += 1
+        if redacted_pii:
+            self.ingest_redacted_pii += 1
         if rejected_gossip:
             self.ingest_rejected_gossip += 1
         self.throughput.tick()
@@ -203,6 +206,7 @@ class PipelineMetrics:
                 "ingest_saved":          self.ingest_saved,
                 "ingest_skipped":        self.ingest_skipped,
                 "ingest_rejected_pii":   self.ingest_rejected_pii,
+                "ingest_redacted_pii":   self.ingest_redacted_pii,
                 "ingest_rejected_gossip": self.ingest_rejected_gossip,
                 "detect_llm_hits":       self.detect_llm_hits,
                 "detect_llm_misses":     self.detect_llm_misses,
@@ -253,6 +257,8 @@ class PipelineMetrics:
         _c("threadweave_ingest_saved", self.ingest_saved, "Entries saved")
         _c("threadweave_ingest_skipped", self.ingest_skipped, "Entries skipped (not worth saving)")
         _c("threadweave_ingest_rejected_pii", self.ingest_rejected_pii, "Entries rejected (PII)")
+        _c("threadweave_ingest_redacted_pii", self.ingest_redacted_pii,
+           "Entries stored with identifiers redacted (PII)")
         _c("threadweave_ingest_rejected_gossip", self.ingest_rejected_gossip, "Entries rejected (gossip)")
         _c("threadweave_detect_llm_hits", self.detect_llm_hits, "LLM detection successes")
         _c("threadweave_detect_llm_misses", self.detect_llm_misses, "LLM detection failures (regex fallback)")
@@ -279,6 +285,7 @@ class PipelineMetrics:
         self.ingest_saved = 0
         self.ingest_skipped = 0
         self.ingest_rejected_pii = 0
+        self.ingest_redacted_pii = 0
         self.ingest_rejected_gossip = 0
         self.detect_llm_hits = 0
         self.detect_llm_misses = 0

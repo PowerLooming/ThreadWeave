@@ -1,7 +1,27 @@
 # PII gate: redact instead of delete, and do not let signatures decide
 
-Status: design, not implemented. Branch `feat/pii-redaction-and-signature-strip`.
-Evidence below is measured; see the last section for how to reproduce it.
+Status: implemented on branch `feat/pii-redaction-and-signature-strip`, not pushed.
+Mechanisms in `src/threadweave/text_hygiene.py`, wired into the ingest endpoint in
+`src/threadweave/api.py`, tests in `tests/test_text_hygiene.py` and
+`tests/test_api_pii_redaction.py`. Evidence below is measured; see the last two sections.
+
+## What is implemented
+
+- `strip_signature(text)` — two tiers. A marker in the last 40% of the message is honoured
+  when the block after it looks like a signature (a contact feature, or under 400
+  characters). A marker further up needs an unambiguous block: at least two contact or
+  company features. At least 100 characters of body always remain, so the stripper can
+  never push a message under the email processor's own floor. Returns what it did.
+- `redact_identifiers(text, kinds=...)` — replaces national IDs, bank accounts, card
+  numbers, Norwegian mobiles with and without the country code, street addresses, postal
+  code and place, and (when asked) email addresses with typed placeholders. Decodes HTML
+  entities first and masks URLs, hashes and base64 runs before matching.
+- `is_identifier_only(text)` — structural test for content whose substance is the
+  identifiers, a pasted roster or ID list, the one case where redaction leaves nothing.
+- Ingest wiring: the detector now sees the signature-stripped text; a PII verdict redacts
+  and keeps the message and reports `redacted: {kind: count}` on the response;
+  `THREADWEAVE_PII_MODE=reject` restores the old destructive verdict; identifier-only
+  content is still rejected; `ingest_redacted_pii` joins the metrics.
 
 ## The problem
 
@@ -25,11 +45,18 @@ better, because signatures are the norm there rather than the exception):
 |---|---|
 | messages with a signature marker | 18.1% |
 | messages carrying a Norwegian mobile | 7.7% |
-| of those, the mobile sits in a signature block | 1.8% |
-| messages a credential pattern would delete today | 109 (6.4%) |
-| messages whose identifier set changes once the signature is stripped | 67 (4.0%) |
+| messages whose signature or disclaimer is stripped by the two-tier rules | 416 (24.6%) |
+| of those, stripped from outside the default window by the strict rule | 3 |
+| messages a credential pattern would delete today | 116 (6.9%) |
 
-Deleting 6.4% of a mailbox to protect it is a bad trade, and it gets worse in exactly the
+An earlier draft of this document quoted 5.7% for the strip rate. That was a counting bug
+in the prototype rather than a different rule: it counted signature blocks only and filed
+disclaimer strips under a different bucket, so the true figure was always about a quarter.
+The guards are what make the higher number safe, and they are tested: a signature word
+inside a sentence is not a marker, a block that does not look like a signature is left
+alone, and a strip that would leave under 100 characters is refused.
+
+Deleting 6.9% of a mailbox to protect it is a bad trade, and it gets worse in exactly the
 deployment this system exists for.
 
 ## The second problem: patterns do not survive contact with real mail
