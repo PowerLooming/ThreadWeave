@@ -27,7 +27,7 @@ BODY = (
     "slutten av dagen, og vi mister sesjoner ved omstart. Beslutningen gjelder fra "
     "neste sprint og er dokumentert i arkitekturnotatet."
 )
-SIGNATURE = "\n\nMvh\nHarald Daltveit\nTlf: 98251606\nharald@example.no"
+SIGNATURE = "\n\nMvh\nHarald Daltveit\nTlf: 90000002\nharald@example.no"
 
 
 def _pii_detector(has_pii: bool = True):
@@ -54,7 +54,7 @@ def test_pii_message_is_stored_with_identifiers_redacted(monkeypatch):
 
     monkeypatch.setattr(api_mod, "is_worth_saving_async", _pii_detector(True))
     resp = client.post("/api/v1/ingest", json={
-        "content": f"{BODY}\n\nKontonummer 3569.15.05322 og tlf 98251606.",
+        "content": f"{BODY}\n\nKontonummer 3569.15.05322 og tlf 90000002.",
         "source": "email",
         "tenant_id": "test-pii-redact",
     })
@@ -96,7 +96,7 @@ def test_configured_kinds_narrow_the_redaction(monkeypatch):
     monkeypatch.setattr(api_mod, "is_worth_saving_async", _pii_detector(True))
     resp = client.post("/api/v1/ingest", json={
         "content": (
-            f"{BODY}\n\nKundenummer 4455667 og tlf 98251606, sendt til Apeltunlien 13A."
+            f"{BODY}\n\nKundenummer 4455667 og tlf 90000002, sendt til Eksempelveien 1."
         ),
         "source": "email",
         "tenant_id": "test-pii-kinds",
@@ -114,7 +114,7 @@ def test_unknown_kind_names_are_ignored(monkeypatch):
     monkeypatch.setenv("THREADWEAVE_PII_REDACT_KINDS", "mobile_bare,not_a_kind")
     monkeypatch.setattr(api_mod, "is_worth_saving_async", _pii_detector(True))
     resp = client.post("/api/v1/ingest", json={
-        "content": f"{BODY}\n\nTlf 98251606.",
+        "content": f"{BODY}\n\nTlf 90000002.",
         "source": "email",
         "tenant_id": "test-pii-unknown-kind",
     })
@@ -160,5 +160,5 @@ def test_signature_is_not_shown_to_the_detector(monkeypatch):
     })
     assert resp.status_code in (200, 201)
     assert seen, "detector was not called"
-    assert "98251606" not in seen[0]
+    assert "90000002" not in seen[0]
     assert "arkitekturnotatet" in seen[0]

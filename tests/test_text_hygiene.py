@@ -25,10 +25,10 @@ BODY = (
 
 
 def test_strips_a_trailing_signature_and_keeps_the_body():
-    text = f"{BODY}\n\nMvh\nHarald Daltveit\nTlf: 98251606\nharald@example.no"
+    text = f"{BODY}\n\nMvh\nHarald Daltveit\nTlf: 90000002\nharald@example.no"
     result = strip_signature(text)
     assert result.stripped
-    assert "98251606" not in result.text
+    assert "90000002" not in result.text
     assert result.text.startswith("Vi besluttet")
     assert "arkitekturnotatet" in result.text
 
@@ -84,7 +84,7 @@ def test_marker_without_signature_features_is_left_alone():
 
 def test_a_strong_block_earlier_in_the_message_is_still_stripped():
     lines = [f"Innhold linje {i} som må bevares." for i in range(24)]
-    text = "\n".join(lines) + "\n\nMed vennlig hilsen\nKari\nkari@example.no\nTlf: 98251606"
+    text = "\n".join(lines) + "\n\nMed vennlig hilsen\nKari\nkari@example.no\nTlf: 90000002"
     result = strip_signature(text)
     assert result.stripped
     assert "Innhold linje 0" in result.text
@@ -100,9 +100,9 @@ def test_redacts_each_identifier_kind():
         "bank_account": "Mitt kontonummer er 3569.15.05322.",
         "card": "Kort 4111 1111 1111 1111 er reservert.",
         "mobile_no": "Ring meg på +47 954 94 679 i morgen.",
-        "mobile_bare": "Tlf: 98251606",
-        "postal_address": "Sendes til Apeltunlien 13A",
-        "postal_code_place": "Adresse: 5238 Rådal",
+        "mobile_bare": "Tlf: 90000002",
+        "postal_address": "Sendes til Eksempelveien 1",
+        "postal_code_place": "Adresse: 0001 Oslo",
     }
     for kind, text in cases.items():
         result = redact_identifiers(text)
@@ -128,7 +128,7 @@ def test_does_not_redact_a_hash_fragment():
 
 
 def test_entity_encoded_number_is_caught():
-    text = "Ring &#43;4795494679"
+    text = "Ring &#43;4790000001"
     assert "mobile_no" in redact_identifiers(text).counts
     assert decode_entities(text).startswith("Ring +47")
 
@@ -153,14 +153,14 @@ def test_overlapping_matches_keep_the_longest():
 
 
 def test_counts_match_placeholders():
-    text = "Tlf: 98251606 og 97545490, post 5238 Rådal"
+    text = "Tlf: 90000002 og 90000003, post 0001 Oslo"
     result = redact_identifiers(text)
     for kind, count in result.counts.items():
         assert result.text.count(f"[{kind}]") == count
 
 
 def test_redaction_is_idempotent():
-    once = redact_identifiers("Tlf: 98251606")
+    once = redact_identifiers("Tlf: 90000002")
     twice = redact_identifiers(once.text)
     assert once.text == twice.text
     assert twice.total == 0
@@ -171,28 +171,28 @@ def test_redaction_is_idempotent():
 
 def test_redacts_a_labelled_member_number():
     """The measured case: a union newsletter carrying a membership number."""
-    text = "Nyhetsbrev tillitsvalgt\nMedlemsnummer: 51764694"
+    text = "Nyhetsbrev tillitsvalgt\nMedlemsnummer: 10000001"
     result = redact_identifiers(text)
     assert result.counts.get("labelled_identifier") == 1
-    assert "51764694" not in result.text
+    assert "10000001" not in result.text
 
 
 def test_labelled_identifier_keeps_the_label():
-    text = "Medlemsnummer: 51764694"
+    text = "Medlemsnummer: 10000001"
     out = redact_identifiers(text).text
     assert "Medlemsnummer" in out, "the field name must survive for the entry to make sense"
     assert out.endswith("[labelled_identifier]")
 
 
 def test_labelled_identifier_accepts_common_shapes():
-    for text in ("Medlemsnr 51764694", "Kundenr: 123456", "Kunde-ID 9080706",
+    for text in ("Medlemsnr 10000001", "Kundenr: 123456", "Kunde-ID 9080706",
                  "Kundenummer #4455667", "medlemskapsnummer 7654321"):
         assert redact_identifiers(text).counts.get("labelled_identifier") == 1, text
 
 
 def test_labelled_identifier_ignores_transaction_numbers():
     """An order or case number identifies a transaction, not a person."""
-    for text in ("Ordrenummer: 51764694", "Saksnummer 20241158", "Fakturanr 99887766"):
+    for text in ("Ordrenummer: 10000001", "Saksnummer 20241158", "Fakturanr 99887766"):
         assert redact_identifiers(text).total == 0, text
 
 
@@ -222,7 +222,7 @@ def test_identifier_only_recognises_a_roster():
 
 
 def test_identifier_only_is_false_for_real_content():
-    text = f"{BODY}\n\nTlf: 98251606"
+    text = f"{BODY}\n\nTlf: 90000002"
     assert not is_identifier_only(text)
 
 
@@ -230,11 +230,11 @@ def test_identifier_only_is_false_for_real_content():
 
 
 def test_sanitise_strips_then_redacts():
-    text = f"{BODY}\n\nMvh\nHarald\nTlf: 98251606\nharald@example.no"
+    text = f"{BODY}\n\nMvh\nHarald\nTlf: 90000002\nharald@example.no"
     stored, redaction, strip = sanitise(text)
     assert isinstance(redaction, Redaction) and isinstance(strip, SignatureStrip)
     assert strip.stripped
-    assert "98251606" not in stored
+    assert "90000002" not in stored
     assert "arkitekturnotatet" in stored
 
 

@@ -14,7 +14,7 @@ Mechanisms in `src/threadweave/text_hygiene.py`, wired into the ingest endpoint 
   never push a message under the email processor's own floor. Returns what it did.
 - `redact_identifiers(text, kinds=...)` — replaces national IDs, bank accounts, card
   numbers, Norwegian mobiles with and without the country code, street addresses, postal
-  code and place, labelled person identifiers (`Medlemsnummer: 51764694`, `Kundenr 123456`)
+  code and place, labelled person identifiers (`Medlemsnummer: 10000001`, `Kundenr 123456`)
   and (when asked) email addresses with typed placeholders. Decodes HTML entities first and
   masks URLs, hashes and base64 runs before matching. Shape patterns skip a number that
   follows a transaction label (`Ordrenummer`, `Fakturanr`, `Sak`), because a reference is
