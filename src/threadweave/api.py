@@ -51,6 +51,7 @@ from threadweave.text_hygiene import (
 logger = logging.getLogger("threadweave.api")
 
 _ENV_PII_MODE = "THREADWEAVE_PII_MODE"
+_ENV_PII_KINDS = "THREADWEAVE_PII_REDACT_KINDS"
 
 
 def _pii_mode() -> str:
@@ -64,6 +65,28 @@ def _pii_mode() -> str:
     """
     mode = (os.environ.get(_ENV_PII_MODE) or "redact").strip().lower()
     return "reject" if mode == "reject" else "redact"
+
+
+def _pii_redact_kinds() -> tuple[str, ...]:
+    """Which identifier kinds to mask, from ``THREADWEAVE_PII_REDACT_KINDS``.
+
+    Comma-separated, defaulting to every kind in ``text_hygiene.DEFAULT_KINDS``.
+    A deployment tunes this rather than the patterns: in a business-to-business
+    mailbox a customer number identifies a company, not a person, so masking it
+    only loses a reference. Unknown names are ignored with a warning instead of
+    failing the ingest.
+    """
+    from threadweave.text_hygiene import DEFAULT_KINDS, KIND_PATTERNS
+
+    raw = (os.environ.get(_ENV_PII_KINDS) or "").strip()
+    if not raw:
+        return DEFAULT_KINDS
+    wanted = [name.strip().lower() for name in raw.split(",") if name.strip()]
+    unknown = [name for name in wanted if name not in KIND_PATTERNS]
+    if unknown:
+        logger.warning("Ignoring unknown %s entries: %s", _ENV_PII_KINDS, ", ".join(unknown))
+    kinds = tuple(name for name in wanted if name in KIND_PATTERNS)
+    return kinds or DEFAULT_KINDS
 
 app = FastAPI(
     title="ThreadWeave API",
@@ -675,7 +698,7 @@ async def ingest_content(req: IngestRequest, request: Request):
                 suggested_scope=result.suggested_scope,
                 detector=detector_mode,
             )
-        redacted = redact_identifiers(req.content)
+        redacted = redact_identifiers(req.content, kinds=_pii_redact_kinds())
         redaction = redacted.counts or None
         metrics.record_ingest(redacted_pii=True)
         if redaction:
