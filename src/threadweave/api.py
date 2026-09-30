@@ -42,8 +42,28 @@ from threadweave.confidentiality import (
 from threadweave.store import get_entry_store
 from threadweave.notify import get_notification_store
 from threadweave.profile import get_owner_id, is_personal
+from threadweave.text_hygiene import (
+    is_identifier_only,
+    redact_identifiers,
+    strip_signature,
+)
 
 logger = logging.getLogger("threadweave.api")
+
+_ENV_PII_MODE = "THREADWEAVE_PII_MODE"
+
+
+def _pii_mode() -> str:
+    """What a PII verdict does: ``redact`` (default) or ``reject``.
+
+    Rejection is destructive and the calibration fit on hand-labelled real mail
+    found no threshold that is both usable and safe (a bar set for 95% recall
+    still cost 34% of negatives on the best local backend), so identifiers are
+    replaced and the message is kept. ``THREADWEAVE_PII_MODE=reject`` restores
+    the old verdict for anyone who wants it. See docs/pii-gate-redaction.md.
+    """
+    mode = (os.environ.get(_ENV_PII_MODE) or "redact").strip().lower()
+    return "reject" if mode == "reject" else "redact"
 
 app = FastAPI(
     title="ThreadWeave API",
@@ -269,6 +289,9 @@ class IngestResponse(BaseModel):
     deduplicated: bool = False
     detector: str = "regex"  # "llm" or "regex"
     has_gossip: bool = False
+    # kinds and counts of identifiers replaced, when a PII verdict redacted
+    # rather than rejected the message. Values are never reported.
+    redacted: dict[str, int] | None = None
 
 
 # Existing models (kept for backward compatibility)
@@ -598,9 +621,13 @@ async def ingest_content(req: IngestRequest, request: Request):
     # must stay retryable within the same server run.
     metrics.dedup_latency.record((time.monotonic() - t0) * 1000)
 
-    # 2. Detect — classify content (async, tries LLM first, regex fallback)
+    # 2. Detect — classify content (async, tries LLM first, regex fallback).
+    #    Signatures and footers are stripped first: they carry phone numbers and
+    #    addresses by design, so leaving them in makes the PII question fire on
+    #    boilerplate that every signed message has.
     t0 = time.monotonic()
-    should_save, result = await is_worth_saving_async(req.content)
+    detect_text = strip_signature(req.content).text
+    should_save, result = await is_worth_saving_async(detect_text)
     metrics.detect_latency.record((time.monotonic() - t0) * 1000)
 
     # 2b. P6 — cross-language capture: translate non-English content to English
@@ -627,20 +654,36 @@ async def ingest_content(req: IngestRequest, request: Request):
         detector_mode = "regex"
         metrics.record_detect(regex_fallback=True)
 
-    # 3. PII gate — reject if PII detected
+    # 3. PII gate. Two outcomes, chosen by THREADWEAVE_PII_MODE:
+    #    * redact (default) — replace the identifiers, keep the message. A false
+    #      positive costs a masked field rather than a destroyed message, which
+    #      is what the measured precision of every local backend can support.
+    #    * reject — the old destructive verdict, still used for content whose
+    #      substance is the identifiers, where redaction would leave nothing.
+    redaction: dict[str, int] | None = None
     if result.has_pii:
-        metrics.record_ingest(rejected_pii=True)
-        return IngestResponse(
-            id="rejected_pii",
-            should_save=False,
-            content_type=result.content_type.value,
-            confidence=result.confidence,
-            signals=signals + ["pii_rejected"],
-            has_pii=True,
-            suggested_title=result.suggested_title,
-            suggested_scope=result.suggested_scope,
-            detector=detector_mode,
-        )
+        if _pii_mode() == "reject" or is_identifier_only(req.content):
+            metrics.record_ingest(rejected_pii=True)
+            return IngestResponse(
+                id="rejected_pii",
+                should_save=False,
+                content_type=result.content_type.value,
+                confidence=result.confidence,
+                signals=signals + ["pii_rejected"],
+                has_pii=True,
+                suggested_title=result.suggested_title,
+                suggested_scope=result.suggested_scope,
+                detector=detector_mode,
+            )
+        redacted = redact_identifiers(req.content)
+        redaction = redacted.counts or None
+        metrics.record_ingest(redacted_pii=True)
+        if redaction:
+            # store the redacted copy everywhere downstream: the entry, the
+            # action items and the completion suggestions all read req.content,
+            # and none of them should see the identifiers we just removed
+            req.content = redacted.text
+            signals = signals + [f"pii_redacted({redacted.summary()})"]
 
     # 3b. Gossip gate — personal attacks / hearsay are never knowledge,
     # even on explicit save. Rejects before the store is touched.
@@ -894,11 +937,12 @@ async def ingest_content(req: IngestRequest, request: Request):
         should_save=True,
         content_type=result.content_type.value,
         confidence=result.confidence,
-        signals=result.signals,
+        signals=signals,
         has_pii=result.has_pii,
         suggested_title=entry["title"],
         suggested_scope=result.suggested_scope,
         detector=detector_mode,
+        redacted=redaction,
     )
 
 
