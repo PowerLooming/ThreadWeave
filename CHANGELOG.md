@@ -6,6 +6,8 @@ uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.4.13] — 2026-09-30
+
 ### Removed
 
 - **The Microsoft 365 Copilot (Graph) connector.** It pushed captured entries into
