@@ -91,7 +91,7 @@ def _pii_redact_kinds() -> tuple[str, ...]:
 app = FastAPI(
     title="ThreadWeave API",
     description="Enterprise organizational memory system with central ingestion pipeline",
-    version="0.4.16",
+    version="0.4.17",
 )
 
 # Auth middleware (no-op unless THREADWEAVE_REQUIRE_AUTH=true)
@@ -521,7 +521,7 @@ async def health():
 
     return HealthResponse(
         status="healthy",
-        version="0.4.16",
+        version="0.4.17",
         mempalace_available=_mempalace_available,
         entries_stored=len(_memory_store),
         dedup_cache_size=len(_dedup_hashes),
