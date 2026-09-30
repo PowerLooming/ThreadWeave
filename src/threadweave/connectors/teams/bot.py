@@ -42,6 +42,11 @@ logger = logging.getLogger(__name__)
 MIN_CONFIDENCE = 0.25
 MAX_TEXT_LENGTH = 8000
 
+# Modes in which the bot captures ambient channel and chat traffic. In these
+# modes a missing RSC grant really does degrade capture; in explicit mode the
+# bot is meant to answer @mentions only, so it does not.
+PASSIVE_CAPTURE_MODES = ("passive", "both")
+
 
 class GossipRejectedError(Exception):
     """Raised when the API rejects content as gossip / personal attack."""
@@ -540,11 +545,14 @@ class ThreadWeaveTeamsBot(ActivityHandler if BOTBUILDER_AVAILABLE else object):
                 logger.warning("RSC probe scheduling failed: %s", exc)
 
     async def check_rsc_consent(self) -> None:
-        """Probe RSC consent for every known team; warn when missing.
+        """Probe RSC consent for every known team; report what it means.
 
         Runs at startup (adapter hook). Without consent the bot only
-        receives @mentions, so capture degrades silently; this makes it
-        loud. Results land in self.rsc_status and the /health endpoint.
+        receives @mentions. That is a degradation when the bot is meant to
+        capture ambient traffic, and the intended configuration when it is
+        not, so the level of the report depends on the mode: warning for
+        passive and both, information for explicit. Results land in
+        self.rsc_status, with an `affects_capture` flag, and in /health.
         """
         if not self._bot_id:
             logger.warning(
@@ -580,7 +588,7 @@ class ThreadWeaveTeamsBot(ActivityHandler if BOTBUILDER_AVAILABLE else object):
                     "permissions": [],
                     "detail": f"consent probe failed: {exc}",
                 }
-            self.rsc_status[team_id] = result
+            self.rsc_status[team_id] = self._rsc_status_entry(result)
             self._log_consent_result(result)
 
     async def _probe_new_team(self, team_id: str) -> None:
@@ -594,13 +602,20 @@ class ThreadWeaveTeamsBot(ActivityHandler if BOTBUILDER_AVAILABLE else object):
             from threadweave.connectors.teams.rsc import check_team_consent
 
             result = await check_team_consent(graph, team_id, self._bot_id)
-            self.rsc_status[team_id] = result
+            self.rsc_status[team_id] = self._rsc_status_entry(result)
             self._log_consent_result(result)
         except Exception as exc:
             logger.warning("RSC probe for team %s failed: %s", team_id, exc)
 
-    @staticmethod
-    def _log_consent_result(result: dict) -> None:
+    def _log_consent_result(self, result: dict) -> None:
+        """Report one consent probe result at a level that matches the mode.
+
+        A missing grant is only a degradation when the bot is configured to
+        capture ambient traffic. In explicit mode mention-only is the intended
+        behaviour, so this logs it as information rather than a warning: the
+        loud warning exists to catch *silent* degradation, not an intentional
+        configuration.
+        """
         team_id = result.get("team_id", "?")
         status = result.get("status")
         if status == "granted":
@@ -609,16 +624,35 @@ class ThreadWeaveTeamsBot(ActivityHandler if BOTBUILDER_AVAILABLE else object):
                 team_id, ", ".join(result.get("permissions", [])) or "grant",
             )
         elif status == "missing":
-            logger.warning(
-                "RSC consent MISSING for team %s — the bot only receives "
-                "@mentions there. %s",
-                team_id, result.get("detail", ""),
-            )
+            if self.mode in PASSIVE_CAPTURE_MODES:
+                logger.warning(
+                    "RSC consent MISSING for team %s — mode is %s, so ambient "
+                    "capture there is degraded to @mentions. %s",
+                    team_id, self.mode, result.get("detail", ""),
+                )
+            else:
+                logger.info(
+                    "RSC consent not granted for team %s, which matches the "
+                    "configured %s mode: the bot answers @mentions there by "
+                    "design and the polling daemons do the capturing. %s",
+                    team_id, self.mode, result.get("detail", ""),
+                )
         else:
             logger.warning(
                 "RSC consent check for team %s failed: %s",
                 team_id, result.get("detail", ""),
             )
+
+    def _rsc_status_entry(self, result: dict) -> dict:
+        """Annotate a probe result for /health with whether it degrades capture."""
+        return {
+            **result,
+            "mode": self.mode,
+            "affects_capture": (
+                result.get("status") == "missing"
+                and self.mode in PASSIVE_CAPTURE_MODES
+            ),
+        }
 
     def _get_graph_client(self):
         """Lazily build the app-only Graph client for activity delivery."""
