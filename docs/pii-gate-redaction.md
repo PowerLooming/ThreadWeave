@@ -14,8 +14,12 @@ Mechanisms in `src/threadweave/text_hygiene.py`, wired into the ingest endpoint 
   never push a message under the email processor's own floor. Returns what it did.
 - `redact_identifiers(text, kinds=...)` — replaces national IDs, bank accounts, card
   numbers, Norwegian mobiles with and without the country code, street addresses, postal
-  code and place, and (when asked) email addresses with typed placeholders. Decodes HTML
-  entities first and masks URLs, hashes and base64 runs before matching.
+  code and place, labelled person identifiers (`Medlemsnummer: 51764694`, `Kundenr 123456`)
+  and (when asked) email addresses with typed placeholders. Decodes HTML entities first and
+  masks URLs, hashes and base64 runs before matching. Shape patterns skip a number that
+  follows a transaction label (`Ordrenummer`, `Fakturanr`, `Sak`), because a reference is
+  not a person's identifier: `Fakturanr 99887766` is eight digits starting with 9 and
+  otherwise reads as a mobile.
 - `is_identifier_only(text)` — structural test for content whose substance is the
   identifiers, a pasted roster or ID list, the one case where redaction leaves nothing.
 - Ingest wiring: the detector now sees the signature-stripped text; a PII verdict redacts

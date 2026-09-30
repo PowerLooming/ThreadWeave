@@ -84,6 +84,44 @@ def test_reject_mode_still_rejects(monkeypatch):
     assert "pii_rejected" in data["signals"]
 
 
+def test_configured_kinds_narrow_the_redaction(monkeypatch):
+    """A deployment can drop kinds it does not want masked.
+
+    In a business-to-business mailbox a customer number identifies a company,
+    not a person, so masking it only loses a reference.
+    """
+    import threadweave.api as api_mod
+
+    monkeypatch.setenv("THREADWEAVE_PII_REDACT_KINDS", "mobile_no,mobile_bare")
+    monkeypatch.setattr(api_mod, "is_worth_saving_async", _pii_detector(True))
+    resp = client.post("/api/v1/ingest", json={
+        "content": (
+            f"{BODY}\n\nKundenummer 4455667 og tlf 98251606, sendt til Apeltunlien 13A."
+        ),
+        "source": "email",
+        "tenant_id": "test-pii-kinds",
+    })
+    assert resp.status_code in (200, 201)
+    data = resp.json()
+    assert data["redacted"] == {"mobile_bare": 1}
+    assert "labelled_identifier" not in data["redacted"]
+    assert "postal_address" not in data["redacted"]
+
+
+def test_unknown_kind_names_are_ignored(monkeypatch):
+    import threadweave.api as api_mod
+
+    monkeypatch.setenv("THREADWEAVE_PII_REDACT_KINDS", "mobile_bare,not_a_kind")
+    monkeypatch.setattr(api_mod, "is_worth_saving_async", _pii_detector(True))
+    resp = client.post("/api/v1/ingest", json={
+        "content": f"{BODY}\n\nTlf 98251606.",
+        "source": "email",
+        "tenant_id": "test-pii-unknown-kind",
+    })
+    assert resp.status_code in (200, 201)
+    assert resp.json()["redacted"] == {"mobile_bare": 1}
+
+
 def test_identifier_only_content_is_still_rejected(monkeypatch):
     import threadweave.api as api_mod
 

@@ -157,7 +157,10 @@ def strip_signature(
 
 # Ordered by specificity: a mobile inside a longer digit run is not a mobile,
 # and a card-like run should win over the national-id shape it also matches.
-KIND_PATTERNS: dict[str, re.Pattern] = {
+# A value may be a bare pattern (the whole match is replaced) or a
+# ``(pattern, group)`` pair, for shapes where only part of the match is the
+# identifier and the rest has to survive.
+KIND_PATTERNS: dict[str, re.Pattern | tuple[re.Pattern, int]] = {
     "national_id": re.compile(r"(?<![\d.])\d{6}[\s-]?\d{5}(?![\d.])"),
     "bank_account": re.compile(r"(?<!\d)\d{4}[.\s]\d{2}[.\s]\d{5}(?!\d)"),
     "card": re.compile(r"(?<![\d.])(?:\d{4}[\s-]?){3}\d{4}(?![\d.])"),
@@ -174,7 +177,35 @@ KIND_PATTERNS: dict[str, re.Pattern] = {
         r"(?<![\d.,])\b(?!19\d\d\b|20\d\d\b)\d{4}\s+[A-ZÆØÅ][a-zæøå]{2,}"
     ),
     "email": re.compile(r"[\w.+-]+@[\w-]+\.[\w.-]+"),
+    # A field name that identifies a person, followed by its value. The label
+    # survives and only the value is masked, so the entry still explains itself.
+    # Measured need: a union newsletter carrying "Medlemsnummer: 51764694" scored
+    # 0.00 with every backend and matched no pattern, because it is a labelled
+    # value rather than a shape. Deliberately does not cover order or case
+    # numbers: those identify a transaction, not a person.
+    "labelled_identifier": (
+        re.compile(
+            r"(?i)\b(?:medlems[\s-]?(?:nummer|nr|kapsnummer|ident)|"
+            r"kunde[\s-]?(?:nummer|nr|id)|kundennummer)\b\s*[:#]?\s*(\d{4,})"
+        ),
+        1,
+    ),
 }
+
+# A number that follows one of these is a transaction reference, not a person's
+# identifier. Measured need: "Fakturanr 99887766" is eight digits starting with 9
+# and reads as a Norwegian mobile to a shape pattern. The guard keeps shapes from
+# masking invoice, order, case and parcel numbers.
+TXN_CONTEXT = re.compile(
+    r"(?i)(?:ordre|order|faktura|invoice|sak|case|bilag|kvittering|referanse|ref|"
+    r"pakke|sporing|tracking|serie|batch)(?:nr|no|nummer|id)?[:#\s-]{0,4}$"
+)
+
+# Kinds that are pure shapes and therefore need the guard. A labelled identifier
+# carries its own label, so it is not one of them.
+SHAPE_KINDS: frozenset[str] = frozenset({
+    "national_id", "bank_account", "card", "mobile_no", "mobile_bare",
+})
 
 # A signature block is publishing information and a national ID is not, so the
 # default set is the identifiers that must not sit in stored content. Work
@@ -187,6 +218,7 @@ DEFAULT_KINDS: tuple[str, ...] = (
     "mobile_bare",
     "postal_address",
     "postal_code_place",
+    "labelled_identifier",
 )
 
 # Noise that makes naive patterns useless on real mail. Measured: of 348
@@ -248,13 +280,19 @@ def redact_identifiers(
 
     matches: list[tuple[int, int, str]] = []
     for kind in selected:
-        pattern = KIND_PATTERNS.get(kind)
-        if pattern is None:
+        spec = KIND_PATTERNS.get(kind)
+        if spec is None:
             continue
+        pattern, group = spec if isinstance(spec, tuple) else (spec, 0)
         for mt in pattern.finditer(source):
-            if mask_noise and _inside(spans, mt.start()):
+            start, end = mt.span(group)
+            if start < 0 or end <= start:
                 continue
-            matches.append((mt.start(), mt.end(), kind))
+            if mask_noise and _inside(spans, start):
+                continue
+            if kind in SHAPE_KINDS and TXN_CONTEXT.search(source[max(0, start - 24):start]):
+                continue
+            matches.append((start, end, kind))
 
     # longest match wins at the same start, then no overlaps
     matches.sort(key=lambda t: (t[0], -(t[1] - t[0])))
