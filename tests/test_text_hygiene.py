@@ -166,6 +166,53 @@ def test_redaction_is_idempotent():
     assert twice.total == 0
 
 
+# ── labelled identifiers ─────────────────────────────────────
+
+
+def test_redacts_a_labelled_member_number():
+    """The measured case: a union newsletter carrying a membership number."""
+    text = "Nyhetsbrev tillitsvalgt\nMedlemsnummer: 51764694"
+    result = redact_identifiers(text)
+    assert result.counts.get("labelled_identifier") == 1
+    assert "51764694" not in result.text
+
+
+def test_labelled_identifier_keeps_the_label():
+    text = "Medlemsnummer: 51764694"
+    out = redact_identifiers(text).text
+    assert "Medlemsnummer" in out, "the field name must survive for the entry to make sense"
+    assert out.endswith("[labelled_identifier]")
+
+
+def test_labelled_identifier_accepts_common_shapes():
+    for text in ("Medlemsnr 51764694", "Kundenr: 123456", "Kunde-ID 9080706",
+                 "Kundenummer #4455667", "medlemskapsnummer 7654321"):
+        assert redact_identifiers(text).counts.get("labelled_identifier") == 1, text
+
+
+def test_labelled_identifier_ignores_transaction_numbers():
+    """An order or case number identifies a transaction, not a person."""
+    for text in ("Ordrenummer: 51764694", "Saksnummer 20241158", "Fakturanr 99887766"):
+        assert redact_identifiers(text).total == 0, text
+
+
+def test_labelled_identifier_needs_digits():
+    assert redact_identifiers("Medlemsnummer: ikke oppgitt").total == 0
+    assert redact_identifiers("Medlemsnummer: 12").total == 0
+
+
+def test_transaction_guard_does_not_suppress_a_real_phone():
+    """The guard must only fire on transaction labels."""
+    for text in ("Tlf: 99887766", "Ring 99887766", "Telefon 99887766"):
+        assert redact_identifiers(text).counts.get("mobile_bare") == 1, text
+
+
+def test_labelled_identifier_is_in_the_default_set():
+    from threadweave.text_hygiene import DEFAULT_KINDS
+
+    assert "labelled_identifier" in DEFAULT_KINDS
+
+
 # ── identifier-only detection ────────────────────────────────
 
 
