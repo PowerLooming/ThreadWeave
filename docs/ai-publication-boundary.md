@@ -87,27 +87,31 @@ when it is crossed:
   entry as two identities and asserting different output;
 - a test that the audit record exists after a publication and contains no content.
 
-## Migration for what exists
+## Decision taken: the Copilot destination is not shipped
 
-- `connectors/graph` moves under `publish/` as a destination adapter: the upsert code stays,
-  the daemon and its startup launcher go, the connection is not created or written unless a
-  publication run asks for it.
-- The empty-stub fallback is deleted, not fixed: an entry the caller cannot read is skipped
-  and counted, and a document with empty content is never sent to a search index.
-- The MCP server stays where it is; it is the pull interface and already obeys R5 and R6.
-- `docs/privacy.md` gets the scoped sentence and the surface table above, and the README
-  stops implying that enabling everything is safe.
+Harald's call, and the reasoning is testability plus the promise: he holds no Copilot licence
+in the tenant, so this connector is the one surface he cannot test without paying for one or
+waiting for the KM pilot, and an untested component that breaks the on-prem promise is the
+worst of both. **The Copilot/Graph connector is removed.** No destination ships in the public
+repository for now, and there is no publisher in the daemon registry.
 
-## Decisions for Harald
+Removed: `src/threadweave/connectors/graph/` (auth, connector, schema, sync), the
+`graph setup|sync|status|daemon` CLI verbs, the `graph-daemon` daemon entry, and the
+connector's tests. The empty-stub fallback disappears with it; if a destination is ever
+added, an entry the caller cannot read is skipped and counted, and a document with empty
+content is never sent to a search index.
 
-1. Does the public repository ship a Copilot destination at all? An on-prem, one-way product
-   shipping an exporter to a cloud index is defensible only if the contract says so plainly
-   and the export is a deliberate act by an operator, never a default daemon.
-2. Is the first implementation CLI-only (an operator runs `threadweave publish --preview`),
-   with the API endpoint later? That is the smallest version that still obeys R1 to R6.
+Kept: the Graph **pull** clients the email, SharePoint and Teams watchers need, the MCP
+server (the pull interface, already obeying R5 and R6), and the deterministic gate.
+
+What is left to build when a destination is wanted: the `publish/` package with destination
+resolution, preview, clearance, redaction and audit, invoked by an operator. CLI first is the
+natural shape, since R1 to R6 are all about an operator deciding.
+
 
 ## Smallest useful first slice
 
-The `publish/` package with its core (destination resolution, preview, clearance, redaction,
-audit), the CLI verb, the enforcement tests, and the Copilot upsert moved in as one adapter
-with no daemon. No new destination, no API endpoint, no scheduling.
+If a destination is ever wanted: the `publish/` package with its core (destination resolution,
+preview, clearance, redaction, audit), the CLI verb, the enforcement tests, and one adapter
+for that destination. No daemon, no scheduling, no API endpoint until the CLI shape has
+proved itself.

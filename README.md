@@ -98,7 +98,7 @@ uv run python -m threadweave.cli daemon status all
 uv run python -m threadweave.cli daemon uninstall email-watch
 ```
 
-**How packaging works:** per-daemon env files at `~/.threadweave/daemons/<name>.env` hold secrets and options (one place, not shell history); `daemon run <name>` loads the env and dispatches. **Windows:** a launcher `.cmd` is dropped into the Startup folder (no admin needed) with logs to `~/.threadweave/logs/`. **Linux:** systemd units with `Restart=always`. Daemon env options: `THREADWEAVE_DAEMON_INTERVAL`, `THREADWEAVE_EMAIL_MAILBOX`, `THREADWEAVE_SP_SITE`, `THREADWEAVE_SP_ONENOTE`, `THREADWEAVE_GRAPH_INTERVAL`, `PORT` (bot).
+**How packaging works:** per-daemon env files at `~/.threadweave/daemons/<name>.env` hold secrets and options (one place, not shell history); `daemon run <name>` loads the env and dispatches. **Windows:** a launcher `.cmd` is dropped into the Startup folder (no admin needed) with logs to `~/.threadweave/logs/`. **Linux:** systemd units with `Restart=always`. Daemon env options: `THREADWEAVE_DAEMON_INTERVAL`, `THREADWEAVE_EMAIL_MAILBOX`, `THREADWEAVE_SP_SITE`, `THREADWEAVE_SP_ONENOTE`, `PORT` (bot).
 
 State files (`~/.threadweave/`) let daemons resume safely: SharePoint delta tokens, OneNote watermarks, MSAL token cache, opt-out registry, audit log, entry store, notifications.
 
@@ -155,7 +155,7 @@ Capture without disclosure is surveillance, so ThreadWeave ships a privacy layer
 
 ## Documentation
 
-- [M365 Connector Setup](docs/m365-connectors.md) — Azure app registrations, email/SharePoint/OneNote daemons, Copilot connector, troubleshooting
+- [M365 Connector Setup](docs/m365-connectors.md) — Azure app registrations, email/SharePoint/OneNote daemons, troubleshooting
 - [Privacy Model](docs/privacy.md) — on-prem one-way contract, opt-out, right to delete, access control
 - [Distribution](docs/distribution.md) — how orgs get the app (manual upload, scripted publish, Teams Store), verified marketplace costs
 - [Enterprise Adoption Checklist](docs/enterprise-adoption.md) — tracked gates from the IT-manager review: permissions, licensing, vendor readiness, observability, data lifecycle
@@ -195,7 +195,7 @@ happen by themselves on every code push.
 | `THREADWEAVE_AUDIT_DB` | Audit log database path (default: `~/.threadweave/audit.sqlite3`). Falls back to in-memory if the DB can't be opened |
 | `THREADWEAVE_ENTRY_DB` | Entry store database URL. SQLite (default `sqlite:///~/.threadweave/entries.sqlite3`) works out of the box; PostgreSQL (`postgresql://user:***@host/db`, install `.[postgres]`) for corporate deployments. Entries survive API restarts |
 
-**Connector extras:** `pip install -e ".[gws]"` (Google Workspace), `".[graph]"` (Microsoft Graph connector), `".[teams]"`, `".[sharepoint]"`, `".[email]"`, `".[outlook]"`, or `".[all-connectors]"` for everything.
+**Connector extras:** `pip install -e ".[gws]"` (Google Workspace), `".[graph]"` (Graph reader flows), `".[teams]"`, `".[sharepoint]"`, `".[email]"`, `".[outlook]"`, or `".[all-connectors]"` for everything.
 
 ## Hardware recommendations
 
@@ -244,7 +244,6 @@ Translation and multilingual detection stay local — no data ever leaves the on
 - ✅ **CLI** — `detect`, `search`, `save`, `serve`
 - ✅ **Confidentiality** — 7 sensitivity levels with access enforcement + audit
 - ✅ **Google Workspace connector** — Gmail, Chat, Drive ingestion + offboarding harvester
-- ✅ **Microsoft Graph connector** — Copilot integration via external connection
 - ✅ **Profiling** — Latency percentiles, throughput, Prometheus export
 - ✅ **Auth** — Opt-in API key middleware with tenant scoping
 - ✅ **Docker** — Multi-stage build with optional Ollama profile
@@ -252,7 +251,6 @@ Translation and multilingual detection stay local — no data ever leaves the on
 - ✅ **Teams watch daemon** — Graph delta polling of channel messages with app-only permissions. Captures every channel in every team with no bot installs, no @mentions, no RSC consent. Prime mode starts from install time; `--backfill` mines channel history. Delta tokens persist across restarts.
 - ✅ **Email watch daemon** — continuous one-way mailbox polling, thread-aware capture, sender→department→wing mapping
 - ✅ **SharePoint watch daemon** — delta-polling of document libraries (new + edited files), xlsx/pptx/docx/pdf extraction, OneNote notebook polling via delegated auth
-- ✅ **Copilot connector** — Graph external connection, schema, item sync, continuous daemon
 - ✅ **Privacy layer** — opt-out registry (ingest gate + early daemon skips), audited right-to-delete, Teams privacy commands
 - ✅ **Capture notifications** — daemons queue a camera-sign notice for the content author; delivery is a personal Teams DM for authors the bot knows, a Teams activity-feed notification via Graph (`TeamsActivity.Send`) for everyone captured passively, and an email fallback via Graph `sendMail` (`Mail.Send`) when the tenant refuses activity notifications. Undeliverable notices are marked skipped after retries, never silently dropped.
 - ✅ **Durable entry store** — SQLAlchemy persistence, SQLite default (`~/.threadweave/entries.sqlite3`) or PostgreSQL via `THREADWEAVE_ENTRY_DB`; the palace survives restarts

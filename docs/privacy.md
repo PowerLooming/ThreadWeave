@@ -7,6 +7,12 @@ ThreadWeave captures organizational knowledge so nobody has to ask the person wh
 **Content flows ONE WAY: Microsoft 365 → on-prem ThreadWeave. It never leaves to a third party, and it never comes back.**
 
 - All connectors use outbound pull polling (Graph API from the on-prem host). No webhooks, no tunnels, no third-party relays carry content.
+- **Nothing in the capture or storage path can send content out.** ThreadWeave used to
+  ship a Microsoft 365 Copilot (Graph) connector, which pushed captured entries into the
+  tenant's search index and contradicted this page. It has been removed. Any future
+  AI-facing surface must be a deliberate, per-caller, audited publication that an
+  operator invokes, never a daemon: see
+  [ai-publication-boundary.md](ai-publication-boundary.md).
 - Processing runs entirely on-prem: detection, PII screening, storage (MemPalace), and the LLM.
 - Nothing is sent to external AI services. Ever.
 
