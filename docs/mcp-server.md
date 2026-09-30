@@ -95,11 +95,14 @@ matches the on-prem contract: the content stays in the source.
   MCP server path (preview) using the Agent 365 CLI, after which admins
   approve it in **Agents** > **Tools**.
 
-The existing synced Graph connector (`threadweave graph ...`,
-see [m365-connectors.md](m365-connectors.md)) is still the right tool when
-you want ThreadWeave entries in Microsoft Search and Copilot retrieval
-alongside documents. It indexes content into Graph, so it is a deliberate
-trade, not the default.
+The synced Graph connector that used to live in `connectors/graph`, driven by
+`threadweave graph ...`, has been removed. It pushed captured entries into the
+tenant's search index from a daemon inside the capture path, which contradicts
+the one-way promise in [privacy.md](privacy.md), and it cannot be tested without
+a Copilot licence. The federated model above is the path that remains: nothing is
+indexed, and the assistant asks instead. Any future outbound surface has to be a
+deliberate, per-caller publication rather than a daemon, as
+[ai-publication-boundary.md](ai-publication-boundary.md) sets out.
 
 ## Reaching an on-prem server
 
