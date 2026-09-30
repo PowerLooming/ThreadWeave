@@ -155,6 +155,77 @@ async def test_bot_check_rsc_consent_missing_is_reported(
 
 
 @pytest.mark.asyncio
+async def test_missing_consent_is_quiet_in_explicit_mode(
+    monkeypatch, tmp_path, team_guid, caplog
+):
+    """Explicit mode is mention-only on purpose, so a missing grant is not a fault.
+
+    The probe exists to catch *silent* degradation. Reporting an intentional
+    configuration at warning level is the false alarm it must not raise.
+    """
+    import logging
+
+    graph = FakeGraph(grants=[])
+    bot = make_bot(monkeypatch, tmp_path, graph)
+    bot.mode = "explicit"
+    TeamSeenStore().add(team_guid)
+
+    with caplog.at_level(logging.INFO):
+        await bot.check_rsc_consent()
+
+    reported = [r for r in caplog.records if "RSC consent" in r.getMessage()]
+    assert reported, "the probe should still report what it found"
+    assert all(r.levelno < logging.WARNING for r in reported)
+    entry = bot.rsc_status[team_guid]
+    assert entry["mode"] == "explicit"
+    assert entry["affects_capture"] is False
+
+
+@pytest.mark.asyncio
+async def test_missing_consent_warns_in_passive_mode(
+    monkeypatch, tmp_path, team_guid, caplog
+):
+    """In passive mode the same missing grant really does degrade capture."""
+    import logging
+
+    graph = FakeGraph(grants=[])
+    bot = make_bot(monkeypatch, tmp_path, graph)
+    bot.mode = "passive"
+    TeamSeenStore().add(team_guid)
+
+    with caplog.at_level(logging.INFO):
+        await bot.check_rsc_consent()
+
+    warnings = [
+        r for r in caplog.records
+        if r.levelno >= logging.WARNING and "RSC consent" in r.getMessage()
+    ]
+    assert warnings, "passive mode must warn: ambient capture is degraded"
+    assert bot.rsc_status[team_guid]["affects_capture"] is True
+
+
+@pytest.mark.asyncio
+async def test_granted_consent_stays_informational_in_every_mode(
+    monkeypatch, tmp_path, team_guid, caplog
+):
+    import logging
+
+    graph = FakeGraph(grants=[
+        {"clientAppId": "bot-1", "permission": "ChannelMessage.Read.Group"},
+    ])
+    bot = make_bot(monkeypatch, tmp_path, graph)
+    bot.mode = "passive"
+    TeamSeenStore().add(team_guid)
+
+    with caplog.at_level(logging.INFO):
+        await bot.check_rsc_consent()
+
+    reported = [r for r in caplog.records if "RSC consent" in r.getMessage()]
+    assert reported and all(r.levelno < logging.WARNING for r in reported)
+    assert bot.rsc_status[team_guid]["affects_capture"] is False
+
+
+@pytest.mark.asyncio
 async def test_bot_check_rsc_skips_without_credentials(
     monkeypatch, tmp_path, caplog
 ):
