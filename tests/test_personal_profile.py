@@ -68,8 +68,7 @@ def test_personal_profile_exposes_only_owner_scoped(monkeypatch):
     names = set(daemons_for_profile())
     # Owner-scoped capture connector present; org-wide harvesters hidden.
     assert "email-watch" in names
-    for org_only in ("teams-watch", "teams-bot", "sharepoint-watch",
-                     "graph-daemon", "org-sync"):
+    for org_only in ("teams-watch", "teams-bot", "sharepoint-watch", "org-sync"):
         assert org_only not in names
 
 

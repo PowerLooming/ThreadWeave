@@ -17,12 +17,11 @@ holds its secrets and options — one place, not shell history. The
 Daemons:
 - email-watch     threadweave email watch
 - sharepoint-watch threadweave sharepoint watch
-- graph-daemon    threadweave graph daemon
 - teams-bot       python -m threadweave.connectors.teams.adapter
 
 In personal (single-user) mode only owner-scoped capture connectors are
 exposed (see ``PERSONAL_DAEMON_NAMES`` / ``daemons_for_profile``); the
-org-wide harvesters (teams, sharepoint, graph, org-sync) require admin /
+org-wide harvesters (teams, sharepoint, org-sync) require admin /
 RSC / Group.ReadWrite.All grants and are hidden there.
 """
 
@@ -60,13 +59,6 @@ DAEMONS: dict[str, dict] = {
             "THREADWEAVE_SP_SITE": "",
             "THREADWEAVE_DAEMON_INTERVAL": "300",
             "THREADWEAVE_SP_ONENOTE": "0",
-        },
-    },
-    "graph-daemon": {
-        "description": "Continuous Graph external-connection sync (Copilot)",
-        "argv": [sys.executable, "-m", "threadweave.cli", "graph", "daemon"],
-        "env_defaults": {
-            "THREADWEAVE_GRAPH_INTERVAL": "300",
         },
     },
     "teams-bot": {
@@ -117,7 +109,7 @@ def daemons_for_profile() -> dict[str, dict]:
     """The daemon registry restricted to the active profile.
 
     In personal mode only the owner-scoped capture connectors are exposed;
-    org-wide harvesters (teams, sharepoint, graph, org-sync) are not
+    org-wide harvesters (teams, sharepoint, org-sync) are not
     selectable or installable. In org mode the full registry is returned.
     """
     from threadweave.profile import is_personal
@@ -189,8 +181,6 @@ def build_argv(name: str) -> list[str]:
         argv += ["--interval", env.get("THREADWEAVE_DAEMON_INTERVAL", "300")]
         if env.get("THREADWEAVE_SP_ONENOTE", "0") == "1":
             argv += ["--onenote"]
-    elif name == "graph-daemon":
-        argv += ["--interval", env.get("THREADWEAVE_GRAPH_INTERVAL", "300")]
     elif name == "teams-watch":
         argv += ["--interval", env.get("THREADWEAVE_DAEMON_INTERVAL", "300")]
         if env.get("THREADWEAVE_TEAMS_BACKFILL", "0") == "1":
@@ -278,14 +268,6 @@ def run_daemon(name: str) -> int:
             onenote=env.get("THREADWEAVE_SP_ONENOTE", "0") == "1",
         )
         cmd_sharepoint_watch(args)
-    elif name == "graph-daemon":
-        from threadweave.cli import cmd_graph_daemon
-        args = SimpleNamespace(
-            host=env.get("THREADWEAVE_GRAPH_HOST", "localhost"),
-            port=int(env.get("THREADWEAVE_GRAPH_PORT", "8000")),
-            interval=int(env.get("THREADWEAVE_GRAPH_INTERVAL", "300")),
-        )
-        cmd_graph_daemon(args)
     elif name == "teams-bot":
         from threadweave.connectors.teams.adapter import main as bot_main
         bot_main()

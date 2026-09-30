@@ -1,6 +1,6 @@
 # Setting Up M365 Connectors
 
-Connect ThreadWeave to Exchange Online, SharePoint, and Microsoft Copilot via Microsoft Graph.
+Connect ThreadWeave to Exchange Online and SharePoint via Microsoft Graph.
 
 ## What You'll Set Up
 
@@ -8,7 +8,15 @@ Connect ThreadWeave to Exchange Online, SharePoint, and Microsoft Copilot via Mi
 |---|---|---|
 | Email Watcher | Monitors Exchange Online inboxes for unread emails, reconstructs threads, ingests into ThreadWeave | Mail.Read |
 | SharePoint Watcher | Discovers SharePoint sites and monitors document libraries for changes | Sites.Read.All |
-| Graph External Connector | Pushes ThreadWeave entries to Microsoft Graph so they appear in Copilot and Microsoft Search results | ExternalConnection.ReadWrite.OwnedBy |
+> **The Copilot connector is gone.** ThreadWeave used to ship a Microsoft 365 Copilot
+> connector (Microsoft renamed Graph connectors to Copilot connectors) that pushed
+> captured entries into the tenant's search index. It was removed: it sends captured
+> content back into M365, which contradicts the one-way promise in
+> [privacy.md](privacy.md), and its authentication cannot be tested without a Copilot
+> licence. The rule that replaces it is in
+> [ai-publication-boundary.md](ai-publication-boundary.md): nothing in the capture or
+> storage path may publish content outward, and no publisher is ever installed as a
+> daemon.
 
 > **Already ingesting email?** If you just want to read your own inbox, use `ingest_graph_mail.py` instead — it uses device-code OAuth (browser sign-in, MFA supported) and needs no Azure app registration. The connectors below are for organization-wide, automated ingestion.
 
@@ -17,7 +25,6 @@ Connect ThreadWeave to Exchange Online, SharePoint, and Microsoft Copilot via Mi
 - An **Azure subscription** with an Entra ID (Azure AD) tenant
 - **Global Administrator** or **Application Administrator** role in that tenant (to grant admin consent)
 - For Email Watcher & SharePoint Watcher: **Exchange Online** and **SharePoint Online** licenses in the tenant
-- For Graph External Connector: a tenant with **Microsoft Graph connectors** support (M365 E5, or the Graph connectors add-on)
 - ThreadWeave installed and running (`threadweave serve`)
 
 > **Don't have a tenant?** The free M365 E5 developer sandbox is no longer open to everyone as of 2026. You now need a Visual Studio Professional/Enterprise subscription or membership in the Microsoft AI Cloud Partner Program. Check with your IT department for a dev/test tenant.
@@ -74,16 +81,6 @@ Now create a client secret and set permissions:
 
 > **Critical:** Adding permissions is not enough. You must click "Grant admin consent." Also, make sure you're on the **Application permissions** tab — the dialog defaults to Delegated, but ThreadWeave uses app-only flow which needs Application permissions.
 
-### App 2: ThreadWeave-CopilotConnector
-
-Used by the Graph External Connector to sync ThreadWeave entries to Copilot.
-
-Repeat the same registration steps, with these differences:
-
-- Name: `ThreadWeave-CopilotConnector`
-- Permission: `ExternalConnection.ReadWrite.OwnedBy` (Application)
-- Grant admin consent
-
 ## Step 2: Set Environment Variables
 
 Set these before starting ThreadWeave:
@@ -94,10 +91,6 @@ export AZURE_TENANT_ID="your-tenant-id"
 export AZURE_CLIENT_ID="your-graphreader-client-id"
 export AZURE_CLIENT_SECRET="your-secret-value"
 
-# For Graph External Connector (Copilot)
-export THREADWEAVE_GRAPH_TENANT_ID="your-tenant-id"
-export THREADWEAVE_GRAPH_CLIENT_ID="your-copilotconnector-client-id"
-export THREADWEAVE_GRAPH_CLIENT_SECRET="your-secret-value"
 ```
 
 On Windows PowerShell:
@@ -179,15 +172,6 @@ uv run python -m threadweave.cli sharepoint onenote-login
 
 Prints a device code; sign in once as a tenant user with notebook access. The token cache (`~/.threadweave/msal_cache.json`) is refreshed silently thereafter.
 
-### Graph External Connector (Copilot / Microsoft Search)
-
-```bash
-export THREADWEAVE_GRAPH_TENANT_ID=... THREADWEAVE_GRAPH_CLIENT_ID=... THREADWEAVE_GRAPH_CLIENT_SECRET=...
-uv run python -m threadweave.cli graph setup    # create connection + register schema
-uv run python -m threadweave.cli graph sync     # push entries to the search index
-uv run python -m threadweave.cli graph daemon   # continuous sync every 5 min
-```
-
 ## Publishing the Teams app (org app catalog)
 
 The bot starts as a sideloaded zip; making it official = publishing to the
@@ -237,7 +221,7 @@ once):
   who never talked to the bot (also needs `User.Read.All` for email to
   AAD id resolution). **Must be granted on the BOT's own app
   registration** (the AAD app backing the Teams app manifest), not on
-  the Graph daemon app: Graph only allows custom text notifications
+  the reader app: Graph only allows custom text notifications
   from the app the recipient has installed, and any other sender
   identity gets 403 "not authorized to generate custom text
   notifications" (verified live 2026-08-17). The activity leg also
@@ -400,29 +384,6 @@ asyncio.run(test())
 
 Expected: lists notebook pages. Errors to expect if setup is wrong: `40001` (app-only token — must use delegated), `40004` (missing `Notes.Read.All`), `AADSTS65002` (using the Azure CLI client ID — must use your own app with public client flows enabled).
 
-### Graph External Connector
-
-Creates an external connection and registers the ThreadWeave schema:
-
-```bash
-uv run python -c "
-from threadweave.connectors.graph.connector import ThreadWeaveGraphConnector
-
-connector = ThreadWeaveGraphConnector()
-print(f'Configured: {connector.is_configured}')
-
-# Create connection and register schema
-result = connector.register_schema()
-print(f'Schema registered: {result}')
-
-# Verify connection
-info = connector.get_connection()
-print(f'Connection state: {info}')
-"
-```
-
-Expected: connection created (201), schema registered. If schema registration fails with `400`, your tenant may lack Graph Connectors licensing.
-
 ## Troubleshooting
 
 | Error | Likely Cause | Fix |
@@ -432,10 +393,6 @@ Expected: connection created (201), schema registered. If schema registration fa
 | `roles` is empty in JWT | Delegated permissions used, or admin consent not granted | Switch to Application permissions tab, re-add, click "Grant admin consent" |
 | `401 Unauthorized` on mailbox | Mailbox not in tenant, or no Exchange Online license | Verify user has Exchange Online and is in the same tenant as the app registration |
 | `400: Tenant does not have a SPO license` | No SharePoint Online in tenant | Tenant needs SharePoint Online license. Bare Entra ID tenants don't include it |
-| `500` on `POST /external/connections` | No Graph connectors license | Requires M365 E5 or Graph connectors add-on. Dev sandbox may not support it |
-| `409` on `POST /external/connections`, then `403` on the update | Another app registration already owns a connection with that id | Connection ids are tenant-unique and ownership cannot be transferred. Use the registration that created it (add a client secret to it and point `THREADWEAVE_GRAPH_CLIENT_ID` at it), or register a different connection id. A `403` on `GET /external/connections/{id}` while `GET /external/connections` returns an empty list is the same symptom |
-| `403` on app-only `search/query` for `externalItem` | App permission is not supported for that entity type | Only `site`, `list`, `listItem`, `drive` and `driveItem` can be queried app-only. Verify external items by reading them back: `GET /external/connections/{id}/items/{itemId}` |
-| `403` on upsert/delete | Schema not registered yet | Run `register_schema()` first — items can't be created without a schema |
 | `40001` on `/onenote/...` | App-only token used for OneNote | OneNote requires delegated auth since 2025-03-31 — run `sharepoint onenote-login` and use `--onenote` |
 | `40004` on `/onenote/...` | Missing `Notes.Read.All` scope | Add `Notes.Read.All` (Delegated) to GraphReader and re-sign-in |
 | `AADSTS65002` on device sign-in | Used the Azure CLI client ID | Use your own app registration with "Allow public client flows" = Yes |

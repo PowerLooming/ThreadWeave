@@ -6,6 +6,15 @@ uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Removed
+
+- **The Microsoft 365 Copilot (Graph) connector.** It pushed captured entries into
+  the tenant's search index from a daemon inside the capture path, which contradicts
+  `docs/privacy.md` ("it never comes back"), and it cannot be tested without a
+  Copilot licence. Gone: `connectors/graph`, the `graph setup|sync|status|daemon`
+  CLI verbs, and the `graph-daemon` daemon. `docs/ai-publication-boundary.md` records
+  the rule that replaces it.
+
 ## [0.4.12] — 2026-09-27
 
 ### Added

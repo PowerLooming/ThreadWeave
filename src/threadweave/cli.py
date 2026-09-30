@@ -290,71 +290,6 @@ def _current_user() -> str:
     return getpass.getuser()
 
 
-# ── Graph Connector Commands ───────────────────────────────────────
-
-def cmd_graph_setup(args):
-    """Register the ThreadWeave external connection schema with Microsoft Graph."""
-    from threadweave.connectors.graph.sync import SyncEngine
-    from threadweave.connectors.graph.connector import ThreadWeaveGraphConnector
-
-    connector = ThreadWeaveGraphConnector(
-        threadweave_url=f"http://{args.host}:{args.port}",
-    )
-    engine = SyncEngine(connector)
-
-    print("Registering ThreadWeave connection schema with Microsoft Graph...")
-    success = engine.schema_setup()
-    if success:
-        print("Schema registered successfully.")
-        print(f"Connection ID: threadweave")
-        print("Items can now be synced via: threadweave graph sync")
-    else:
-        print("Schema registration failed. Check credentials and permissions.",
-              file=sys.stderr)
-        sys.exit(1)
-
-
-def cmd_graph_sync(args):
-    """Sync ThreadWeave entries to Microsoft Graph."""
-    from threadweave.connectors.graph.sync import SyncEngine
-    from threadweave.connectors.graph.connector import ThreadWeaveGraphConnector
-
-    connector = ThreadWeaveGraphConnector(
-        threadweave_url=f"http://{args.host}:{args.port}",
-    )
-    engine = SyncEngine(connector)
-
-    print(f"Syncing ThreadWeave entries to Microsoft Graph...")
-    stats = engine.full_sync()
-    print(json.dumps(stats.to_dict(), indent=2))
-
-
-def cmd_graph_status(args):
-    """Show Graph connector status."""
-    from threadweave.connectors.graph.sync import SyncEngine
-    from threadweave.connectors.graph.connector import ThreadWeaveGraphConnector
-
-    connector = ThreadWeaveGraphConnector(
-        threadweave_url=f"http://{args.host}:{args.port}",
-    )
-    engine = SyncEngine(connector)
-
-    status = engine.status()
-    print(json.dumps(status, indent=2))
-
-
-def cmd_graph_daemon(args):
-    """Run continuous sync daemon."""
-    from threadweave.connectors.graph.sync import SyncEngine
-    from threadweave.connectors.graph.connector import ThreadWeaveGraphConnector
-
-    connector = ThreadWeaveGraphConnector(
-        threadweave_url=f"http://{args.host}:{args.port}",
-    )
-    engine = SyncEngine(connector, sync_interval=args.interval)
-    engine.run_daemon()
-
-
 # ── Teams package builder ─────────────────────────────────────────
 
 def cmd_teams_package(args):
@@ -925,28 +860,6 @@ def build_parser() -> argparse.ArgumentParser:
         help="ThreadWeave REST API the tools call (default: "
              "THREADWEAVE_API_BASE_URL or http://127.0.0.1:8000)")
 
-    # graph — M365 Copilot connector
-    p_graph = sub.add_parser("graph", help="Microsoft 365 Copilot Graph connector")
-    graph_sub = p_graph.add_subparsers(dest="graph_command")
-
-    p_graph_setup = graph_sub.add_parser("setup", help="Register connection schema with Microsoft Graph")
-    p_graph_setup.add_argument("--host", default="localhost")
-    p_graph_setup.add_argument("--port", type=int, default=8000)
-
-    p_graph_sync = graph_sub.add_parser("sync", help="Full sync to Microsoft Graph")
-    p_graph_sync.add_argument("--host", default="localhost")
-    p_graph_sync.add_argument("--port", type=int, default=8000)
-
-    p_graph_status = graph_sub.add_parser("status", help="Show connector status")
-    p_graph_status.add_argument("--host", default="localhost")
-    p_graph_status.add_argument("--port", type=int, default=8000)
-
-    p_graph_daemon = graph_sub.add_parser("daemon", help="Run continuous sync daemon")
-    p_graph_daemon.add_argument("--host", default="localhost")
-    p_graph_daemon.add_argument("--port", type=int, default=8000)
-    p_graph_daemon.add_argument("--interval", type=int, default=300,
-                                help="Sync interval in seconds (default: 300)")
-
     # gws — Google Workspace connector
     p_gws = sub.add_parser("gws", help="Google Workspace connector (Gmail, Chat, Drive)")
     gws_sub = p_gws.add_subparsers(dest="gws_command")
@@ -1218,17 +1131,6 @@ def main() -> None:
             cmd_daemon_config(args)
         else:
             p_daemon.print_help()
-    elif args.command == "graph":
-        if args.graph_command == "setup":
-            cmd_graph_setup(args)
-        elif args.graph_command == "sync":
-            cmd_graph_sync(args)
-        elif args.graph_command == "status":
-            cmd_graph_status(args)
-        elif args.graph_command == "daemon":
-            cmd_graph_daemon(args)
-        else:
-            p_graph.print_help()
     elif args.command == "tasks":
         if args.tasks_command == "list":
             cmd_tasks_list(args)

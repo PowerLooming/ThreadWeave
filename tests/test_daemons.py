@@ -68,11 +68,16 @@ def test_build_argv_sharepoint_without_onenote():
     assert "--onenote" not in joined
 
 
-def test_build_argv_graph_daemon_interval():
-    save_daemon_env("graph-daemon", {"THREADWEAVE_GRAPH_INTERVAL": "600"})
-    joined = " ".join(build_argv("graph-daemon"))
-    assert "graph daemon" in joined
-    assert "--interval 600" in joined
+def test_the_copilot_graph_daemon_is_gone():
+    """No daemon may publish captured content outward.
+
+    The Graph/Copilot connector pushed entries into the M365 Copilot index from
+    a daemon inside the capture path, breaking the one-way on-prem promise. There
+    is no publisher in the registry by design: see docs/ai-publication-boundary.md.
+    """
+    assert "graph-daemon" not in DAEMONS
+    with pytest.raises(KeyError):
+        build_argv("graph-daemon")
 
 
 def test_build_argv_teams_bot():
