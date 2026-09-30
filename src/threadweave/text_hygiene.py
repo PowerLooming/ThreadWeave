@@ -179,7 +179,7 @@ KIND_PATTERNS: dict[str, re.Pattern | tuple[re.Pattern, int]] = {
     "email": re.compile(r"[\w.+-]+@[\w-]+\.[\w.-]+"),
     # A field name that identifies a person, followed by its value. The label
     # survives and only the value is masked, so the entry still explains itself.
-    # Measured need: a union newsletter carrying "Medlemsnummer: 51764694" scored
+    # Measured need: a union newsletter carrying "Medlemsnummer: 10000001" scored
     # 0.00 with every backend and matched no pattern, because it is a labelled
     # value rather than a shape. Deliberately does not cover order or case
     # numbers: those identify a transaction, not a person.
