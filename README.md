@@ -45,6 +45,26 @@ docker compose --profile llm up
 
 Data persists in Docker volumes — your knowledge survives restarts.
 
+## Personal Profile (single user)
+
+The same installation also runs as a single-user deployment: one mailbox, one owner, everything
+on your machine. There is no separate build and no desktop app, only a narrower profile.
+
+```bash
+export THREADWEAVE_PROFILE=personal
+threadweave email login                 # one-time device-code sign-in
+threadweave email watch --interval 300  # reads your own mailbox over /me
+```
+
+In this profile the email watcher reads your own mailbox as you, with delegated access, so
+there is no client secret and no application permission, and captures are filed under the
+`personal` tenant. The connector set is the email watcher: the Teams, SharePoint and org-wide
+harvesters are not selectable, which also means no RSC consent and no admin grants. What it
+needs is one Entra app registration with "Allow public client flows" enabled and the delegated
+`Mail.Read` permission. The confidentiality levels, the audit log and the privacy contract are
+unchanged, and grants resolve to you because the tier performs no directory lookups. See
+[docs/personal-profile.md](docs/personal-profile.md).
+
 ## Usage
 
 ```bash
@@ -157,6 +177,7 @@ Capture without disclosure is surveillance, so ThreadWeave ships a privacy layer
 
 - [M365 Connector Setup](docs/m365-connectors.md) — Azure app registrations, email/SharePoint/OneNote daemons, troubleshooting
 - [Privacy Model](docs/privacy.md) — on-prem one-way contract, opt-out, right to delete, access control
+- [Personal Profile](docs/personal-profile.md) — the single-user deployment: one mailbox, one owner, delegated access, no client secret and no admin grants
 - [Distribution](docs/distribution.md) — how orgs get the app (manual upload, scripted publish, Teams Store), verified marketplace costs
 - [Enterprise Adoption Checklist](docs/enterprise-adoption.md) — tracked gates from the IT-manager review: permissions, licensing, vendor readiness, observability, data lifecycle
 - [Typed Decision Layer](docs/decision-layer.md) — the ingest judgments asked as typed questions, the three on-prem provider backends (local NLI encoder, Laya, ollama), phrasing rules, calibration, and the measurements behind them
@@ -259,7 +280,8 @@ Translation and multilingual detection stay local — no data ever leaves the on
 - ✅ **Teams app distribution** — deterministic package builder + scripted org-catalog publish (`threadweave teams package|publish`)
 - ✅ **OpenDocument support** — odt/ods/odp (LibreOffice native) extracted with stdlib only
 - ✅ **Visio + video/audio** — .vsdx diagram text extraction; on-prem video/audio transcription (ffmpeg + faster-whisper, CPU)
-- ✅ **834 tests** — full suite green (11 skipped)
+- ✅ **Personal profile** — the same installation as a single-user deployment: one mailbox, one owner, delegated device-code mailbox access with no client secret and no application permission, captures filed under the `personal` tenant, and no RSC or admin grants. See [docs/personal-profile.md](docs/personal-profile.md)
+- ✅ **925 tests** — full suite green (11 skipped)
 
 ## What's Next
 
