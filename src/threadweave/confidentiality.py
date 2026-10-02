@@ -459,7 +459,13 @@ class RequesterContext:
 
 @dataclass
 class AuditEntry:
-    """Single audit log entry for access to sensitive content."""
+    """Single audit log entry for access to sensitive content.
+
+    ``count`` and ``first_seen`` describe a run of identical events that were
+    folded together at write time: ``timestamp`` is the last event in the run,
+    ``first_seen`` the first, and ``count`` how many happened. A row that never
+    repeated has ``count=1`` and ``first_seen == timestamp``.
+    """
 
     timestamp: str
     requester_id: str
@@ -471,6 +477,8 @@ class AuditEntry:
     reason: str = ""         # Why was access denied? (if denied)
     tenant_id: str = "default"  # Tenant the entry belongs to
     ip_hash: str = ""        # Hashed IP for privacy
+    first_seen: str = ""     # First event of a folded run (defaults to timestamp)
+    count: int = 1           # Events folded into this row
 
     def to_dict(self) -> dict:
         return {
@@ -484,6 +492,8 @@ class AuditEntry:
             "reason": self.reason,
             "tenant_id": self.tenant_id,
             "ip_hash": self.ip_hash,
+            "first_seen": self.first_seen or self.timestamp,
+            "count": max(1, self.count),
         }
 
 
@@ -499,23 +509,64 @@ CREATE TABLE IF NOT EXISTS audit_entries (
     entry_wing TEXT NOT NULL,
     reason TEXT NOT NULL DEFAULT '',
     tenant_id TEXT NOT NULL DEFAULT 'default',
-    ip_hash TEXT NOT NULL DEFAULT ''
+    ip_hash TEXT NOT NULL DEFAULT '',
+    first_seen TEXT NOT NULL DEFAULT '',
+    count INTEGER NOT NULL DEFAULT 1
 )
 """
 
 _AUDIT_COLUMNS = (
     "timestamp, requester_id, requester_wing, action, entry_id, "
-    "entry_sensitivity, entry_wing, reason, tenant_id, ip_hash"
+    "entry_sensitivity, entry_wing, reason, tenant_id, ip_hash, "
+    "first_seen, count"
 )
+
+# Which fields make two events "the same event repeated". A retrying client
+# produces identical values for all of them, so folding is precise: a different
+# reason, entry or requester starts a new row.
+_AUDIT_REPEAT_KEYS = (
+    "requester_id", "action", "entry_id", "reason", "tenant_id", "ip_hash",
+)
+
+_AUDIT_WINDOW_ENV = "THREADWEAVE_AUDIT_AGGREGATE_WINDOW"
+_AUDIT_WINDOW_DEFAULT = 300.0
+
+
+def _aggregate_window() -> float:
+    """How long a run of identical events keeps folding into one row.
+
+    ``THREADWEAVE_AUDIT_AGGREGATE_WINDOW`` in seconds, default 300, and ``0``
+    disables folding so every event gets its own row. An unparsable value falls
+    back to the default rather than silently disabling the aggregation.
+    """
+    raw = os.environ.get(_AUDIT_WINDOW_ENV)
+    if raw is None or not raw.strip():
+        return _AUDIT_WINDOW_DEFAULT
+    try:
+        return max(0.0, float(raw))
+    except ValueError:
+        logger.warning("Ignoring unparsable %s=%r", _AUDIT_WINDOW_ENV, raw)
+        return _AUDIT_WINDOW_DEFAULT
+
 
 
 class AuditLog:
-    """Append-only audit log for sensitive content access.
+    """Append-only-in-spirit audit log for sensitive content access.
 
     Durable by default: backed by SQLite at ~/.threadweave/audit.sqlite3
     (override with THREADWEAVE_AUDIT_DB or the ``db_path`` argument), so
     the trail survives restarts. Falls back to an in-memory ring buffer
     only if the database cannot be opened.
+
+    Repeats are folded at write time. An identical event (same requester,
+    action, entry, reason, tenant and ip hash) that recurs within
+    ``THREADWEAVE_AUDIT_AGGREGATE_WINDOW`` seconds (default 300, ``0`` disables)
+    increments the previous row's ``count`` and moves its ``timestamp`` forward
+    instead of appending a new row; the run keeps its original ``first_seen``.
+    Measured need: a retrying client wrote 12,248 identical denials next to 58
+    real refusals, and every read showed the flood and hid the refusals. Nothing
+    is dropped but the repetition: a folded row still reports how many events
+    happened and when the run started and ended.
     """
 
     def __init__(self, max_entries: int = 10_000, db_path: Optional[str] = None):
@@ -541,31 +592,103 @@ class AuditLog:
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA journal_mode=WAL")
         conn.execute(_AUDIT_SCHEMA)
+        self._migrate(conn)
         conn.commit()
         self._db = conn
+
+    @staticmethod
+    def _migrate(conn: sqlite3.Connection) -> None:
+        """Add the aggregation columns to a database written before they existed.
+
+        An existing trail must stay readable: the old rows become ``count=1`` with
+        ``first_seen`` set to their own timestamp, which is exactly what a run of
+        one means.
+        """
+        have = {row[1] for row in conn.execute("PRAGMA table_info(audit_entries)")}
+        if "first_seen" not in have:
+            conn.execute(
+                "ALTER TABLE audit_entries ADD COLUMN first_seen TEXT NOT NULL DEFAULT ''"
+            )
+        if "count" not in have:
+            conn.execute(
+                "ALTER TABLE audit_entries ADD COLUMN count INTEGER NOT NULL DEFAULT 1"
+            )
+        conn.execute(
+            "UPDATE audit_entries SET first_seen = timestamp WHERE first_seen = ''"
+        )
 
     # ── writes ──────────────────────────────────────────────────
 
     def _append(self, entry: AuditEntry) -> None:
+        window = _aggregate_window()
         if self._db is not None:
             try:
                 with self._lock:
+                    if window > 0 and self._fold_into_previous(entry, window):
+                        self._db.commit()
+                        return
                     self._db.execute(
                         f"INSERT INTO audit_entries ({_AUDIT_COLUMNS}) "
-                        "VALUES (?,?,?,?,?,?,?,?,?,?)",
+                        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
                         (entry.timestamp, entry.requester_id,
                          entry.requester_wing, entry.action, entry.entry_id,
                          entry.entry_sensitivity, entry.entry_wing,
-                         entry.reason, entry.tenant_id, entry.ip_hash),
+                         entry.reason, entry.tenant_id, entry.ip_hash,
+                         entry.first_seen or entry.timestamp,
+                         max(1, entry.count)),
                     )
                     self._db.commit()
                 return
             except Exception as exc:
                 logger.warning("Audit DB append failed: %s", exc)
         # In-memory fallback
+        if window > 0 and self._entries and self._is_repeat(
+            self._entries[-1], entry
+        ) and self._within_window(self._entries[-1].timestamp, window):
+            last = self._entries[-1]
+            last.count += 1
+            last.timestamp = entry.timestamp
+            return
+        if not entry.first_seen:
+            entry.first_seen = entry.timestamp
         self._entries.append(entry)
         if len(self._entries) > self._max_entries:
             self._entries = self._entries[-self._max_entries:]
+
+    @staticmethod
+    def _is_repeat(previous: AuditEntry, entry: AuditEntry) -> bool:
+        return all(
+            getattr(previous, key) == getattr(entry, key)
+            for key in _AUDIT_REPEAT_KEYS
+        )
+
+    @staticmethod
+    def _within_window(timestamp: str, window: float) -> bool:
+        try:
+            previous = datetime.fromisoformat(timestamp)
+        except (TypeError, ValueError):
+            return False
+        if previous.tzinfo is None:
+            previous = previous.replace(tzinfo=timezone.utc)
+        return (datetime.now(timezone.utc) - previous).total_seconds() <= window
+
+    def _fold_into_previous(self, entry: AuditEntry, window: float) -> bool:
+        """Increment the last row when this event repeats it inside the window."""
+        row = self._db.execute(
+            "SELECT id, timestamp, count, requester_id, action, entry_id, reason, "
+            "tenant_id, ip_hash FROM audit_entries ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+        if row is None:
+            return False
+        if any(row[key] != getattr(entry, key) for key in _AUDIT_REPEAT_KEYS):
+            return False
+        if not self._within_window(row["timestamp"], window):
+            return False
+        self._db.execute(
+            "UPDATE audit_entries SET count = ?, timestamp = ? WHERE id = ?",
+            (int(row["count"] or 1) + 1, entry.timestamp, row["id"]),
+        )
+        return True
 
     def log_access(
         self,
@@ -704,10 +827,26 @@ class AuditLog:
 
     @property
     def count(self) -> int:
+        """Rows in the trail. A folded run is one row, whatever its event count."""
         rows = self._query("SELECT COUNT(*) AS n FROM audit_entries", ())
         if rows is not None:
             return rows[0]["n"]
         return len(self._entries)
+
+    @property
+    def event_count(self) -> int:
+        """Events the trail records, folding included.
+
+        ``count`` answers "how many rows", this answers "how many things
+        happened": 58 rows can be 58 refusals, or one refusal repeated 12,248
+        times. An operator reading the trail wants both numbers.
+        """
+        rows = self._query(
+            "SELECT COALESCE(SUM(count), 0) AS n FROM audit_entries", ()
+        )
+        if rows is not None:
+            return int(rows[0]["n"])
+        return sum(max(1, e.count) for e in self._entries)
 
 
 # ═══════════════════════════════════════════════════════════════════════

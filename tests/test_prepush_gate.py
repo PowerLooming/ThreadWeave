@@ -451,6 +451,43 @@ def test_missing_rules_file_exits_two(repo):
     assert proc.returncode == 2
 
 
+def test_empty_stdin_refs_is_not_reported_as_a_clean_scan(repo):
+    """An unreadable ref list must not look like a passing scan.
+
+    The hook reads the ref list from stdin, so an empty or unparsable list means
+    the gate never saw what the push would publish. Exit 2 is the loud "could not
+    run" path, which the hook prints before allowing the push.
+    """
+    env = dict(os.environ)
+    env["THREADWEAVE_PREPUSH_PRIVATE"] = str(repo / "absent.txt")
+    proc = subprocess.run(
+        [
+            sys.executable,
+            str(GATE),
+            "--repo",
+            str(repo),
+            "--rules",
+            str(RULES),
+            "--stdin-refs",
+        ],
+        input="",
+        capture_output=True,
+        text=True,
+        env=env,
+        cwd=str(repo),
+    )
+    assert proc.returncode == 2, proc.stdout + proc.stderr
+    assert "could not read the push refs" in proc.stderr
+
+
+def test_unparsable_refs_file_is_not_reported_as_a_clean_scan(repo):
+    refs = (repo / ".." / "junk-refs.txt").resolve()
+    refs.write_text("this is not a ref line\n", encoding="utf-8")
+    proc = run_gate(repo, "--refs-file", str(refs))
+    assert proc.returncode == 2
+    assert "could not read the push refs" in proc.stderr
+
+
 def test_hook_script_is_present_and_executable():
     hook = REPO_ROOT / ".githooks" / "pre-push"
     assert hook.is_file()

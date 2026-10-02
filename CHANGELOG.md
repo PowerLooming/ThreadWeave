@@ -6,7 +6,41 @@ uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **The audit trail folds repeats instead of burying the signal.** One retrying
+  client wrote 12,248 identical denials next to 58 real refusals, and every read
+  showed the flood and hid the refusals. An identical event (same requester,
+  action, entry, reason, tenant and IP hash) that recurs within
+  `THREADWEAVE_AUDIT_AGGREGATE_WINDOW` seconds (default 300, `0` disables)
+  increments the previous row's `count` and moves its `timestamp` forward while
+  the run keeps its `first_seen`. An existing audit database is migrated in
+  place, its old rows becoming runs of one. `GET /api/v1/audit/recent` reports
+  `events` beside `total`, so "58 refusals" and "one refusal 12,248 times" are
+  different answers.
+- **The pre-push gate no longer reports an unscanned push as a clean one.** An
+  empty or unparsable ref list on stdin (or in `--refs-file`) exited 0 after
+  "nothing to scan", which is indistinguishable from a scan that passed. It now
+  exits 2, the loud "could not run" path the hook prints before allowing the
+  push, and a line that is not a ref line is no longer turned into a target.
+
 ## [0.4.18] — 2026-10-02
+
+### Fixed
+
+- **The PII gate redacts what its own patterns can see, not only what the model
+  says.** Redaction is gated on the PII verdict, and under a decision provider
+  that verdict was the model's opinion against the 0.75 bar: a message carrying
+  a Norwegian mobile, a `Kundenr` and a card number scored 0.06, came back
+  `has_pii: false`, and was stored with all three identifiers intact.
+  `detector.fuse_pattern_pii` ORs the identifier scan into every engine's
+  verdict, so the ingest path, the save path, `/api/v1/detect` and the regex
+  fallback agree on what counts as PII. The scan reuses the redactor's kind set,
+  so a verdict can never fire on a kind the deployment told the redactor to
+  ignore, which in `reject` mode would delete mail for a deselected kind.
+- Reference labels such as `build number` and `support request number` no longer
+  read as a bank account and a card, so a reference number is not masked as
+  personal data.
 
 
 

@@ -28,6 +28,13 @@ Exit codes: `0` clean or warnings only, `1` blocking findings, `2` the gate coul
 not run. The hook fails open on `2`, loudly, because a broken seatbelt must not
 stop work.
 
+`2` is also what an unreadable ref list produces. Under `--stdin-refs` an empty
+or unparsable list means the gate never saw what the push would publish, and
+reporting that as `0` would be the one outcome worse than a false block: a push
+that was never scanned would look exactly like a push that passed. A line that is
+not a ref line (not `refs/... <sha> refs/... <sha>`, with `(delete)` allowed as
+the local ref of a branch deletion) is not turned into a target either.
+
 ## Two layers, on purpose
 
 The blocking layer is deterministic: regexes and filename rules. A leaked tenant
