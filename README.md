@@ -211,8 +211,10 @@ Capture without disclosure is surveillance, so ThreadWeave ships a privacy layer
 ## Tests
 
 ```bash
-uv run pytest -q      # 965 passed, 11 skipped on the latest release
+uv run pytest -q      # 964 passed, 12 skipped on a clean checkout
 ```
+
+With the optional decision runtime installed (`uv pip install -e ".[decisions]"`) the encoder availability test runs instead of skipping, which makes it 965 passed, 11 skipped. Every count here is from a verified run, not an estimate.
 
 The suite covers the connectors, the detection and decision layers, the confidentiality and PII gates, the opt-out registry, the audit log, the API, the MCP server and the CLI. It runs against temporary stores (`tests/conftest.py` redirects the audit log, the entry store and the notification queue), so it never touches a running installation's data.
 
