@@ -6,6 +6,40 @@ uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **`threadweave demo` makes a first run one command with no tenant.** A new
+  CLI command seeds 29 fictional entries across four wings and sixteen rooms
+  into its own SQLite database and its own palace path
+  (`~/.threadweave/demo.sqlite3`), and with `--serve` serves them, so the
+  capture, search and answer loop is visible in seconds without a Microsoft 365
+  or Google Workspace connection. `--reset` reseeds from scratch, `--profile
+  org` runs the same palace under the confidentiality gates so the filtering is
+  visible, and both the database and the palace path are forced rather than
+  inherited, so a demo can never read from or write to a real palace.
+
+### Fixed
+
+- **One entry with an unrecognised sensitivity no longer takes search down for
+  the whole tenant.** Sensitivity was parsed with a direct enum lookup inside
+  the read path, so a stored value outside the enum (a hyphenated display name
+  such as `hr-privileged` where the enum expects `hr_privileged`, written by a
+  connector, a hand-edited row, or an older client) raised `ValueError` and
+  `POST /api/v1/search` answered 500 for every query, not only for the entry
+  concerned. Unknown values now resolve to `restricted`, which requires a named
+  ACL, so a typo hides content instead of exposing it or breaking the request.
+- **Keyword search finds a topic that is the room it was filed in.** The
+  in-memory fallback matched entry content and title only, so searching
+  "escalation" returned nothing from the `support/escalation` room, and
+  "deployment" missed entries that say "deploy". Room and wing names now match,
+  and a query word that shares a prefix with a word in the text matches too,
+  both scored below exact content and title hits so exact matches still rank
+  first.
+- **Search previews no longer end mid-word.** `content_preview` was a hard
+  200-character slice, so results and the citations built from them read as
+  broken text ("lagging on indexin"). Previews now cut on the last word
+  boundary and mark the cut with an ellipsis.
+
 ## [0.4.19] — 2026-10-02
 
 ### Fixed

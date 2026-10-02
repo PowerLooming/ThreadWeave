@@ -1633,6 +1633,52 @@ async def optout_remove(req: OptOutRequest):
 
 # ---- Search (MemPalace hybrid + keyword fallback, tenant-aware, confidentiality-filtered) ----
 
+_WORD_RE = re.compile(r"[a-z0-9]{4,}")
+
+
+def _entity_text(entity: object) -> str:
+    """Entity names arrive as plain strings or as {type, value} dicts."""
+    if isinstance(entity, dict):
+        return str(entity.get("value") or "").lower()
+    return str(entity).lower()
+
+
+def _preview(text: str, limit: int = 200) -> str:
+    """Truncate a preview at a word boundary.
+
+    A hard slice ends mid-word ("...lagging on indexin"), which reads as
+    broken text in the search UI and in the citations built from it. Cut
+    on the last space instead, and mark the cut with an ellipsis so a
+    shortened preview never looks like the whole capture.
+    """
+    text = (text or "").strip()
+    if len(text) <= limit:
+        return text
+    cut = text[:limit].rsplit(" ", 1)[0]
+    return (cut or text[:limit]) + "…"
+
+
+def _shares_word_with(query_words: list[str], *texts: str) -> bool:
+    """True when a query word and a word in one of `texts` share a prefix.
+
+    Matches in both directions, so "deployment" finds "deploy" and
+    "deploy" finds "deployment", and only for words of four or more
+    characters so short function words cannot pull in half the palace.
+    Used only as the last resort in the keyword fallback: it never fires
+    ahead of an exact content or title hit.
+    """
+    long_query = [w for w in query_words if len(w) >= 4]
+    if not long_query:
+        return False
+    for text in texts:
+        if not text:
+            continue
+        for word in _WORD_RE.findall(text):
+            if any(word.startswith(q) or q.startswith(word) for q in long_query):
+                return True
+    return False
+
+
 @app.post("/api/v1/search", response_model=SearchResponse)
 async def search(req: SearchRequest, request: Request):
     """Search organizational memory.
@@ -1700,7 +1746,7 @@ async def search(req: SearchRequest, request: Request):
                     "title": "",
                     "wing": mr.wing,
                     "room": mr.room,
-                    "content_preview": mr.content[:200],
+                    "content_preview": _preview(mr.content),
                     "created_at": mr.created_at,
                     "author_team": mr.wing,
                     "author_id": getattr(mr, "author_id", "") or "",
@@ -1731,6 +1777,8 @@ async def search(req: SearchRequest, request: Request):
 
     # ── 2. Keyword fallback (in-memory store) ──
 
+    query_words = query_lower.split()
+
     for entry_id, entry in _memory_store.items():
         if entry_id in seen_ids:
             continue
@@ -1758,6 +1806,29 @@ async def search(req: SearchRequest, request: Request):
             and any(word in content_en_lower for word in query_lower.split())
         ):
             score = 0.3
+        if score == 0.0:
+            # Two gaps the plain substring pass leaves, both visible the
+            # moment you search a real palace (found by running the demo):
+            #   - Rooms are topics, so searching a topic name ("escalation")
+            #     must find support/escalation even though no entry contains
+            #     that literal word.
+            #   - A query word is often a different form of the one in the
+            #     text ("deployment" vs "deploy"), which substring matching
+            #     misses in both directions.
+            # Both score below the 0.8/0.6/0.3 branches, so exact matches
+            # still rank first.
+            room_lower = entry["room"].lower()
+            wing_lower = entry["wing"].lower()
+            if query_lower in room_lower or query_lower in wing_lower:
+                score = 0.45
+            elif any(w in room_lower or w in wing_lower for w in query_words):
+                score = 0.25
+            elif _shares_word_with(
+                query_words,
+                content_lower, content_en_lower, title_lower,
+                *(_entity_text(e) for e in entry.get("entities", [])),
+            ):
+                score = 0.2
         if score > 0:
             seen_ids.add(entry_id)
             results.append({
@@ -1765,7 +1836,7 @@ async def search(req: SearchRequest, request: Request):
                 "title": entry.get("title", ""),
                 "wing": entry["wing"],
                 "room": entry["room"],
-                "content_preview": entry["content"][:200],
+                "content_preview": _preview(entry["content"]),
                 "created_at": entry["created_at"],
                 "author_team": entry["wing"],
                 "author_id": entry.get("author_id", ""),

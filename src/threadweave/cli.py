@@ -810,6 +810,95 @@ def cmd_gws_onboard(args):
           f"{len(brief['predecessor_knowledge']) + len(brief['team_knowledge'])}")
 
 
+def cmd_demo(args):
+    """Seed a fictional palace and (optionally) serve it.
+
+    The point is a first run with no tenant: no Microsoft 365, no Google
+    Workspace, no MemPalace, no credentials. It writes to its own
+    throwaway SQLite database and its own MemPalace path, so a demo can
+    never read from — or write to — a real palace.
+    """
+    from pathlib import Path as _Path
+
+    from threadweave.demo_data import demo_entries, demo_summary
+
+    db_path = _Path(args.db).expanduser() if args.db else \
+        _Path.home() / ".threadweave" / "demo.sqlite3"
+
+    if args.reset and db_path.exists():
+        db_path.unlink()
+
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    url = f"sqlite:///{db_path}"
+
+    # Set BEFORE importing the store or the API: both read the env at
+    # construction time. MEMPALACE_PALACE_PATH is forced (not setdefault)
+    # so demo search can never surface a real on-prem palace's contents.
+    os.environ["THREADWEAVE_ENTRY_DB"] = url
+    os.environ["MEMPALACE_PALACE_PATH"] = str(db_path.parent / "demo-palace")
+
+    # A person trying this with no tenant has no org clearances, so the
+    # default reader is the single-user profile: the owner sees the whole
+    # demo palace instead of the internal-only slice, which is what makes
+    # "search anything" work on a first run. --profile org swaps in the
+    # real clearance gates, where confidential/HR/client entries are
+    # filtered out of the results.
+    profile = args.profile or os.environ.get("THREADWEAVE_PROFILE") or "personal"
+    os.environ["THREADWEAVE_PROFILE"] = profile
+
+    from threadweave.store import EntryStore
+
+    store = EntryStore(url=url)
+    entries = demo_entries()
+    for entry in entries:
+        store.save(entry)
+    stored = store.count()
+
+    if not args.quiet:
+        print()
+        print("ThreadWeave demo — a fictional palace, no tenant required")
+        print("=" * 62)
+        print(f"\n  {stored} entries in {db_path}")
+        print("  Fictional data only. Your own entries are not touched.\n")
+
+        for wing, rooms in demo_summary(entries).items():
+            total = sum(rooms.values())
+            print(f"  {wing}/  ({total})")
+            for room, count in sorted(rooms.items(), key=lambda kv: -kv[1]):
+                print(f"      {room:<16} {count}")
+            print()
+
+    host_port = f"{args.host}:{args.port}"
+
+    if args.serve:
+        print(f"  Serving at http://{host_port}/    (UI, profile: {profile})")
+        print(f"  API docs at http://{host_port}/docs\n")
+        print("  Ctrl+C to stop.\n")
+        import uvicorn
+
+        uvicorn.run("threadweave.api:app", host=args.host, port=args.port,
+                    log_level="warning")
+        return
+
+    if not args.quiet:
+        print(f"  Reader profile: {profile}")
+        print("  Serve it:")
+        print(f"    threadweave demo --serve --port {args.port}")
+        print(f"    → http://{host_port}/            (search UI)")
+        print(f"    → http://{host_port}/docs        (REST API)")
+        print()
+        print("  Or query it once the server is up:")
+        print(f"    curl -s http://{host_port}/api/v1/search \\")
+        print("      -H 'Content-Type: application/json' \\")
+        print("      -d '{\"query\": \"postgres\"}'")
+        print()
+        print("  See the confidentiality gates filter results:")
+        print("    threadweave demo --serve --profile org")
+        print()
+        print("  Start over with:  threadweave demo --reset")
+        print()
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="ThreadWeave — Organizational Memory System",
@@ -837,6 +926,30 @@ def build_parser() -> argparse.ArgumentParser:
     p_save.add_argument("--author", default="cli-user")
     p_save.add_argument("--host", default="localhost")
     p_save.add_argument("--port", type=int, default=8000)
+
+    # demo — a populated palace with no tenant required
+    p_demo = sub.add_parser(
+        "demo", help="Seed a fictional palace and try it with no tenant")
+    p_demo.add_argument(
+        "--db", default=None,
+        help="SQLite file for the demo palace "
+             "(default: ~/.threadweave/demo.sqlite3)")
+    p_demo.add_argument(
+        "--reset", action="store_true",
+        help="Delete the demo database first, then reseed")
+    p_demo.add_argument(
+        "--serve", action="store_true",
+        help="Seed, then start the API server and UI against the demo palace")
+    p_demo.add_argument("--host", default="127.0.0.1")
+    p_demo.add_argument("--port", type=int, default=8000)
+    p_demo.add_argument(
+        "--profile", choices=["personal", "org"], default=None,
+        help="Reader profile: 'personal' (default) is the single-user "
+             "palace where the owner sees everything; 'org' applies the "
+             "confidentiality gates so you can watch them filter results. "
+             "Respects THREADWEAVE_PROFILE when the flag is omitted.")
+    p_demo.add_argument(
+        "--quiet", action="store_true", help="Seed only, print nothing")
 
     # serve
     p_serve = sub.add_parser("serve", help="Start the API server")
@@ -1105,6 +1218,8 @@ def main() -> None:
         cmd_search(args)
     elif args.command == "save":
         cmd_save(args)
+    elif args.command == "demo":
+        cmd_demo(args)
     elif args.command == "serve":
         cmd_serve(args)
     elif args.command == "mcp":

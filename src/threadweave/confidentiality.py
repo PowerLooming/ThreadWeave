@@ -100,6 +100,40 @@ class SensitivityLevel(str, Enum):
         return order.index(requester_level) >= order.index(self)
 
 
+def parse_sensitivity(
+    value: object,
+    default: SensitivityLevel = SensitivityLevel.INTERNAL,
+) -> SensitivityLevel:
+    """Parse a stored sensitivity value, failing CLOSED on unknown strings.
+
+    Ingested content is not guaranteed to carry a value this enum knows:
+    a connector, a hand-edited row, or a display-form name written by an
+    older client ("hr-privileged" instead of the enum's "hr_privileged")
+    produces a string that raises ValueError inside enum lookup. Because
+    that lookup sits inside the read path, one such entry used to 500 the
+    whole search request for everyone (found live: a demo entry labelled
+    "hr-privileged" made POST /api/v1/search return 500 rather than
+    filtering the entry out).
+
+    Unknown values resolve to RESTRICTED, which requires a named ACL, so
+    a typo hides content instead of exposing it or crashing the request.
+    An empty or missing value keeps the documented default.
+    """
+    if isinstance(value, SensitivityLevel):
+        return value
+    text = str(value or "").strip()
+    if not text:
+        return default
+    try:
+        return SensitivityLevel(text)
+    except ValueError:
+        logger.warning(
+            "Unknown sensitivity %r — treating as %s (fail closed)",
+            text, SensitivityLevel.RESTRICTED.value,
+        )
+        return SensitivityLevel.RESTRICTED
+
+
 # ═══════════════════════════════════════════════════════════════════════
 # Confidentiality signals — regex patterns for auto-detection
 # ═══════════════════════════════════════════════════════════════════════
@@ -335,7 +369,7 @@ class RequesterContext:
         4. Person-level ACL (for RESTRICTED)
         5. Special wing gating (HR wing → only HR people)
         """
-        sensitivity = entry_sensitivity or SensitivityLevel(
+        sensitivity = entry_sensitivity or parse_sensitivity(
             entry.get("sensitivity", "internal")
         )
 
