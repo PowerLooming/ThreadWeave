@@ -57,13 +57,25 @@ class TestDemoDataset:
         assert len({room for rooms in summary.values() for room in rooms}) >= 8
 
     def test_dataset_is_fictional(self):
-        """No real tenant, company or person belongs in public demo data."""
-        blob = " ".join(
-            f"{e['title']} {e['content']} {e['author_id']}"
-            for e in demo_entries()
-        ).lower()
-        for forbidden in ("onmicrosoft.com", "kongsberg", "lqdx", "acme-corp"):
-            assert forbidden not in blob
+        """No real tenant, tenant domain or address belongs in public demo
+        data.
+
+        The check is deliberately structural rather than a list of banned
+        strings: naming the terms here would publish the very identifiers
+        the pre-push gate exists to keep out of the repository (it caught
+        an earlier draft of this test for exactly that reason).
+        """
+        for entry in demo_entries():
+            blob = (
+                f"{entry['title']} {entry['content']} "
+                f"{entry['author_id']} {entry['source_metadata']}"
+            ).lower()
+            assert "onmicrosoft.com" not in blob
+            # Bare handles only: no addresses means no real domain, and no
+            # plausible mailbox for a connector to write to.
+            assert "@" not in blob
+            assert entry["tenant_id"] == DEMO_TENANT
+            assert " " not in entry["author_id"]
 
 
 # ── seeding ───────────────────────────────────────────────────────
