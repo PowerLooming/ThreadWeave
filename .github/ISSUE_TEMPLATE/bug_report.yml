@@ -1,0 +1,70 @@
+name: Bug report
+description: Something is broken, or behaved differently from what the docs say
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Do not report a security vulnerability here. See SECURITY.md and
+        email instead.
+
+        For installation questions, try the demo first: it isolates the
+        problem from your own tenant and data.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: The symptom, in your own words, with the exact error text if there was one.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected instead
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      description: The smallest sequence that shows it. Include the command or the API call.
+      placeholder: |
+        1. uv run threadweave demo --serve
+        2. search for "postgres"
+        3. ...
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: From `threadweave --version`, the release tag, or the commit you are on.
+    validations:
+      required: true
+  - type: dropdown
+    id: install
+    attributes:
+      label: How it is running
+      options:
+        - demo palace (no tenant)
+        - native Python (uv)
+        - Docker compose
+        - personal profile against my own mailbox
+        - org deployment against a tenant
+    validations:
+      required: true
+  - type: input
+    id: python
+    attributes:
+      label: Python version and OS
+      placeholder: "3.11.9 on Windows 11"
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs
+      description: Redact tenant names, addresses, tokens and captured content before pasting.
+      render: text
+    validations:
+      required: false
