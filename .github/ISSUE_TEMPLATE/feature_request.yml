@@ -1,0 +1,47 @@
+name: Feature request
+description: Suggest a capability, a connector, or a change in behaviour
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What are you trying to do that ThreadWeave does not let you do today?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What you would like it to do
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: What you tried instead
+      description: Workarounds, other tools, or the part of the API you used to get close.
+    validations:
+      required: false
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - connectors (Microsoft 365, Google Workspace, files)
+        - detection and classification
+        - memory and search
+        - confidentiality, PII and privacy
+        - API, CLI or MCP server
+        - deployment and packaging
+        - documentation
+    validations:
+      required: true
+  - type: checkboxes
+    id: constraints
+    attributes:
+      label: Constraints this must respect
+      description: ThreadWeave runs on-prem, so a few things are load-bearing.
+      options:
+        - label: It must work with no data leaving the on-prem host
+        - label: It must not need new tenant admin consent
+        - label: It must work with a local model (no cloud API required)

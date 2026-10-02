@@ -1,19 +1,54 @@
 # ThreadWeave — Organizational Memory System
 
-MIT License. Wraps MemPalace for enterprise organizational knowledge capture and retrieval.
-
 **Every thread, woven into memory.**
 
-🌐 **[threadweave.net](https://threadweave.net)**
+ThreadWeave is a self-hosted organizational memory system. It reads the email, chat and documents your team already writes, pulls out the decisions and answers buried in them, and files them into one searchable palace. MIT licensed, no cloud dependency, no external API calls, runs on your hardware.
 
-## Quick Start (Native Python)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg)](pyproject.toml)
+[![Latest release](https://img.shields.io/github/v/release/PowerLooming/ThreadWeave)](https://github.com/PowerLooming/ThreadWeave/releases)
+
+🌐 **[threadweave.net](https://threadweave.net)** · [How it works](https://threadweave.net/how)
+
+![ThreadWeave search: captured decisions returned with their wing, room and source](assets/screenshots/demo-search.png)
+
+## What it does
+
+- **Reads what you already write.** Microsoft 365 mail and Teams, Gmail, Google Chat and Drive, SharePoint and OneNote, plus IMAP, exported `.eml` files and anything you post to the API.
+- **Keeps the decisions, drops the noise.** A two-tier detector scores every message, so the palace collects answers, decisions and runbooks rather than "thanks, sounds good".
+- **Files it like a palace.** Wings are teams, rooms are topics, and each drawer holds one capture with its source, date and author. Related knowledge is linked, so one team's solution surfaces in another team's problem.
+- **Answers with the receipt.** Every result cites the message or document behind it, with a deep link back to the original.
+- **Fails closed on privacy.** Seven confidentiality levels detected at ingest and enforced at read, PII stripped before storage, per-person opt-out, audited deletion. See [docs/privacy.md](docs/privacy.md).
+
+## Try it in one command, no tenant required
+
+Prerequisites: Python 3.11+ and [uv](https://docs.astral.sh/uv/getting-started/installation/).
+
+```bash
+git clone https://github.com/PowerLooming/ThreadWeave
+cd ThreadWeave
+bash setup.sh                      # venv + editable install
+uv run threadweave demo --serve    # seed a fictional palace and serve it
+# → UI:        http://127.0.0.1:8000/
+# → REST docs: http://127.0.0.1:8000/docs
+```
+
+The demo seeds 29 fictional entries across four wings and sixteen rooms, then serves them, so search returns real results in seconds and you can see the whole capture, search and answer loop before connecting anything. It writes to its own database and its own palace path (`~/.threadweave/demo.sqlite3`), so it can never read or write your real captures. Nothing in it is real: invented people, invented company, no tenant.
+
+```bash
+uv run threadweave demo                  # seed only, print the palace layout
+uv run threadweave demo --reset          # start over from a clean palace
+uv run threadweave demo --serve --profile org   # watch the clearance gates filter results
+```
+
+## Install (native Python)
 
 ```bash
 # Prerequisites: Python 3.11+ and uv
 # Install uv: https://docs.astral.sh/uv/getting-started/installation/
 
-# Clone or copy this directory to your machine, then:
-cd threadweave
+git clone https://github.com/PowerLooming/ThreadWeave
+cd ThreadWeave
 bash setup.sh
 ```
 
@@ -25,7 +60,7 @@ source .venv/Scripts/activate   # Windows
 uv pip install -e ".[dev]"
 ```
 
-## Quick Start (Docker)
+## Install (Docker)
 
 ```bash
 # Clone the repo
@@ -172,6 +207,16 @@ Capture without disclosure is surveillance, so ThreadWeave ships a privacy layer
         │  Rank → Filter → Audit    │
         └──────────────────────────┘
 ```
+
+## Tests
+
+```bash
+uv run pytest -q      # 964 passed, 12 skipped on a clean checkout
+```
+
+With the optional decision runtime installed (`uv pip install -e ".[decisions]"`) the encoder availability test runs instead of skipping, which makes it 965 passed, 11 skipped. Every count here is from a verified run, not an estimate.
+
+The suite covers the connectors, the detection and decision layers, the confidentiality and PII gates, the opt-out registry, the audit log, the API, the MCP server and the CLI. It runs against temporary stores (`tests/conftest.py` redirects the audit log, the entry store and the notification queue), so it never touches a running installation's data.
 
 ## Documentation
 

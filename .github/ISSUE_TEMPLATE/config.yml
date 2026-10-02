@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/PowerLooming/ThreadWeave/blob/master/SECURITY.md
+    about: Please report security issues privately by email, not as a public issue.
+  - name: Question or idea
+    url: https://github.com/PowerLooming/ThreadWeave/discussions
+    about: Ask in Discussions, where the answer stays searchable for the next person.
