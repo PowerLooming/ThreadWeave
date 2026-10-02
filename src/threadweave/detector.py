@@ -13,7 +13,7 @@ Heuristic-based (no LLM required for classification). Classifies text into:
 
 import logging
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import Enum
 from typing import Optional
 
@@ -228,7 +228,65 @@ KNOWN_TECHS = [
 ]
 
 
+# ── Pattern evidence fused into the verdict ──────────────────────
+
+
+def _pattern_pii_counts(text: str) -> dict[str, int]:
+    """Kinds and counts of identifiers the pattern scan can see.
+
+    Reuses the redactor's patterns rather than keeping a second set of PII
+    patterns: a verdict that fires on something the redactor cannot replace
+    reports a redaction that never happened. The kind set is resolved once, in
+    :func:`threadweave.text_hygiene.configured_kinds`, so the verdict and the
+    redactor always act on the same set.
+    """
+    try:
+        from threadweave.text_hygiene import configured_kinds, redact_identifiers
+
+        return redact_identifiers(text, kinds=configured_kinds()).counts
+    except Exception:
+        logger.debug("pattern PII scan failed", exc_info=True)
+        return {}
+
+
+def fuse_pattern_pii(result: DetectionResult, text: str) -> DetectionResult:
+    """OR the identifier scan into an engine's verdict.
+
+    Why this exists: a national ID, a card number or a mobile is pattern-shaped,
+    while ``has_pii`` is answered by a model as an opinion against a bar (0.75 by
+    default). Measured on real mail, the local encoder scores a message carrying a
+    mobile around 0.06, so the verdict came back clean and the redaction step,
+    which is gated on that verdict, was never reached: the message was stored with
+    the identifier intact. Pattern evidence is not an opinion. When the scan finds
+    an identifier the verdict is PII, whatever the model said, and the semantic
+    half of the PII question (names, relationships, health) stays with the model.
+
+    Idempotent: the async wrappers fuse the result of an engine that may already
+    have fused it.
+    """
+    prefix = "pii_patterns("
+    if any(s.startswith(prefix) for s in result.signals):
+        return result
+    counts = _pattern_pii_counts(text)
+    if not counts:
+        return result
+    summary = ", ".join(f"{kind}={n}" for kind, n in sorted(counts.items()))
+    return replace(
+        result, has_pii=True, signals=[*result.signals, f"{prefix}{summary})"]
+    )
+
+
 def detect(text: str, min_length: int = 50) -> DetectionResult:
+    """Classify text, with the identifier scan fused into the verdict.
+
+    The regex engine's own PII patterns stay where they are; this adds the
+    measured identifier patterns from ``text_hygiene`` on top, so the
+    synchronous path and the modelled paths agree on what counts as PII.
+    """
+    return fuse_pattern_pii(_detect_regex(text, min_length), text)
+
+
+def _detect_regex(text: str, min_length: int = 50) -> DetectionResult:
     """Classify text and determine if it should be saved as organizational knowledge.
 
     Args:
@@ -457,6 +515,9 @@ async def detect_async(text: str, min_length: int = 50) -> DetectionResult:
     a model reply; it returns the same DetectionResult the callers already
     expect, so nothing downstream changes.
 
+    Whichever engine answers, the identifier scan is fused into its verdict
+    (:func:`fuse_pattern_pii`) before it is returned.
+
     To enable the LLM detector, set THREADWEAVE_LLM_BASE_URL to an endpoint
     you run, plus THREADWEAVE_LLM_API_KEY only if that endpoint needs a key.
     Those are the only names read: nothing reads OPENAI_API_KEY or
@@ -468,14 +529,14 @@ async def detect_async(text: str, min_length: int = 50) -> DetectionResult:
 
         gate = get_decision_gate()
         if gate is not None:
-            return await gate.detect(text, min_length)
+            return fuse_pattern_pii(await gate.detect(text, min_length), text)
     except Exception as exc:
         logger.debug("decision gate unavailable, falling back: %s", exc)
     try:
         from threadweave.llm_detector import get_llm_detector
         llm = get_llm_detector()
         if llm is not None:
-            return await llm.detect(text, min_length)
+            return fuse_pattern_pii(await llm.detect(text, min_length), text)
     except Exception:
         pass
     return detect(text, min_length)
@@ -490,23 +551,36 @@ async def is_worth_saving_async(
     LLMDetector (multilingual) is used when a key/base URL is configured,
     and the regex classifier is the last resort. The same ``threshold``
     applies to every engine, so tuning stays consistent across them.
+
+    The identifier scan is fused into the engine's verdict
+    (:func:`fuse_pattern_pii`), so a model that answers "no PII" cannot stop a
+    mobile number or a card from being redacted downstream. ``should_save`` is
+    left alone: knowledge and safety are separate questions.
     """
     try:
         from threadweave.decision_gate import get_decision_gate
 
         gate = get_decision_gate()
         if gate is not None:
-            return await gate.is_worth_saving(text, threshold=threshold)
+            should_prompt, result = await gate.is_worth_saving(
+                text, threshold=threshold
+            )
+            return should_prompt, fuse_pattern_pii(result, text)
     except Exception as exc:
         logger.debug("decision gate unavailable, falling back: %s", exc)
     try:
         from threadweave.llm_detector import get_llm_detector
+
         llm = get_llm_detector()
         if llm is not None:
-            return await llm.is_worth_saving(text, threshold=threshold)
+            should_prompt, result = await llm.is_worth_saving(
+                text, threshold=threshold
+            )
+            return should_prompt, fuse_pattern_pii(result, text)
     except Exception:
         pass
-    return is_worth_saving(text, threshold=threshold)
+    should_prompt, result = is_worth_saving(text, threshold=threshold)
+    return should_prompt, fuse_pattern_pii(result, text)
 
 
 async def translate_async(text: str, target: str = "en") -> Optional[str]:
