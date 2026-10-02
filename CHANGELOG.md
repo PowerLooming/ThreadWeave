@@ -6,6 +6,8 @@ uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.4.19] — 2026-10-02
+
 ### Fixed
 
 - **The audit trail folds repeats instead of burying the signal.** One retrying
