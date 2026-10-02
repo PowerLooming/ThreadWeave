@@ -232,6 +232,12 @@ class TestProviderPlumbing:
         assert EncoderDecisionProvider(model="fake/encoder", pipeline=FakePipeline()).is_available()
 
     def test_is_available_does_not_load_weights(self):
+        # Availability is gated on the optional decision runtime, so this
+        # only means anything where the runtime is installed (the `decisions`
+        # extra). Skipping keeps a clean dev checkout green for the right
+        # reason instead of failing on a missing optional dependency.
+        pytest.importorskip("torch")
+        pytest.importorskip("transformers")
         built = []
 
         provider = EncoderDecisionProvider(

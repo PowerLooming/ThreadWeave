@@ -140,7 +140,6 @@ def test_postgres_save_load_delete():
 
 def test_sql_compiles_for_postgresql_dialect():
     """The store's SQL must compile for the PG dialect (no server needed)."""
-    from sqlalchemy import create_engine
     from sqlalchemy.dialects import postgresql
     from sqlalchemy import text
 
@@ -158,7 +157,10 @@ def test_sql_compiles_for_postgresql_dialect():
         "ON CONFLICT(id) DO UPDATE SET "
         + ", ".join(f"{c} = excluded.{c}" for c in cols if c != "id")
     )
-    engine = create_engine("postgresql://u:p@h/db", _initialize=False)
+    # No engine here on purpose: compiling against the dialect object is the
+    # whole test, and create_engine() would resolve a DBAPI driver, so a
+    # checkout without the optional postgres driver failed a test that needs
+    # no server and no driver.
     compiled = str(text(upsert).compile(dialect=postgresql.dialect()))
     assert compiled.startswith("INSERT INTO entries")
     assert "ON CONFLICT" in compiled
