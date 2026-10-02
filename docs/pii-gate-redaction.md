@@ -1,6 +1,6 @@
 # PII gate: redact instead of delete, and do not let signatures decide
 
-Status: implemented on branch `feat/pii-redaction-and-signature-strip`, not pushed.
+Status: shipped (merged), live in 0.4.17.
 Mechanisms in `src/threadweave/text_hygiene.py`, wired into the ingest endpoint in
 `src/threadweave/api.py`, tests in `tests/test_text_hygiene.py` and
 `tests/test_api_pii_redaction.py`. Evidence below is measured; see the last two sections.
@@ -17,9 +17,10 @@ Mechanisms in `src/threadweave/text_hygiene.py`, wired into the ingest endpoint 
   code and place, labelled person identifiers (`Medlemsnummer: 10000001`, `Kundenr 123456`)
   and (when asked) email addresses with typed placeholders. Decodes HTML entities first and
   masks URLs, hashes and base64 runs before matching. Shape patterns skip a number that
-  follows a transaction label (`Ordrenummer`, `Fakturanr`, `Sak`), because a reference is
-  not a person's identifier: `Fakturanr 99887766` is eight digits starting with 9 and
-  otherwise reads as a mobile.
+  follows a transaction label (`Ordrenummer`, `Fakturanr`, `Sak`, `request number`, `build
+  number`), because a reference is not a person's identifier: `Fakturanr 99887766` is eight
+  digits starting with 9 and otherwise reads as a mobile, and a Microsoft support ticket
+  number is sixteen digits and otherwise reads as a card.
 - `is_identifier_only(text)` — structural test for content whose substance is the
   identifiers, a pasted roster or ID list, the one case where redaction leaves nothing.
 - Ingest wiring: the detector now sees the signature-stripped text; a PII verdict redacts
@@ -126,6 +127,31 @@ Configuration: `THREADWEAVE_PII_MODE` with `redact` as the default and `reject` 
 deployments that want the old behaviour, plus `THREADWEAVE_PII_REDACT_KINDS` to select the
 kinds. The reject bar keeps its meaning for the identifier-only case; it no longer decides
 whether a normal message is lost.
+
+## Pattern evidence is fused into the verdict
+
+Redaction is gated on `result.has_pii`, and under a decision provider that flag is the model's
+opinion against `pii_reject_at` (0.75). Measured live on 2026-10-02 (version 0.4.17, provider
+`encoder`): a message carrying a Norwegian mobile, a `Kundenr` and a card number scored
+`pii=0.06`, came back `has_pii: false, redacted: null`, and was stored with all three
+identifiers intact. The patterns that were built for exactly that case were never consulted,
+because `detector.PII_PATTERNS` runs only on the regex-fallback path, which the gate
+pre-empts.
+
+`detector.fuse_pattern_pii` ORs the identifier scan into every engine's verdict, and both
+`detect_async` and `is_worth_saving_async` apply it, so the synchronous path, the modelled
+paths and `/api/v1/detect` all agree on what counts as PII. The scan reuses the redactor's own
+patterns and the kind set from `text_hygiene.configured_kinds`, which the redactor also reads:
+a verdict that fires on something the redactor cannot replace would report a redaction that
+never happened, and in `reject` mode a verdict broader than the configured kinds would delete
+mail for a kind the deployment had deselected.
+
+Fusion does not touch `should_save`. Worth-saving is a question about knowledge, the PII
+verdict is a question about safety, and one must not decide the other.
+
+The semantic half stays with the model, as described below: a name with relationship framing
+has no pattern to match, and the fusion is honest about that rather than pretending the
+pattern layer covers it.
 
 ## What this deliberately does not solve
 

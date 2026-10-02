@@ -29,8 +29,12 @@ first loses knowledge, the second corrupts it.
 from __future__ import annotations
 
 import html
+import logging
+import os
 import re
 from dataclasses import dataclass, field
+
+logger = logging.getLogger(__name__)
 
 __all__ = [
     "SignatureStrip",
@@ -42,6 +46,7 @@ __all__ = [
     "is_identifier_only",
     "KIND_PATTERNS",
     "DEFAULT_KINDS",
+    "configured_kinds",
 ]
 
 
@@ -196,9 +201,23 @@ KIND_PATTERNS: dict[str, re.Pattern | tuple[re.Pattern, int]] = {
 # identifier. Measured need: "Fakturanr 99887766" is eight digits starting with 9
 # and reads as a Norwegian mobile to a shape pattern. The guard keeps shapes from
 # masking invoice, order, case and parcel numbers.
+#
+# Build, release and request labels joined the list when the pattern scan was
+# fused into the verdict (2026-10-02), because the fusion made the guard's
+# decisions visible for the first time. Measured in the live store: the two
+# entries the sweep flagged were both support-ticket mail, "Your service request
+# number is <16 digits>" and "Support request number: <16 digits>", which the card
+# pattern reads as a card. A build number is a bank-account shape the same way
+# ("The build number 1234.56.78901"). A reference stays a reference whatever shape
+# it happens to have, and masking one corrupts the stored knowledge for no
+# protection. The optional "is"/"=" covers the prose form a label takes in mail
+# rather than the "Label:" form.
 TXN_CONTEXT = re.compile(
-    r"(?i)(?:ordre|order|faktura|invoice|sak|case|bilag|kvittering|referanse|ref|"
-    r"pakke|sporing|tracking|serie|batch)(?:nr|no|nummer|id)?[:#\s-]{0,4}$"
+    r"(?i)(?:(?:ordre|order|faktura|invoice|sak|case|bilag|kvittering|referanse|ref|"
+    r"pakke|sporing|tracking|serie|batch)(?:nr|no|nummer|id)?"
+    r"|(?:build|version|versjon|release|utgave|bygg)[\s-]?(?:number|nr|no|nummer)?"
+    r"|(?:service|support)?[\s-]?request[\s-]?(?:number|no|nr|id)?)"
+    r"(?:\s*(?:is|=))?[:#\s-]{0,4}$"
 )
 
 # Kinds that are pure shapes and therefore need the guard. A labelled identifier
@@ -341,3 +360,34 @@ def sanitise(
     """
     sig = strip_signature(text) if strip else SignatureStrip(text, False, "disabled")
     return sig.text, redact_identifiers(sig.text, kinds=kinds), sig
+
+
+_ENV_REDACT_KINDS = "THREADWEAVE_PII_REDACT_KINDS"
+
+
+def configured_kinds(raw: str | None = None) -> tuple[str, ...]:
+    """Which identifier kinds this deployment acts on.
+
+    ``THREADWEAVE_PII_REDACT_KINDS``, comma-separated, defaulting to every kind in
+    :data:`DEFAULT_KINDS`. The verdict
+    (:func:`threadweave.detector.fuse_pattern_pii`) and the redactor (the ingest
+    endpoint) both resolve the set here, so a verdict can never fire on a kind the
+    operator has told the redactor to ignore. In ``reject`` mode that mismatch would
+    delete mail for a kind the deployment had deselected.
+
+    Unknown names are ignored with a warning, and a list that resolves to nothing
+    falls back to the full set: a typo must not be able to disable the gate silently.
+    """
+    if raw is None:
+        raw = os.environ.get(_ENV_REDACT_KINDS) or ""
+    raw = raw.strip()
+    if not raw:
+        return DEFAULT_KINDS
+    wanted = [name.strip().lower() for name in raw.split(",") if name.strip()]
+    unknown = [name for name in wanted if name not in KIND_PATTERNS]
+    if unknown:
+        logger.warning(
+            "Ignoring unknown %s entries: %s", _ENV_REDACT_KINDS, ", ".join(unknown)
+        )
+    kinds = tuple(name for name in wanted if name in KIND_PATTERNS)
+    return kinds or DEFAULT_KINDS

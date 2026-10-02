@@ -76,17 +76,10 @@ def _pii_redact_kinds() -> tuple[str, ...]:
     only loses a reference. Unknown names are ignored with a warning instead of
     failing the ingest.
     """
-    from threadweave.text_hygiene import DEFAULT_KINDS, KIND_PATTERNS
+    from threadweave.text_hygiene import configured_kinds
 
-    raw = (os.environ.get(_ENV_PII_KINDS) or "").strip()
-    if not raw:
-        return DEFAULT_KINDS
-    wanted = [name.strip().lower() for name in raw.split(",") if name.strip()]
-    unknown = [name for name in wanted if name not in KIND_PATTERNS]
-    if unknown:
-        logger.warning("Ignoring unknown %s entries: %s", _ENV_PII_KINDS, ", ".join(unknown))
-    kinds = tuple(name for name in wanted if name in KIND_PATTERNS)
-    return kinds or DEFAULT_KINDS
+    return configured_kinds()
+
 
 app = FastAPI(
     title="ThreadWeave API",
