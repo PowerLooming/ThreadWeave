@@ -50,6 +50,9 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 ZERO_SHA = "0" * 40
+# A ref line from git is "refs/... <sha> refs/... <sha>". Anything else on stdin
+# is not a ref line, and treating it as one would scan nothing and report success.
+_SHA_RE = re.compile(r"^[0-9a-f]{40}$|^[0-9a-f]{64}$")
 DEFAULT_RULES_PATH = "scripts/prepush_rules.toml"
 PRIVATE_ENV = "THREADWEAVE_PREPUSH_PRIVATE"
 
@@ -848,6 +851,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         return 0
 
     targets: List[Target] = []
+    ref_lines = 0  # ref lines actually parsed, deletions included
     if args.stdin_refs or args.refs_file:
         raw = (
             Path(args.refs_file).read_text(encoding="utf-8")
@@ -859,6 +863,15 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             if len(parts) < 4:
                 continue
             local_ref, local_sha, remote_ref, remote_sha = parts[:4]
+            # git sends "(delete)" as the local ref for a branch deletion, so that
+            # literal is part of the format rather than a malformed line.
+            if not (
+                local_ref.startswith("refs/") or local_ref == "(delete)"
+            ) or not remote_ref.startswith("refs/"):
+                continue
+            if not _SHA_RE.match(local_sha) or not _SHA_RE.match(remote_sha):
+                continue
+            ref_lines += 1
             remote = remote_ref.split("/", 1)[0] if "/" in remote_ref else "origin"
             if local_sha == ZERO_SHA:
                 continue  # branch deletion: nothing becomes public
@@ -876,6 +889,18 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         parser.error("one of --stdin-refs, --refs-file or --all is required")
 
     if not targets:
+        if (args.stdin_refs or args.refs_file) and ref_lines == 0:
+            # The hook reads the ref list from stdin. An empty or unparsable list
+            # means the gate never saw what the push would publish, and reporting
+            # that as a clean scan is the one failure worse than blocking: a push
+            # that was never scanned looks identical to one that passed.
+            print(
+                "prepush-gate: could not read the push refs "
+                f"({'file' if args.refs_file else 'stdin'} gave no ref line), "
+                "so nothing was scanned",
+                file=sys.stderr,
+            )
+            return 2
         if not args.quiet:
             print("prepush-gate: nothing to scan")
         return 0

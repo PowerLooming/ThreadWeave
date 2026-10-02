@@ -2176,7 +2176,11 @@ async def get_audit_recent(
         entries = [e for e in entries if e.get("tenant_id", "default") == scoped]
     return {
         "entries": entries,
+        # total counts rows, events counts access attempts: a folded run of one
+        # client retrying is a single row carrying its count, so an operator can
+        # tell "58 refusals" from "one refusal 12,248 times" at a glance.
         "total": len(entries),
+        "events": sum(int(e.get("count", 1) or 1) for e in entries),
     }
 
 

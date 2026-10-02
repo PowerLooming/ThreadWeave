@@ -21,7 +21,7 @@ ThreadWeave captures organizational knowledge so nobody has to ask the person wh
 ### 1. Transparency (what we watch, what we captured)
 
 - Every entry records provenance: `source` (teams / email / sharepoint / onenote), `author_id`, `source_file`, `created_at`, and wing/room.
-- The audit log (`GET /api/v1/audit/recent`, SQLite at `~/.threadweave/audit.sqlite3`) records every sensitive access, denied attempt, and deletion.
+- The audit log (`GET /api/v1/audit/recent`, SQLite at `~/.threadweave/audit.sqlite3`) records every sensitive access, denied attempt, and deletion. Repeated identical events (the same requester retrying a denial) fold into one row carrying `count`, `first_seen` and the last event's `timestamp`, so a runaway client cannot bury the distinct events behind a wall of repeats; the endpoint reports both `total` rows and `events` recorded.
 - The dashboard shows what the system watches and what it has captured.
 
 ### 2. Consent at capture (Teams)
