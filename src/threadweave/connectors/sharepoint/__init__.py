@@ -15,10 +15,7 @@ Authentication:
     Required scopes: Sites.Read.All, Files.Read.All
 """
 
-from threadweave.connectors.sharepoint.watcher import (
-    GraphClient,
-    WebhookManager,
-)
+from threadweave.connectors.sharepoint.watcher import GraphClient
 from threadweave.connectors.sharepoint.processor import DocumentProcessor
 
-__all__ = ["GraphClient", "WebhookManager", "DocumentProcessor"]
+__all__ = ["GraphClient", "DocumentProcessor"]

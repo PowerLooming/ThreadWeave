@@ -28,6 +28,23 @@ uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   visible, and both the database and the palace path are forced rather than
   inherited, so a demo can never read from or write to a real palace.
 
+### Removed
+
+- **The dormant Graph push path is gone from the SharePoint and email
+  connectors.** `threadweave.connectors.sharepoint.WebhookManager` (with its
+  `Subscription` and `ChangeNotification` dataclasses and the
+  `discover_and_watch` helper), `MailWatcher.create_mail_subscription` and
+  `DocumentProcessor.process_notification` were never constructed by a daemon
+  and had no route in the API, so no shipped configuration could create a
+  Graph change-notification subscription or receive one. They read as an
+  inbound endpoint for tenant content, which contradicts
+  `docs/ai-publication-boundary.md`. The capture path is the delta poll in
+  `connectors/sharepoint/daemon.py` and nothing else; code that imported
+  `threadweave.connectors.sharepoint.WebhookManager` has to drop it. A test
+  in `tests/test_capture_path_is_pull_only.py` now fails if a subscription
+  registration or a notification receiver is added back, or if the word
+  webhook appears anywhere outside a sentence that denies one.
+
 ### Fixed
 
 - **A clean checkout installs and goes green.** `setup.sh` installed `[dev]`

@@ -33,12 +33,7 @@ from typing import Optional
 MAX_FOLDER_DEPTH = 8  # recursion bound for full-drive imports
 
 from threadweave.auth import api_headers
-from threadweave.connectors.sharepoint.watcher import (
-    GraphClient,
-    ChangeNotification,
-    SiteInfo,
-    DriveInfo,
-)
+from threadweave.connectors.sharepoint.watcher import GraphClient
 
 logger = logging.getLogger(__name__)
 
@@ -156,91 +151,6 @@ class DocumentProcessor:
         os.makedirs(self.temp_dir, exist_ok=True)
 
     # ---- Main Processing Pipeline ----
-
-    async def process_notification(
-        self, notification: ChangeNotification
-    ) -> ProcessedDocument | None:
-        """
-        Process a single change notification — download and mine.
-
-        Returns:
-            ProcessedDocument on success, None if skipped.
-        """
-        try:
-            # Download the file
-            content = await self.graph.download_file(
-                site_id=notification.site_id,
-                drive_id=notification.list_id,
-                item_id=notification.item_id,
-            )
-
-            if len(content) > self.max_file_size:
-                logger.info(
-                    "Skipping large file: %s bytes", len(content)
-                )
-                self.stats["total_skipped"] += 1
-                return None
-
-            # Get file metadata
-            file_name = self._extract_filename(notification)
-
-            # Compute content hash for de-duplication
-            content_hash = hashlib.sha256(content).hexdigest()
-            if content_hash in self._processed_hashes:
-                logger.debug("Skipping duplicate: %s", file_name)
-                self.stats["total_skipped"] += 1
-                return None
-            self._processed_hashes.add(content_hash)
-
-            # Extract text
-            ext = Path(file_name).suffix.lower()
-            text = self._extract_text(content, ext, file_name)
-
-            if not text.strip():
-                logger.info("No extractable text in: %s", file_name)
-                self.stats["total_skipped"] += 1
-                return None
-
-            # Mine into MemPalace
-            drawer_ids = await self._mine_to_mempalace(
-                text=text,
-                wing=self._sanitize_wing(notification.site_id),
-                room=self._sanitize_room(notification.list_id),
-                source_file=file_name,
-            )
-
-            self.stats["total_processed"] += 1
-            self.stats["total_bytes_ingested"] += len(content)
-            self.stats["total_documents"] += 1
-
-            return ProcessedDocument(
-                file_name=file_name,
-                file_path=f"/sites/{notification.site_id}/lists/{notification.list_id}",
-                site_name=notification.site_id,
-                library_name=notification.list_id,
-                mime_type=self._guess_mime(ext),
-                size_bytes=len(content),
-                text_content=text[:500],  # Preview only
-                word_count=len(text.split()),
-                drawer_ids=drawer_ids,
-                status="processed",
-            )
-
-        except Exception as e:
-            logger.error("Failed to process notification: %s", e)
-            self.stats["total_errors"] += 1
-            return ProcessedDocument(
-                file_name=getattr(notification, "item_id", "unknown"),
-                file_path="",
-                site_name=notification.site_id,
-                library_name=notification.list_id,
-                mime_type="",
-                size_bytes=0,
-                text_content="",
-                word_count=0,
-                status="error",
-                error=str(e),
-            )
 
     async def process_drive(
         self,
@@ -724,13 +634,6 @@ class DocumentProcessor:
     def _sanitize_room(name: str) -> str:
         """Convert library name to MemPalace room name."""
         return name.lower().replace(" ", "_").replace("-", "_")[:64]
-
-    @staticmethod
-    def _extract_filename(notification: ChangeNotification) -> str:
-        """Best-effort filename extraction from notification."""
-        # The notification's resource path contains the item ID
-        # We'd normally need a separate Graph call to get metadata
-        return f"item_{notification.item_id}"
 
     @staticmethod
     def _guess_mime(ext: str) -> str:
