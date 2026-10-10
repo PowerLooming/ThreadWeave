@@ -6,6 +6,8 @@ uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.4.24] — 2026-10-10
+
 ### Fixed
 
 - **The MCP server's own docstrings stop advertising the closed cloud
