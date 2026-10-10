@@ -794,6 +794,44 @@ class AuditLog:
         )
         self._append(entry)
 
+    def log_peer_read(self, requester, entry: dict, ip_hash: str = "") -> None:
+        """Audit a read served to a key issued to another organisation.
+
+        Unlike ``log_access`` this records every peer read whatever the
+        sensitivity, because a peer read is the event the owner gets asked
+        about. Content is never recorded.
+        """
+        self._append(AuditEntry(
+            timestamp=datetime.now(timezone.utc).isoformat(),
+            requester_id=requester.person_id or "peer",
+            requester_wing=requester.wing,
+            action="peer_read",
+            entry_id=entry.get("id", "unknown"),
+            entry_sensitivity=entry.get("sensitivity", "internal"),
+            entry_wing=entry.get("wing", ""),
+            reason="peer read",
+            tenant_id=entry.get("tenant_id", "default"),
+            ip_hash=ip_hash,
+        ))
+
+    def log_peer_search(
+        self, requester, query: str, result_count: int, ip_hash: str = ""
+    ) -> None:
+        """Audit a search served to a peer key: a query digest and a count."""
+        digest = hashlib.sha256((query or "").encode("utf-8")).hexdigest()[:16]
+        self._append(AuditEntry(
+            timestamp=datetime.now(timezone.utc).isoformat(),
+            requester_id=requester.person_id or "peer",
+            requester_wing=requester.wing,
+            action="peer_search",
+            entry_id="search",
+            entry_sensitivity="internal",
+            entry_wing="",
+            reason=f"query_sha256={digest} results={int(result_count)}",
+            tenant_id="default",
+            ip_hash=ip_hash,
+        ))
+
     # ── reads ───────────────────────────────────────────────────
 
     def _query(self, sql: str, params: tuple) -> Optional[list[dict]]:

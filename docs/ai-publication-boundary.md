@@ -17,18 +17,27 @@ deliberate act, enumerated in the contract.**
 
 ## What exists today
 
-Three surfaces can move content out of the on-prem host. They are not equal.
+Four surfaces can move content out of the on-prem host. They are not equal.
 
 | surface | direction | who initiates | identity | filtered | audited |
 |---|---|---|---|---|---|
 | MCP server (`mcp_server.py`) | pull | the agent, per query | the caller's own API key | yes, confidentiality-filtered for that key | yes, like a person's read |
 | Copilot/Graph connector (`connectors/graph`) | **push** | a daemon, every 300 s | a daemon key, `role=readwrite`, no claims | it *fails* on anything the key cannot read, then pushes an empty stub | only the denials |
+| Peer key read (peer fields on `KeyInfo`) | pull | the partner's own agent, per query | a read-only key issued to that partner by an admin | yes: one wing, a capped result count, single-entry reads only | yes: `peer_read` and `peer_search`, the peer named, never the content |
 | Capture notification (`notify.py`) | push | a daemon, per capture | service | title/topic only, never the body | not recorded as a publication |
 
 The MCP server is the model to follow: explicit, per-caller, filtered and audited. The other
 two are accidents waiting to be found: the connector silently exported 29 entries and pushed
 five of them as empty documents, and it reports `0 failed (100.0% success rate)` while upsert
 calls are returning 502/503/504.
+
+A peer key is the fourth and the narrowest: it reaches one wing, returns a bounded number of
+results per query, may read a single entry, and every one of those reads lands in the audit log
+with the peer's name on it. Nothing is copied, nothing is pushed, and revocation ends access on
+the next request. It is the mechanism for the case the product exists for, that most
+organisations do not know what their own organisation knows, and it is deliberately the only
+cross-organisation path: replica sync copies content unfiltered and therefore never crosses an
+entity line.
 
 ## Design: two layers that cannot be confused
 
@@ -71,6 +80,17 @@ R6. **Audited, content-free.** A publication that leaves no audit record is a bu
 R7. **Enumerated in the contract.** `docs/privacy.md` names every surface that can carry
 content outward, and the one-way sentence is scoped to storage.
 
+R8. **A peer read is a read, not a publication.** A key issued to another organisation may
+only search and read single entries. It cannot write, cannot list, cannot reach the breadth
+endpoints (recap, tasks, wings, tenants, graph, audit), cannot read outside its wing and cannot
+return more than its cap per query. Every read is audited whether or not the entry is sensitive,
+and revocation takes effect on the next request.
+
+R9. **Replication stays inside one legal entity.** Palace replica sync copies content by design,
+so `peers.json` may point at another site of the same legal entity and never across an entity
+line, not even to a wholly owned subsidiary. Everything across that line goes through a peer
+key, or it does not happen.
+
 ## Enforcement: how "not accidental" becomes checkable
 
 Documentation did not prevent the current situation, so the boundary needs tests that fail
@@ -107,7 +127,6 @@ server (the pull interface, already obeying R5 and R6), and the deterministic ga
 What is left to build when a destination is wanted: the `publish/` package with destination
 resolution, preview, clearance, redaction and audit, invoked by an operator. CLI first is the
 natural shape, since R1 to R6 are all about an operator deciding.
-
 
 ## Smallest useful first slice
 

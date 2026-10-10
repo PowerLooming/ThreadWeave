@@ -25,6 +25,7 @@ Environment:
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 from typing import Any, Callable, Optional
@@ -592,12 +593,50 @@ def build_server() -> MCPServer:
     return server
 
 
+# A peer key gets the HTTP allowlist, not the whole toolset: the same two
+# capabilities, named as the client names them. See docs/peer-keys.md.
+PEER_ALLOWED_TOOLS = frozenset({"search_memory", "get_entry"})
+
+
+def peer_tool_allowed(tool_name: str) -> bool:
+    """True only for the tools a peer key may call."""
+    return (tool_name or "") in PEER_ALLOWED_TOOLS
+
+
+def peer_tool_refusal(body: bytes) -> str:
+    """The name of the first tool a peer key may not call, or an empty string.
+
+    Handles a single JSON-RPC message and a batch. Anything that is not a
+    ``tools/call`` passes: the handshake, the tool list and notifications
+    carry no content.
+    """
+    if not body:
+        return ""
+    try:
+        payload = json.loads(body.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError):
+        return ""
+    messages = payload if isinstance(payload, list) else [payload]
+    for message in messages:
+        if not isinstance(message, dict) or message.get("method") != "tools/call":
+            continue
+        name = (message.get("params") or {}).get("name") or ""
+        if not peer_tool_allowed(name):
+            return name or "unnamed tool"
+    return ""
+
+
 class MCPAuthMiddleware(BaseHTTPMiddleware):
     """Require a valid ThreadWeave API key on the MCP endpoint.
 
     Same opt-in gate as the REST API (THREADWEAVE_REQUIRE_AUTH). The key is
     validated here and then forwarded by each tool, so the MCP surface and
     the REST surface cannot disagree about who is calling.
+
+    A peer key (one issued to another organisation) gets the HTTP allowlist
+    here as well: search and a single entry read, nothing else. Without this
+    a partner holding a peer key could call the write tool or the breadth
+    tools through MCP while the REST API refused them.
     """
 
     async def dispatch(self, request: Request, call_next):
@@ -616,6 +655,30 @@ class MCPAuthMiddleware(BaseHTTPMiddleware):
         info = auth.validate_key(raw)
         if info is None:
             return JSONResponse({"error": "Invalid API key"}, status_code=403)
+        if info.is_peer:
+            if info.is_expired():
+                return JSONResponse(
+                    {"error": "Peer key expired", "peer": info.peer_id},
+                    status_code=403,
+                )
+            body = await request.body()
+
+            async def _replay(_body: bytes = body):
+                return {"type": "http.request", "body": _body, "more_body": False}
+
+            # The body was read here, so it must be replayed to the app.
+            request._receive = _replay
+            refused = peer_tool_refusal(body)
+            if refused:
+                return JSONResponse(
+                    {
+                        "error": "Peer keys may only search and read single entries",
+                        "peer": info.peer_id,
+                        "tool": refused,
+                        "allowed": sorted(PEER_ALLOWED_TOOLS),
+                    },
+                    status_code=403,
+                )
         request.state.mcp_tenant_id = info.tenant_id
         request.state.mcp_role = info.role
         return await call_next(request)
