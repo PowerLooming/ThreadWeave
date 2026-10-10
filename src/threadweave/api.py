@@ -32,7 +32,14 @@ from threadweave.mempalace_client import MemPalaceClient
 from threadweave.org_model import OrgModel
 from threadweave.relevance import RelevanceEngine
 from threadweave.profiling import metrics, track_latency
-from threadweave.auth import APIKeyMiddleware, get_tenant_id
+from threadweave.auth import (
+    APIKeyMiddleware,
+    get_auth_wing,
+    get_peer_id,
+    get_peer_max_results,
+    get_tenant_id,
+    is_peer_request,
+)
 from threadweave.confidentiality import (
     detect_sensitivity,
     RequesterContext,
@@ -147,6 +154,25 @@ def _request_ip_hash(request: Request) -> str:
     if not host:
         return ""
     return hashlib.sha256(host.encode()).hexdigest()[:16]
+
+
+def _peer_requester(request: Request, base):
+    """Requester context for a peer read.
+
+    A peer is an identity of its own rather than a person, so the audit names
+    the peer while the clearance stays the one the key maps to.
+    """
+    if not is_peer_request(request):
+        return base
+    from threadweave.confidentiality import RequesterContext
+
+    return RequesterContext(
+        person_id=f"peer:{get_peer_id(request)}",
+        wing=base.wing,
+        role="readonly",
+        groups=list(getattr(base, "groups", []) or []),
+        clearance=base.clearance,
+    )
 
 
 def _citation_url(metadata: dict) -> str:
@@ -1120,6 +1146,16 @@ async def get_entry(
         role=role,
         groups=(groups.split(",") if groups else []),
     )
+    # A peer key reads its own wing only: outside it the entry does not exist.
+    peer_wing = get_auth_wing(request) if is_peer_request(request) else ""
+    if peer_wing and entry.get("wing") != peer_wing:
+        get_audit_log().log_denied(
+            _peer_requester(request, requester),
+            entry,
+            "Peer key outside its wing",
+            ip_hash=_request_ip_hash(request),
+        )
+        raise HTTPException(status_code=404, detail="Entry not found")
     if not requester.can_see(entry):
         audit = get_audit_log()
         audit.log_denied(
@@ -1131,6 +1167,11 @@ async def get_entry(
     # Audit: log access to sensitive entries
     audit = get_audit_log()
     audit.log_access(requester, entry, action="view", ip_hash=_request_ip_hash(request))
+    if is_peer_request(request):
+        audit.log_peer_read(
+            _peer_requester(request, requester), entry,
+            ip_hash=_request_ip_hash(request),
+        )
 
     return EntryResponse(
         id=entry["id"], content=entry["content"], wing=entry["wing"],
@@ -1696,6 +1737,14 @@ async def search(req: SearchRequest, request: Request):
     if scoped:
         req.tenant_id = scoped
 
+    # Peer keys are capped: one question, a bounded answer. A partner never
+    # gets a bulk read, whatever limit it asks for.
+    peer_cap = get_peer_max_results(request)
+    if peer_cap and req.limit and req.limit > peer_cap:
+        req.limit = peer_cap
+    # A peer key reads its own wing and nothing else, whatever it asks for.
+    peer_wing = get_auth_wing(request) if is_peer_request(request) else ""
+
     query_lower = req.query.lower()
     results = []
     seen_ids: set[str] = set()
@@ -1736,6 +1785,10 @@ async def search(req: SearchRequest, request: Request):
                 # Tenant scoping: skip results from other tenants. Entries
                 # without a tenant_id predate the field and stay visible.
                 if tenants and (mr.tenant_id or "default") not in tenants:
+                    continue
+                # A peer key reads one wing, on every path that can return a
+                # hit, not just the keyword one.
+                if peer_wing and (mr.wing or "") != peer_wing:
                     continue
                 mp_ids.add(mr.drawer_id)
                 # Pull private-channel scoping from the source entry so the
@@ -1785,6 +1838,8 @@ async def search(req: SearchRequest, request: Request):
         if tenants and entry.get("tenant_id", "default") not in tenants:
             continue
         if req.wing and entry["wing"] != req.wing:
+            continue
+        if peer_wing and entry["wing"] != peer_wing:
             continue
         if req.room and entry["room"] != req.room:
             continue
@@ -1858,6 +1913,12 @@ async def search(req: SearchRequest, request: Request):
 
     # ── 3. Confidentiality filtering ──
     visible = requester.filter_results(results)
+    # The peer wing gate sits on the merged set, so no search path can leak
+    # past it. Found live, not in the unit tests: the MemPalace hybrid path
+    # appended its hits before the keyword loop's filter ran, and another
+    # wing's entry came back.
+    if peer_wing:
+        visible = [r for r in visible if (r.get("wing") or "") == peer_wing]
     denied_count = len(results) - len(visible)
 
     # Audit log: record denied access attempts
@@ -1871,6 +1932,14 @@ async def search(req: SearchRequest, request: Request):
     # Sort by relevance
     visible.sort(key=lambda r: r["relevance_score"], reverse=True)
     visible = visible[:req.limit]
+
+    if is_peer_request(request):
+        get_audit_log().log_peer_search(
+            _peer_requester(request, requester),
+            req.query,
+            len(visible),
+            ip_hash=_request_ip_hash(request),
+        )
 
     return SearchResponse(
         results=visible, total=len(visible), query=req.query,

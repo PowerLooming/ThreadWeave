@@ -899,11 +899,100 @@ def cmd_demo(args):
         print()
 
 
+def cmd_peer(args):
+    """Issue, list and revoke peer keys, and check one against an instance."""
+    from threadweave import peer as peer_mod
+
+    sub = getattr(args, "peer_command", None)
+    if sub == "issue":
+        try:
+            raw, record = peer_mod.issue_peer_key(
+                args.peer_id,
+                args.wing,
+                tenant_id=args.tenant or "default",
+                contact=args.contact or "",
+                issued_by=args.issued_by or "",
+                days=args.days,
+                max_results=args.max_results,
+                path=args.keys_file,
+            )
+        except ValueError as exc:
+            print(f"error: {exc}")
+            return 1
+        print("Peer key issued. It is shown once, so copy it now.\n")
+        print(f"  peer         {record['peer_id']}")
+        print(f"  wing         {record['wing']}  (tenant {record['tenant_id']})")
+        print(f"  expiry       {record['expires_at']}")
+        print(f"  max results  {record['max_results']} per query")
+        print(f"  issued by    {record['issued_by'] or 'unrecorded'}")
+        print(f"\n  key          {raw}\n")
+        print("The peer may only search and read single entries. See docs/ai-publication-boundary.md.")
+        return 0
+    if sub == "list":
+        peers = peer_mod.list_peers(args.keys_file)
+        if not peers:
+            print("No peer keys on this host.")
+            return 0
+        for rec in peers:
+            state = "revoked" if rec.get("revoked") else "active"
+            print(
+                f"{rec['peer_id']:<20} {state:<8} wing={str(rec.get('wing', '')):<22} "
+                f"expires={str(rec.get('expires_at', ''))[:10]} "
+                f"max={rec.get('max_results', 0):<4} contact={rec.get('peer_contact', '')}"
+            )
+        return 0
+    if sub == "revoke":
+        count = peer_mod.revoke_peer_key(args.peer_id, args.keys_file)
+        if count:
+            print(f"Revoked {count} key(s) for peer {args.peer_id}. Access ends on the next request.")
+            return 0
+        print(f"No active key for peer {args.peer_id}.")
+        return 1
+    if sub == "check":
+        result = peer_mod.check_peer(args.url, args.key, args.query, limit=args.limit)
+        if not result.get("ok"):
+            print(f"check failed: {result.get('status', '')} {result.get('error', '')}".strip())
+            return 1
+        print(f"peer answered with {result['count']} result(s)")
+        for item in result.get("results", [])[:5]:
+            print(f"  - {str(item.get('content', ''))[:80]}")
+        return 0
+    print("usage: threadweave peer {issue,list,revoke,check}")
+    return 2
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="ThreadWeave — Organizational Memory System",
     )
     sub = parser.add_subparsers(dest="command")
+
+    # peer keys, for sharing across organisations
+    p_peer = sub.add_parser("peer", help="Peer keys for sharing across organisations")
+    peer_sub = p_peer.add_subparsers(dest="peer_command")
+
+    p_peer_issue = peer_sub.add_parser("issue", help="Issue a read-only key for another organisation")
+    p_peer_issue.add_argument("peer_id", help="Short name for the partner, e.g. nordvik")
+    p_peer_issue.add_argument("--wing", required=True, help="The one wing the partner may read")
+    p_peer_issue.add_argument("--tenant", default="default")
+    p_peer_issue.add_argument("--contact", default="", help="A named person for the audit trail")
+    p_peer_issue.add_argument("--issued-by", default="", help="Who authorised it")
+    p_peer_issue.add_argument("--days", type=int, default=90)
+    p_peer_issue.add_argument("--max-results", type=int, default=25)
+    p_peer_issue.add_argument("--keys-file", default=None)
+
+    p_peer_list = peer_sub.add_parser("list", help="List peer keys, without their values")
+    p_peer_list.add_argument("--keys-file", default=None)
+
+    p_peer_revoke = peer_sub.add_parser("revoke", help="Revoke every key for a peer")
+    p_peer_revoke.add_argument("peer_id")
+    p_peer_revoke.add_argument("--keys-file", default=None)
+
+    p_peer_check = peer_sub.add_parser("check", help="Ask a peer instance one question")
+    p_peer_check.add_argument("url")
+    p_peer_check.add_argument("--key", required=True, help="The key the peer issued to you")
+    p_peer_check.add_argument("--query", required=True)
+    p_peer_check.add_argument("--limit", type=int, default=5)
 
     # detect
     p_detect = sub.add_parser("detect", help="Analyze text for knowledge potential")
@@ -1281,6 +1370,10 @@ def main() -> None:
             cmd_gws_onboard(args)
         else:
             p_gws.print_help()
+    elif args.command == "peer":
+        code = cmd_peer(args)
+        if code:
+            raise SystemExit(code)
     elif args.command == "email":
         if args.email_command == "watch":
             cmd_email_watch(args)
