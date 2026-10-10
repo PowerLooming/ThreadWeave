@@ -4,7 +4,7 @@
 Email Watcher — monitors Exchange Online mailboxes via Microsoft Graph API.
 
 Handles:
-    - Mailbox monitoring via Graph API subscriptions and delta queries
+    - Mailbox monitoring via authenticated Graph API queries (pull only)
     - Shared mailbox support (knowledge@firma.no pattern)
     - Inbound email filtering (only process unread, from known senders, etc.)
     - Thread tracking (conversationId grouping)
@@ -26,11 +26,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
-from threadweave.connectors.sharepoint.watcher import (
-    GraphClient,
-    Subscription,
-    GRAPH_API_BASE,
-)
+from threadweave.connectors.sharepoint.watcher import GraphClient, GRAPH_API_BASE
 
 logger = logging.getLogger(__name__)
 
@@ -282,49 +278,6 @@ class MailWatcher:
                     )
             except Exception as e:
                 logger.warning("Failed to mark %s as read: %s", mid, e)
-
-    # ---- Subscription Management ----
-
-    async def create_mail_subscription(
-        self,
-        mailbox: str,
-        notification_url: str,
-        client_state: str = "",
-        folder: str = "inbox",
-    ) -> Subscription:
-        """
-        Create a Graph API subscription for new mail in a folder.
-
-        Microsoft sends a POST to notification_url when new mail
-        arrives. ThreadWeave then fetches and processes.
-        """
-        expiration = datetime.now(timezone.utc) + timedelta(days=3)
-        resource = f"/users/{mailbox}/mailFolders/{folder}/messages"
-
-        body = {
-            "changeType": "created",
-            "notificationUrl": notification_url,
-            "resource": resource,
-            "expirationDateTime": expiration.isoformat(),
-            "clientState": client_state,
-        }
-
-        data = await self.graph._request(
-            "POST", "/subscriptions", json_body=body
-        )
-
-        sub = Subscription(
-            subscription_id=data["id"],
-            resource=data["resource"],
-            notification_url=data["notificationUrl"],
-            expiration=datetime.fromisoformat(
-                data["expirationDateTime"].replace("Z", "+00:00")
-            ),
-            client_state=client_state,
-        )
-
-        logger.info("Mail subscription: %s -> %s", sub.subscription_id, mailbox)
-        return sub
 
     # ---- Helpers ----
 

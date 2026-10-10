@@ -2,16 +2,22 @@
 # Copyright (C) 2026 ThreadWeave contributors
 """ThreadWeave MCP server — organizational memory as agent tools.
 
-Exposes ThreadWeave to any Model Context Protocol client over Streamable
-HTTP: Copilot Studio agents, Microsoft 365 Copilot (federated connectors),
-GitHub Copilot, Claude Code, or a plain MCP client.
+Exposes ThreadWeave to the Model Context Protocol clients you run yourself:
+an agent process on this host, a client elsewhere on your internal network,
+Claude Code, or your own code.
+
+Cloud assistant hosts are closed by decision, not unimplemented: a Copilot
+Studio agent, an M365 Copilot federated connector and a Power Platform custom
+connector all run in the cloud, and reaching this server from there would mean
+exposing it through a broker. See docs/ai-publication-boundary.md.
 
 Design: this module is a thin, stateless shim over the REST API. Every tool
 call is an HTTP request to ThreadWeave carrying the caller's own API key, so
 tenant scoping, confidentiality ACLs, the gossip gate, sensitivity detection
 and the audit trail all stay in the one place that already owns them. No
-memory logic is duplicated here, and an agent read is audited exactly like a
-human read.
+memory logic is duplicated here, and an agent read is audited on the same
+rule as a human read: confidential-and-above reads, denials and deletions are
+recorded, and a public or internal read is not.
 
 Run it:
     threadweave mcp                              # http://127.0.0.1:8100/mcp
@@ -25,6 +31,7 @@ Environment:
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 from typing import Any, Callable, Optional
@@ -592,12 +599,50 @@ def build_server() -> MCPServer:
     return server
 
 
+# A peer key gets the HTTP allowlist, not the whole toolset: the same two
+# capabilities, named as the client names them. See docs/peer-keys.md.
+PEER_ALLOWED_TOOLS = frozenset({"search_memory", "get_entry"})
+
+
+def peer_tool_allowed(tool_name: str) -> bool:
+    """True only for the tools a peer key may call."""
+    return (tool_name or "") in PEER_ALLOWED_TOOLS
+
+
+def peer_tool_refusal(body: bytes) -> str:
+    """The name of the first tool a peer key may not call, or an empty string.
+
+    Handles a single JSON-RPC message and a batch. Anything that is not a
+    ``tools/call`` passes: the handshake, the tool list and notifications
+    carry no content.
+    """
+    if not body:
+        return ""
+    try:
+        payload = json.loads(body.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError):
+        return ""
+    messages = payload if isinstance(payload, list) else [payload]
+    for message in messages:
+        if not isinstance(message, dict) or message.get("method") != "tools/call":
+            continue
+        name = (message.get("params") or {}).get("name") or ""
+        if not peer_tool_allowed(name):
+            return name or "unnamed tool"
+    return ""
+
+
 class MCPAuthMiddleware(BaseHTTPMiddleware):
     """Require a valid ThreadWeave API key on the MCP endpoint.
 
     Same opt-in gate as the REST API (THREADWEAVE_REQUIRE_AUTH). The key is
     validated here and then forwarded by each tool, so the MCP surface and
     the REST surface cannot disagree about who is calling.
+
+    A peer key (one issued to another organisation) gets the HTTP allowlist
+    here as well: search and a single entry read, nothing else. Without this
+    a partner holding a peer key could call the write tool or the breadth
+    tools through MCP while the REST API refused them.
     """
 
     async def dispatch(self, request: Request, call_next):
@@ -616,6 +661,30 @@ class MCPAuthMiddleware(BaseHTTPMiddleware):
         info = auth.validate_key(raw)
         if info is None:
             return JSONResponse({"error": "Invalid API key"}, status_code=403)
+        if info.is_peer:
+            if info.is_expired():
+                return JSONResponse(
+                    {"error": "Peer key expired", "peer": info.peer_id},
+                    status_code=403,
+                )
+            body = await request.body()
+
+            async def _replay(_body: bytes = body):
+                return {"type": "http.request", "body": _body, "more_body": False}
+
+            # The body was read here, so it must be replayed to the app.
+            request._receive = _replay
+            refused = peer_tool_refusal(body)
+            if refused:
+                return JSONResponse(
+                    {
+                        "error": "Peer keys may only search and read single entries",
+                        "peer": info.peer_id,
+                        "tool": refused,
+                        "allowed": sorted(PEER_ALLOWED_TOOLS),
+                    },
+                    status_code=403,
+                )
         request.state.mcp_tenant_id = info.tenant_id
         request.state.mcp_role = info.role
         return await call_next(request)
@@ -632,9 +701,12 @@ def transport_security_settings(
 ) -> Optional[TransportSecuritySettings]:
     """Host/Origin allowlist for the MCP endpoint.
 
-    Without this the SDK admits only loopback hosts, so a published endpoint
-    (Copilot Studio, Agent 365, APIM, a company DNS name) answers 421 to
-    every request and the agent reports a broken tool. Set
+    Without this the SDK admits only loopback hosts, so an endpoint reached
+    under a company DNS name (or through a reverse proxy) answers 421 to every
+    request and the agent reports a broken tool. This is host plumbing for
+    clients on this host or the internal network; it cannot open a cloud
+    assistant route, which is closed by decision
+    (docs/ai-publication-boundary.md). Set
     THREADWEAVE_MCP_ALLOWED_HOSTS (and, if a browser origin calls it,
     THREADWEAVE_MCP_ALLOWED_ORIGINS) to the names this server answers to,
     e.g. "mcp.example.com,mcp.example.com:443".
@@ -660,7 +732,7 @@ def streamable_http_app(
     allowed_hosts: Optional[list[str]] = None,
     allowed_origins: Optional[list[str]] = None,
 ):
-    """The ASGI app Copilot Studio or any MCP client points at."""
+    """The ASGI app an MCP client on this host or the internal network points at."""
     server = server or build_server()
     app = server.streamable_http_app(
         streamable_http_path=mcp_path,

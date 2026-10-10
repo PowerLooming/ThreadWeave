@@ -32,7 +32,17 @@ from threadweave.mempalace_client import MemPalaceClient
 from threadweave.org_model import OrgModel
 from threadweave.relevance import RelevanceEngine
 from threadweave.profiling import metrics, track_latency
-from threadweave.auth import APIKeyMiddleware, get_tenant_id
+from threadweave.auth import (
+    APIKeyMiddleware,
+    get_auth_wing,
+    get_peer_id,
+    get_peer_max_results,
+    get_tenant_id,
+    is_peer_request,
+    peer_allowlist,
+    peer_rate_limit,
+    require_role,
+)
 from threadweave.confidentiality import (
     detect_sensitivity,
     RequesterContext,
@@ -84,7 +94,7 @@ def _pii_redact_kinds() -> tuple[str, ...]:
 app = FastAPI(
     title="ThreadWeave API",
     description="Enterprise organizational memory system with central ingestion pipeline",
-    version="0.4.20",
+    version="0.4.24",
 )
 
 # Auth middleware (no-op unless THREADWEAVE_REQUIRE_AUTH=true)
@@ -147,6 +157,25 @@ def _request_ip_hash(request: Request) -> str:
     if not host:
         return ""
     return hashlib.sha256(host.encode()).hexdigest()[:16]
+
+
+def _peer_requester(request: Request, base):
+    """Requester context for a peer read.
+
+    A peer is an identity of its own rather than a person, so the audit names
+    the peer while the clearance stays the one the key maps to.
+    """
+    if not is_peer_request(request):
+        return base
+    from threadweave.confidentiality import RequesterContext
+
+    return RequesterContext(
+        person_id=f"peer:{get_peer_id(request)}",
+        wing=base.wing,
+        role="readonly",
+        groups=list(getattr(base, "groups", []) or []),
+        clearance=base.clearance,
+    )
 
 
 def _citation_url(metadata: dict) -> str:
@@ -514,7 +543,7 @@ async def health():
 
     return HealthResponse(
         status="healthy",
-        version="0.4.20",
+        version="0.4.24",
         mempalace_available=_mempalace_available,
         entries_stored=len(_memory_store),
         dedup_cache_size=len(_dedup_hashes),
@@ -1120,6 +1149,16 @@ async def get_entry(
         role=role,
         groups=(groups.split(",") if groups else []),
     )
+    # A peer key reads its own wing only: outside it the entry does not exist.
+    peer_wing = get_auth_wing(request) if is_peer_request(request) else ""
+    if peer_wing and entry.get("wing") != peer_wing:
+        get_audit_log().log_denied(
+            _peer_requester(request, requester),
+            entry,
+            "Peer key outside its wing",
+            ip_hash=_request_ip_hash(request),
+        )
+        raise HTTPException(status_code=404, detail="Entry not found")
     if not requester.can_see(entry):
         audit = get_audit_log()
         audit.log_denied(
@@ -1131,6 +1170,11 @@ async def get_entry(
     # Audit: log access to sensitive entries
     audit = get_audit_log()
     audit.log_access(requester, entry, action="view", ip_hash=_request_ip_hash(request))
+    if is_peer_request(request):
+        audit.log_peer_read(
+            _peer_requester(request, requester), entry,
+            ip_hash=_request_ip_hash(request),
+        )
 
     return EntryResponse(
         id=entry["id"], content=entry["content"], wing=entry["wing"],
@@ -1696,6 +1740,14 @@ async def search(req: SearchRequest, request: Request):
     if scoped:
         req.tenant_id = scoped
 
+    # Peer keys are capped: one question, a bounded answer. A partner never
+    # gets a bulk read, whatever limit it asks for.
+    peer_cap = get_peer_max_results(request)
+    if peer_cap and req.limit and req.limit > peer_cap:
+        req.limit = peer_cap
+    # A peer key reads its own wing and nothing else, whatever it asks for.
+    peer_wing = get_auth_wing(request) if is_peer_request(request) else ""
+
     query_lower = req.query.lower()
     results = []
     seen_ids: set[str] = set()
@@ -1736,6 +1788,10 @@ async def search(req: SearchRequest, request: Request):
                 # Tenant scoping: skip results from other tenants. Entries
                 # without a tenant_id predate the field and stay visible.
                 if tenants and (mr.tenant_id or "default") not in tenants:
+                    continue
+                # A peer key reads one wing, on every path that can return a
+                # hit, not just the keyword one.
+                if peer_wing and (mr.wing or "") != peer_wing:
                     continue
                 mp_ids.add(mr.drawer_id)
                 # Pull private-channel scoping from the source entry so the
@@ -1785,6 +1841,8 @@ async def search(req: SearchRequest, request: Request):
         if tenants and entry.get("tenant_id", "default") not in tenants:
             continue
         if req.wing and entry["wing"] != req.wing:
+            continue
+        if peer_wing and entry["wing"] != peer_wing:
             continue
         if req.room and entry["room"] != req.room:
             continue
@@ -1858,6 +1916,12 @@ async def search(req: SearchRequest, request: Request):
 
     # ── 3. Confidentiality filtering ──
     visible = requester.filter_results(results)
+    # The peer wing gate sits on the merged set, so no search path can leak
+    # past it. Found live, not in the unit tests: the MemPalace hybrid path
+    # appended its hits before the keyword loop's filter ran, and another
+    # wing's entry came back.
+    if peer_wing:
+        visible = [r for r in visible if (r.get("wing") or "") == peer_wing]
     denied_count = len(results) - len(visible)
 
     # Audit log: record denied access attempts
@@ -1871,6 +1935,14 @@ async def search(req: SearchRequest, request: Request):
     # Sort by relevance
     visible.sort(key=lambda r: r["relevance_score"], reverse=True)
     visible = visible[:req.limit]
+
+    if is_peer_request(request):
+        get_audit_log().log_peer_search(
+            _peer_requester(request, requester),
+            req.query,
+            len(visible),
+            ip_hash=_request_ip_hash(request),
+        )
 
     return SearchResponse(
         results=visible, total=len(visible), query=req.query,
@@ -2045,6 +2117,38 @@ async def get_org_graph(
     """
     nodes: dict[str, dict] = {}
     edges: list[dict] = []
+
+    # Bridges: a peer key is the one edge that enters this palace from another
+    # one, so the owner's graph shows which room a partner may reach and who is
+    # on the other side, next to the halls and tunnels inside (design section 10).
+    from threadweave import peer as peer_mod
+
+    for bridge in peer_mod.bridges():
+        if wing and bridge["wing"] != wing:
+            continue
+        node_id = bridge["id"]
+        nodes[node_id] = {
+            "id": node_id,
+            "label": bridge["label"],
+            "type": "peer",
+            "wing": bridge["wing"],
+        }
+        if bridge["wing"] and bridge["wing"] not in nodes:
+            nodes[bridge["wing"]] = {
+                "id": bridge["wing"],
+                "label": bridge["wing"],
+                "type": "team",
+                "wing": bridge["wing"],
+            }
+        edges.append({
+            "source": node_id,
+            "target": bridge["wing"],
+            "relation": "may_reach",
+            "type": "bridge",
+            "peer_id": bridge["peer_id"],
+            "expires_at": bridge["expires_at"],
+            "max_results": bridge["max_results"],
+        })
 
     # Collect relationships from the org model
     relationships = _org_model.relationships
@@ -2228,6 +2332,129 @@ def _entry_graph_nodes(
     return nodes, edges
 
 # ---- Audit Log ----
+
+
+class PeerRecord(BaseModel):
+    """One key issued to another organisation, as the owner sees it."""
+
+    peer_id: str
+    wing: str = ""
+    contact: str = ""
+    issued_by: str = ""
+    issued_at: str = ""
+    expires_at: str = ""
+    max_results: int = 0
+    label: str = ""
+    revoked: bool = False
+    activity: dict = Field(default_factory=dict)
+
+
+class PeersResponse(BaseModel):
+    peers: list[PeerRecord]
+    bridges: list[dict]
+    allowlist: list[str]
+    limit_per_minute: int
+
+
+class PeerIssueRequest(BaseModel):
+    peer_id: str = Field(..., min_length=1, description="Short name for the partner, e.g. nordvik")
+    wing: str = Field(..., min_length=1, description="The one wing the partner may read")
+    contact: str = ""
+    days: int = Field(default=90, ge=1, le=3650)
+    max_results: int = Field(default=25, ge=1, le=1000)
+
+
+class PeerIssueResponse(BaseModel):
+    """The key value appears here once and is never returned again."""
+
+    peer_id: str
+    key: str
+    wing: str
+    expires_at: str
+    max_results: int
+
+
+class PeerRevokeResponse(BaseModel):
+    peer_id: str
+    revoked: int
+
+
+@app.get("/api/v1/peers", response_model=PeersResponse)
+async def list_peers_route(request: Request):
+    """The owner's view of the peer link: who may reach what, and what they read.
+
+    Any valid key may read this, like the audit trail it summarises. Key values
+    are never returned: a peer key is shown once at issuance and only revoked
+    afterwards, so a leaked dashboard page cannot hand someone a partner's
+    access.
+    """
+    from threadweave import peer as peer_mod
+
+    return PeersResponse(
+        peers=[
+            PeerRecord(
+                peer_id=record.get("peer_id", ""),
+                wing=record.get("wing", ""),
+                contact=record.get("peer_contact", ""),
+                issued_by=record.get("issued_by", ""),
+                issued_at=record.get("issued_at", ""),
+                expires_at=record.get("expires_at", ""),
+                max_results=int(record.get("max_results", 0) or 0),
+                label=record.get("label", ""),
+                revoked=bool(record.get("revoked")),
+                activity=record.get("activity", {}),
+            )
+            for record in peer_mod.list_peers_with_activity()
+        ],
+        bridges=peer_mod.bridges(),
+        allowlist=peer_allowlist(),
+        limit_per_minute=peer_rate_limit(),
+    )
+
+
+@app.post("/api/v1/peers", response_model=PeerIssueResponse)
+async def issue_peer_route(request: Request, req: PeerIssueRequest):
+    """Issue a key for a partner. Admin only, because it grants access."""
+    from threadweave import peer as peer_mod
+
+    if not require_role(request, "admin"):
+        raise HTTPException(status_code=403, detail="Issuing a peer key requires an admin key")
+    issued_by = (
+        getattr(request.state, "auth_person", "")
+        or getattr(request.state, "auth_label", "")
+        or "admin"
+    )
+    try:
+        raw, record = peer_mod.issue_peer_key(
+            req.peer_id,
+            req.wing,
+            contact=req.contact,
+            issued_by=issued_by,
+            days=req.days,
+            max_results=req.max_results,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    return PeerIssueResponse(
+        peer_id=record["peer_id"],
+        key=raw,
+        wing=record["wing"],
+        expires_at=record["expires_at"],
+        max_results=int(record["max_results"]),
+    )
+
+
+@app.post("/api/v1/peers/{peer_id}/revoke", response_model=PeerRevokeResponse)
+async def revoke_peer_route(peer_id: str, request: Request):
+    """Revoke every active key for a partner. Admin only; effective immediately."""
+    from threadweave import peer as peer_mod
+
+    if not require_role(request, "admin"):
+        raise HTTPException(status_code=403, detail="Revoking a peer key requires an admin key")
+    count = peer_mod.revoke_peer_key(peer_id)
+    if not count:
+        raise HTTPException(status_code=404, detail=f"No active peer key for {peer_id}")
+    return PeerRevokeResponse(peer_id=peer_id, revoked=count)
 
 
 @app.get("/api/v1/audit/recent")
