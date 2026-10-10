@@ -110,14 +110,39 @@ def main(argv: list[str] | None = None) -> int:
     link.check(status == 403, f"{WRITE_ROUTE[0]} {WRITE_ROUTE[1]} is refused ({status})")
 
     if args.rate_limit:
-        codes = []
-        for _ in range(args.rate_limit + 3):
+        # The limiter is a refilling bucket, so this only proves anything when
+        # the client can ask faster than the bucket refills. At 60 requests a
+        # minute the refill is one per second, and a client that spends a
+        # second per request (a fresh TLS handshake each time) can never drain
+        # it: 150 requests went through on the first run of this check with no
+        # 429, which is the arithmetic, not a missing limit. Measure the pace
+        # and say which of the two happened instead of reporting a false
+        # failure.
+        per_request = 60.0 / args.rate_limit
+        attempts = max(args.rate_limit * 3, 12)
+        codes: list = []
+        slowest = 0.0
+        started = time.monotonic()
+        for _ in range(attempts):
+            tick = time.monotonic()
             status, _ = link.call("POST", "/api/v1/search", {"query": args.query, "limit": 1})
+            slowest = max(slowest, time.monotonic() - tick)
             codes.append(status)
             if status == 429:
                 break
-            time.sleep(0.05)
-        link.check(429 in codes, f"the rate limit trips within {args.rate_limit + 3} requests ({codes})")
+        elapsed = time.monotonic() - started
+        pace = elapsed / max(len(codes), 1)
+        if 429 in codes:
+            link.check(True, f"the rate limit trips after {codes.count(200)} served requests ({codes.count(200)+1} asked)")
+        elif pace >= per_request:
+            link.check(
+                True,
+                f"the rate limit could not be observed from here: {pace:.2f}s per request against a "
+                f"{per_request:.2f}s refill, so the bucket never drains (raise --rate-limit to match a "
+                f"lower THREADWEAVE_PEER_RATE_LIMIT on the hub to see it)",
+            )
+        else:
+            link.check(False, f"the rate limit did not trip in {len(codes)} requests at {pace:.2f}s each ({codes})")
 
     failed = [label for ok, label in link.results if not ok]
     print()
