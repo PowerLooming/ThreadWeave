@@ -6,6 +6,24 @@ uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **The pre-push gate now runs from a fresh worktree, and says which python it
+  used.** A `git worktree` has no `.venv`, so the hook fell through to
+  `python3`, which on Windows is the Microsoft Store app-execution alias: it
+  prints a Store advert and exits 49. The hook read that exit as "the gate
+  could not run" and allowed the push unscanned, so the gate was inert on
+  exactly the branches agents push from, and a push that was never scanned
+  looked like one that passed. Every candidate is now probed with
+  `import sys, tomllib` before it is used (tomllib is also the gate's floor, so
+  an interpreter too old for the gate is skipped rather than failing later),
+  and the lookup covers the worktree's `.venv`, the checkout that spawned the
+  worktree, `py -3`, `python3`, `python`, and finally
+  `uv run --no-project python` (not plain `uv run`, which creates a `.venv` in
+  the worktree it is only supposed to scan). The hook prints the interpreter it
+  settled on and the gate's exit code, and only falls back to "could not run"
+  when nothing on that list can execute the gate.
+
 ## [0.4.20] — 2026-10-02
 
 ### Added

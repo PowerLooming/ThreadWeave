@@ -20,38 +20,110 @@ if [ ! -f "$gate" ]; then
   exit 0
 fi
 
-if [ -n "$THREADWEAVE_PREPUSH_PYTHON" ]; then
-  py="$THREADWEAVE_PREPUSH_PYTHON"
-elif [ -x "$repo_root/.venv/Scripts/python.exe" ]; then
-  py="$repo_root/.venv/Scripts/python.exe"
-elif [ -x "$repo_root/.venv/bin/python" ]; then
-  py="$repo_root/.venv/bin/python"
-elif command -v python3 >/dev/null 2>&1; then
-  py=python3
-elif command -v python >/dev/null 2>&1; then
-  py=python
-else
-  echo "prepush-gate: no python interpreter found, skipping" >&2
-  exit 0
-fi
-
 case "$THREADWEAVE_PREPUSH_ADVISORY" in
   1|true|yes|on) advisory="--advisory" ;;
   *) advisory="" ;;
 esac
 
-"$py" "$gate" --stdin-refs $advisory
-status=$?
+# ── which python runs the gate ───────────────────────────────
+#
+# Answering on PATH is not the same as being able to run anything. On Windows
+# `command -v python3` resolves to the Microsoft Store app-execution alias,
+# which prints a Store advert and exits 49; a fresh `git worktree` has no
+# .venv, so that alias used to be the interpreter this hook found, and its 49
+# was read as "the gate could not run". The gate was then inert on exactly the
+# branches agents push from. So every candidate has to prove itself before it
+# is used, and the probe doubles as the gate's floor: the gate imports tomllib,
+# which is 3.11 and up, so an interpreter too old for the gate is skipped here
+# rather than failing later as a mysterious exit 2.
+probe='import sys, tomllib'
 
-if [ "$status" -eq 0 ]; then
+gate_status=""
+tried=""
+
+try_interpreter() {
+  # $1 is the name to report; the rest is the command that runs the gate.
+  label="$1"
+  shift
+  tried="${tried}${tried:+, }$label"
+  if ! "$@" -c "$probe" >/dev/null 2>&1; then
+    return 1
+  fi
+  echo "prepush-gate: running $gate with $label" >&2
+  # $advisory unquoted on purpose: empty means "no extra argument".
+  "$@" "$gate" --stdin-refs $advisory
+  gate_status=$?
+  return 0
+}
+
+if [ -n "$THREADWEAVE_PREPUSH_PYTHON" ]; then
+  if ! try_interpreter "$THREADWEAVE_PREPUSH_PYTHON" "$THREADWEAVE_PREPUSH_PYTHON"; then
+    echo "prepush-gate: THREADWEAVE_PREPUSH_PYTHON=$THREADWEAVE_PREPUSH_PYTHON cannot run the gate, falling back to the interpreter lookup" >&2
+  fi
+fi
+
+# The project interpreter, in this worktree and then in the checkout that
+# spawned it: a `git worktree` never has a .venv of its own, and the advisory
+# pass needs the project's encoder rather than whatever python sits on PATH.
+if [ -z "$gate_status" ]; then
+  for candidate in "$repo_root/.venv/Scripts/python.exe" "$repo_root/.venv/bin/python"; do
+    [ -x "$candidate" ] || continue
+    try_interpreter "$candidate" "$candidate" && break
+  done
+fi
+
+if [ -z "$gate_status" ]; then
+  common_dir=$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null) || common_dir=""
+  if [ -n "$common_dir" ]; then
+    # Strip the trailing component with parameter expansion rather than
+    # `dirname`: a hook should not need a PATH beyond git.
+    main_root=${common_dir%/*}
+    if [ "$main_root" != "$repo_root" ]; then
+      for candidate in "$main_root/.venv/Scripts/python.exe" "$main_root/.venv/bin/python"; do
+        [ -x "$candidate" ] || continue
+        try_interpreter "$candidate" "$candidate" && break
+      done
+    fi
+  fi
+fi
+
+# The Windows launcher knows where python lives even when the PATH entries are
+# app-execution aliases.
+if [ -z "$gate_status" ] && command -v py >/dev/null 2>&1; then
+  try_interpreter "py -3" py -3
+fi
+
+if [ -z "$gate_status" ]; then
+  for name in python3 python; do
+    resolved=$(command -v "$name" 2>/dev/null) || continue
+    try_interpreter "$name ($resolved)" "$resolved" && break
+  done
+fi
+
+# Last resort, and outside any project on purpose: plain `uv run` in a project
+# with no environment CREATES a .venv, and a hook has no business writing into
+# the worktree it is only supposed to scan.
+if [ -z "$gate_status" ] && command -v uv >/dev/null 2>&1; then
+  try_interpreter "uv run --no-project python" uv run --no-project python
+fi
+
+if [ -z "$gate_status" ]; then
+  echo "prepush-gate: no interpreter could run the gate (tried: ${tried:-none}), allowing the push" >&2
+  echo "prepush-gate: point THREADWEAVE_PREPUSH_PYTHON at a python that can run $gate" >&2
   exit 0
 fi
-if [ "$status" -eq 1 ]; then
+
+if [ "$gate_status" -eq 0 ]; then
+  echo "prepush-gate: gate exit 0, push allowed" >&2
+  exit 0
+fi
+
+if [ "$gate_status" -eq 1 ]; then
   echo "" >&2
   echo "prepush-gate: push blocked. Fix the findings above," >&2
   echo "prepush-gate: or bypass this one push with: git push --no-verify" >&2
   exit 1
 fi
 
-echo "prepush-gate: the gate could not run (exit $status), allowing the push" >&2
+echo "prepush-gate: the gate could not run (exit $gate_status), allowing the push" >&2
 exit 0

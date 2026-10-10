@@ -14,6 +14,7 @@ import importlib.util
 import json
 import os
 import pathlib
+import shutil
 import subprocess
 import sys
 
@@ -542,3 +543,211 @@ def test_advisory_texts_collects_messages_and_comments(repo):
     assert "src/mod.py" in locations
     joined = " ".join(text for _, text in texts)
     assert "internal pilot decision" in joined
+
+
+# ── the hook's interpreter lookup ────────────────────────────
+#
+# The hook runs before the gate does, and finding an interpreter is its whole
+# job. Answering on PATH is not the same as being able to run anything: on
+# Windows `python3` is an App Execution Alias that prints a Store advert and
+# exits 49, and a fresh `git worktree` has no .venv, so the alias used to be the
+# only interpreter the hook found. Reading its 49 as "the gate found nothing"
+# still allowed the push. These tests build real repositories and put real
+# stubs on PATH, because the failure being guarded against is exactly that a
+# candidate which never ran the gate looks like a gate that passed.
+
+SH = shutil.which("sh")
+STORE_ADVERT = (
+    "Python was not found; run without arguments to install from the Microsoft Store"
+)
+
+needs_shell = pytest.mark.skipif(
+    SH is None, reason="the pre-push hook is a POSIX shell script"
+)
+
+
+def _hook_repo(tmp_path: pathlib.Path, name: str = "hooked", *, venv: bool = False):
+    """A repository carrying the shipped hook and gate, with no remote."""
+    repo = tmp_path / name
+    repo.mkdir()
+    for rel in (
+        ".githooks/pre-push",
+        "scripts/prepush_gate.py",
+        "scripts/prepush_rules.toml",
+    ):
+        dest = repo / rel
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy(REPO_ROOT / rel, dest)
+    _write(repo, "README.md", "# clean\n\nNothing to see here.\n")
+    _git(repo, "init", "-q", "-b", "main")
+    _git(repo, "config", "user.email", "dev@example.com")
+    _git(repo, "config", "user.name", "Dev")
+    _git(repo, "config", "commit.gpgsign", "false")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "Initial commit")
+    if venv:
+        subprocess.run(
+            [sys.executable, "-m", "venv", "--without-pip", str(repo / ".venv")],
+            check=True,
+            capture_output=True,
+        )
+    return repo
+
+
+def _store_stub(directory: pathlib.Path, name: str) -> pathlib.Path:
+    """A candidate that answers on PATH and runs nothing, like the Store alias."""
+    path = directory / name
+    path.write_text(
+        f"#!/bin/sh\necho '{STORE_ADVERT}' >&2\nexit 49\n", encoding="utf-8"
+    )
+    path.chmod(0o755)
+    return path
+
+
+def _candidate_wrapper(directory: pathlib.Path, name: str, python: str) -> pathlib.Path:
+    """A candidate that can really run the gate."""
+    path = directory / name
+    path.write_text(f'#!/bin/sh\nexec "{python}" "$@"\n', encoding="utf-8")
+    path.chmod(0o755)
+    return path
+
+
+def hook_path(tmp_path: pathlib.Path, stubs=("py", "python3", "uv")):
+    """PATH entries for the hook: stubs first, then one candidate that works.
+
+    The stub names are the candidates that sit before ``python`` in the hook's
+    lookup order, so the interpreter it settles on is reached by rejecting
+    stubs rather than by being the first name on PATH.
+    """
+    stub_dir = tmp_path / "stubs"
+    stub_dir.mkdir()
+    for name in stubs:
+        _store_stub(stub_dir, name)
+    candidates = tmp_path / "candidates"
+    candidates.mkdir()
+    _candidate_wrapper(candidates, "python", sys.executable)
+    return [stub_dir, candidates]
+
+
+def run_hook(repo: pathlib.Path, refs: str, *, path_prefix=(), env_extra=None):
+    """Run the real hook the way git would, with the ref lines on stdin."""
+    env = dict(os.environ)
+    # Never let the real overlay into a test: it holds real identifiers.
+    env["THREADWEAVE_PREPUSH_PRIVATE"] = str(repo / "absent.txt")
+    env.pop("THREADWEAVE_PREPUSH_ADVISORY", None)
+    if path_prefix:
+        env["PATH"] = os.pathsep.join([str(p) for p in path_prefix] + [env["PATH"]])
+    if env_extra:
+        env.update(env_extra)
+    return subprocess.run(
+        [
+            SH,
+            str(repo / ".githooks" / "pre-push"),
+            "origin",
+            "https://example.invalid/threadweave.git",
+        ],
+        input=refs,
+        capture_output=True,
+        text=True,
+        env=env,
+        cwd=str(repo),
+    )
+
+
+def refs_for(repo: pathlib.Path, remote_sha: str = "0" * 40) -> str:
+    """One ref line in git's order: local ref, local sha, remote ref, remote sha."""
+    head = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=str(repo), capture_output=True, text=True
+    ).stdout.strip()
+    return f"refs/heads/main {head} refs/heads/main {remote_sha}\n"
+
+
+def interpreter_line(proc: subprocess.CompletedProcess) -> str:
+    lines = [
+        line
+        for line in proc.stderr.splitlines()
+        if "prepush_gate.py" in line and "running" in line
+    ]
+    assert len(lines) == 1, f"expected one interpreter line, got: {proc.stderr}"
+    return lines[0]
+
+
+@needs_shell
+def test_hook_skips_a_stub_interpreter_and_runs_the_gate(tmp_path):
+    repo = _hook_repo(tmp_path)
+    proc = run_hook(repo, refs_for(repo), path_prefix=hook_path(tmp_path))
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    # The stub's 49 is not a verdict: the gate ran, and its summary says so.
+    assert STORE_ADVERT not in proc.stderr + proc.stdout
+    assert "commit(s)" in proc.stdout
+    # And it named the interpreter that actually ran it, not the stub it passed
+    # over. The path is the shell's view, so compare its leaf (MSYS rewrites
+    # a Windows tmp path into /tmp/...).
+    line = interpreter_line(proc)
+    assert "candidates/python" in line
+    assert "stubs/" not in line
+    assert "could not run" not in proc.stderr
+    assert "gate exit 0, push allowed" in proc.stderr
+
+
+@needs_shell
+def test_hook_prefers_the_repository_venv_over_anything_on_path(tmp_path):
+    repo = _hook_repo(tmp_path, venv=True)
+    all_stubbed = hook_path(tmp_path, stubs=("py", "python3", "python", "uv"))
+    proc = run_hook(repo, refs_for(repo), path_prefix=all_stubbed)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert ".venv" in interpreter_line(proc)
+    assert "commit(s)" in proc.stdout
+
+
+@needs_shell
+def test_hook_fails_open_loudly_when_no_interpreter_can_run_the_gate(tmp_path):
+    repo = _hook_repo(tmp_path)
+    all_stubbed = hook_path(tmp_path, stubs=("py", "python3", "python", "uv"))
+    proc = run_hook(repo, refs_for(repo), path_prefix=all_stubbed)
+    assert proc.returncode == 0, proc.stdout + proc.stderr  # fail open, by design
+    assert "no interpreter could run the gate" in proc.stderr
+    assert "tried: " in proc.stderr
+    # Nothing was scanned, so nothing may read as a passing scan.
+    assert "commit(s)" not in proc.stdout
+    assert "gate exit" not in proc.stderr
+
+
+@needs_shell
+def test_hook_reports_a_broken_threadweave_prepush_python_and_carries_on(tmp_path):
+    repo = _hook_repo(tmp_path)
+    broken = tmp_path / "broken"
+    broken.mkdir()
+    _store_stub(broken, "python")
+    proc = run_hook(
+        repo,
+        refs_for(repo),
+        path_prefix=hook_path(tmp_path),
+        env_extra={"THREADWEAVE_PREPUSH_PYTHON": str(broken / "python")},
+    )
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "THREADWEAVE_PREPUSH_PYTHON" in proc.stderr
+    assert "cannot run the gate" in proc.stderr
+    # The override is not a dead end: the lookup continued and ran the gate.
+    assert "commit(s)" in proc.stdout
+    assert "candidates/python" in interpreter_line(proc)
+
+
+@needs_shell
+def test_hook_returns_1_when_the_gate_blocks(tmp_path, private_file):
+    repo = _hook_repo(tmp_path)
+    private = private_file("[block]\nnordvik\n")
+    _write(repo, "notes.md", "Signed off by nordvik before the pilot.\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "Add notes")
+    proc = run_hook(
+        repo,
+        refs_for(repo),
+        path_prefix=hook_path(tmp_path),
+        env_extra={"THREADWEAVE_PREPUSH_PRIVATE": str(private)},
+    )
+    assert proc.returncode == 1, proc.stdout + proc.stderr
+    assert "BLOCK" in proc.stdout
+    assert "nordvik" in proc.stdout
+    assert "push blocked" in proc.stderr
+
