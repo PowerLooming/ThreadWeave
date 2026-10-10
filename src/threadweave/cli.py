@@ -1178,8 +1178,9 @@ def build_parser() -> argparse.ArgumentParser:
         help="Runtime profile (overrides THREADWEAVE_PROFILE): "
              "'personal' runs single-user, owner-scoped mode.")
 
-    # mcp — agent tools (MCP over Streamable HTTP) for Copilot Studio,
-    # M365 Copilot federated connectors and any other MCP client
+    # mcp — agent tools (MCP over Streamable HTTP) for MCP clients the
+    # customer runs on their own host or network; cloud assistant routes are
+    # closed by decision (docs/ai-publication-boundary.md)
     p_mcp = sub.add_parser(
         "mcp", help="Start the MCP server (agent tools over Streamable HTTP)")
     p_mcp.add_argument("--host", default="127.0.0.1")

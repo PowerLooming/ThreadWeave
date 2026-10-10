@@ -6,6 +6,23 @@ uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **The MCP server's own docstrings stop advertising the closed cloud
+  assistant hosts.** The module docstring listed Copilot Studio, the M365
+  Copilot federated connector and GitHub Copilot as the clients this server
+  exists for, even after `docs/mcp-server.md` stated that every cloud assistant
+  route is closed by decision. It now names the clients a customer runs
+  themselves (an agent on the host, a client on the internal network, Claude
+  Code, your own code) and states the closure and its reason (a cloud assistant
+  cannot reach a private endpoint without a broker), pointing at
+  `docs/ai-publication-boundary.md`. The transport-security docstring, the
+  `threadweave mcp` CLI comment and the `TestTransportSecurity` docstring no
+  longer give Copilot Studio and Agent 365 as the reason the endpoint answers
+  421; that behaviour and the host allowlist guidance are unchanged. The module
+  docstring's audit sentence is narrowed to what `confidentiality.log_access`
+  records: confidential-and-above reads, denials and deletions.
+
 ## [0.4.23] — 2026-10-10
 
 
@@ -15,8 +32,6 @@ uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
 ## [0.4.21] — 2026-10-10
-
-
 
 ## [0.4.20] — 2026-10-02
 

@@ -314,11 +314,14 @@ class TestCommitmentsForwarding:
 
 
 class TestTransportSecurity:
-    """The published-endpoint trap: Host allowlisting.
+    """The non-loopback endpoint trap: Host allowlisting.
 
-    Copilot Studio and Agent 365 call the MCP endpoint under its public
-    hostname. The SDK's rebinding guard admits loopback only, so an
-    unconfigured endpoint answers 421 and the agent reports a broken tool.
+    An MCP client on the internal network reaches the endpoint under a company
+    hostname (or through a reverse proxy). The SDK's rebinding guard admits
+    loopback only, so an unconfigured endpoint answers 421 and the client
+    reports a broken tool. This is plumbing for on-network clients; it does not
+    open a cloud assistant route, which is closed by decision
+    (docs/ai-publication-boundary.md).
     """
 
     def test_foreign_host_is_refused_by_default(self, mcp_client):
