@@ -2,16 +2,22 @@
 # Copyright (C) 2026 ThreadWeave contributors
 """ThreadWeave MCP server — organizational memory as agent tools.
 
-Exposes ThreadWeave to any Model Context Protocol client over Streamable
-HTTP: Copilot Studio agents, Microsoft 365 Copilot (federated connectors),
-GitHub Copilot, Claude Code, or a plain MCP client.
+Exposes ThreadWeave to the Model Context Protocol clients you run yourself:
+an agent process on this host, a client elsewhere on your internal network,
+Claude Code, or your own code.
+
+Cloud assistant hosts are closed by decision, not unimplemented: a Copilot
+Studio agent, an M365 Copilot federated connector and a Power Platform custom
+connector all run in the cloud, and reaching this server from there would mean
+exposing it through a broker. See docs/ai-publication-boundary.md.
 
 Design: this module is a thin, stateless shim over the REST API. Every tool
 call is an HTTP request to ThreadWeave carrying the caller's own API key, so
 tenant scoping, confidentiality ACLs, the gossip gate, sensitivity detection
 and the audit trail all stay in the one place that already owns them. No
-memory logic is duplicated here, and an agent read is audited exactly like a
-human read.
+memory logic is duplicated here, and an agent read is audited on the same
+rule as a human read: confidential-and-above reads, denials and deletions are
+recorded, and a public or internal read is not.
 
 Run it:
     threadweave mcp                              # http://127.0.0.1:8100/mcp
@@ -632,9 +638,12 @@ def transport_security_settings(
 ) -> Optional[TransportSecuritySettings]:
     """Host/Origin allowlist for the MCP endpoint.
 
-    Without this the SDK admits only loopback hosts, so a published endpoint
-    (Copilot Studio, Agent 365, APIM, a company DNS name) answers 421 to
-    every request and the agent reports a broken tool. Set
+    Without this the SDK admits only loopback hosts, so an endpoint reached
+    under a company DNS name (or through a reverse proxy) answers 421 to every
+    request and the agent reports a broken tool. This is host plumbing for
+    clients on this host or the internal network; it cannot open a cloud
+    assistant route, which is closed by decision
+    (docs/ai-publication-boundary.md). Set
     THREADWEAVE_MCP_ALLOWED_HOSTS (and, if a browser origin calls it,
     THREADWEAVE_MCP_ALLOWED_ORIGINS) to the names this server answers to,
     e.g. "mcp.example.com,mcp.example.com:443".
@@ -660,7 +669,7 @@ def streamable_http_app(
     allowed_hosts: Optional[list[str]] = None,
     allowed_origins: Optional[list[str]] = None,
 ):
-    """The ASGI app Copilot Studio or any MCP client points at."""
+    """The ASGI app an MCP client on this host or the internal network points at."""
     server = server or build_server()
     app = server.streamable_http_app(
         streamable_http_path=mcp_path,
