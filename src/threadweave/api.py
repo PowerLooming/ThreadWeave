@@ -39,6 +39,9 @@ from threadweave.auth import (
     get_peer_max_results,
     get_tenant_id,
     is_peer_request,
+    peer_allowlist,
+    peer_rate_limit,
+    require_role,
 )
 from threadweave.confidentiality import (
     detect_sensitivity,
@@ -2115,6 +2118,38 @@ async def get_org_graph(
     nodes: dict[str, dict] = {}
     edges: list[dict] = []
 
+    # Bridges: a peer key is the one edge that enters this palace from another
+    # one, so the owner's graph shows which room a partner may reach and who is
+    # on the other side, next to the halls and tunnels inside (design section 10).
+    from threadweave import peer as peer_mod
+
+    for bridge in peer_mod.bridges():
+        if wing and bridge["wing"] != wing:
+            continue
+        node_id = bridge["id"]
+        nodes[node_id] = {
+            "id": node_id,
+            "label": bridge["label"],
+            "type": "peer",
+            "wing": bridge["wing"],
+        }
+        if bridge["wing"] and bridge["wing"] not in nodes:
+            nodes[bridge["wing"]] = {
+                "id": bridge["wing"],
+                "label": bridge["wing"],
+                "type": "team",
+                "wing": bridge["wing"],
+            }
+        edges.append({
+            "source": node_id,
+            "target": bridge["wing"],
+            "relation": "may_reach",
+            "type": "bridge",
+            "peer_id": bridge["peer_id"],
+            "expires_at": bridge["expires_at"],
+            "max_results": bridge["max_results"],
+        })
+
     # Collect relationships from the org model
     relationships = _org_model.relationships
 
@@ -2297,6 +2332,129 @@ def _entry_graph_nodes(
     return nodes, edges
 
 # ---- Audit Log ----
+
+
+class PeerRecord(BaseModel):
+    """One key issued to another organisation, as the owner sees it."""
+
+    peer_id: str
+    wing: str = ""
+    contact: str = ""
+    issued_by: str = ""
+    issued_at: str = ""
+    expires_at: str = ""
+    max_results: int = 0
+    label: str = ""
+    revoked: bool = False
+    activity: dict = Field(default_factory=dict)
+
+
+class PeersResponse(BaseModel):
+    peers: list[PeerRecord]
+    bridges: list[dict]
+    allowlist: list[str]
+    limit_per_minute: int
+
+
+class PeerIssueRequest(BaseModel):
+    peer_id: str = Field(..., min_length=1, description="Short name for the partner, e.g. nordvik")
+    wing: str = Field(..., min_length=1, description="The one wing the partner may read")
+    contact: str = ""
+    days: int = Field(default=90, ge=1, le=3650)
+    max_results: int = Field(default=25, ge=1, le=1000)
+
+
+class PeerIssueResponse(BaseModel):
+    """The key value appears here once and is never returned again."""
+
+    peer_id: str
+    key: str
+    wing: str
+    expires_at: str
+    max_results: int
+
+
+class PeerRevokeResponse(BaseModel):
+    peer_id: str
+    revoked: int
+
+
+@app.get("/api/v1/peers", response_model=PeersResponse)
+async def list_peers_route(request: Request):
+    """The owner's view of the peer link: who may reach what, and what they read.
+
+    Any valid key may read this, like the audit trail it summarises. Key values
+    are never returned: a peer key is shown once at issuance and only revoked
+    afterwards, so a leaked dashboard page cannot hand someone a partner's
+    access.
+    """
+    from threadweave import peer as peer_mod
+
+    return PeersResponse(
+        peers=[
+            PeerRecord(
+                peer_id=record.get("peer_id", ""),
+                wing=record.get("wing", ""),
+                contact=record.get("peer_contact", ""),
+                issued_by=record.get("issued_by", ""),
+                issued_at=record.get("issued_at", ""),
+                expires_at=record.get("expires_at", ""),
+                max_results=int(record.get("max_results", 0) or 0),
+                label=record.get("label", ""),
+                revoked=bool(record.get("revoked")),
+                activity=record.get("activity", {}),
+            )
+            for record in peer_mod.list_peers_with_activity()
+        ],
+        bridges=peer_mod.bridges(),
+        allowlist=peer_allowlist(),
+        limit_per_minute=peer_rate_limit(),
+    )
+
+
+@app.post("/api/v1/peers", response_model=PeerIssueResponse)
+async def issue_peer_route(request: Request, req: PeerIssueRequest):
+    """Issue a key for a partner. Admin only, because it grants access."""
+    from threadweave import peer as peer_mod
+
+    if not require_role(request, "admin"):
+        raise HTTPException(status_code=403, detail="Issuing a peer key requires an admin key")
+    issued_by = (
+        getattr(request.state, "auth_person", "")
+        or getattr(request.state, "auth_label", "")
+        or "admin"
+    )
+    try:
+        raw, record = peer_mod.issue_peer_key(
+            req.peer_id,
+            req.wing,
+            contact=req.contact,
+            issued_by=issued_by,
+            days=req.days,
+            max_results=req.max_results,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    return PeerIssueResponse(
+        peer_id=record["peer_id"],
+        key=raw,
+        wing=record["wing"],
+        expires_at=record["expires_at"],
+        max_results=int(record["max_results"]),
+    )
+
+
+@app.post("/api/v1/peers/{peer_id}/revoke", response_model=PeerRevokeResponse)
+async def revoke_peer_route(peer_id: str, request: Request):
+    """Revoke every active key for a partner. Admin only; effective immediately."""
+    from threadweave import peer as peer_mod
+
+    if not require_role(request, "admin"):
+        raise HTTPException(status_code=403, detail="Revoking a peer key requires an admin key")
+    count = peer_mod.revoke_peer_key(peer_id)
+    if not count:
+        raise HTTPException(status_code=404, detail=f"No active peer key for {peer_id}")
+    return PeerRevokeResponse(peer_id=peer_id, revoked=count)
 
 
 @app.get("/api/v1/audit/recent")

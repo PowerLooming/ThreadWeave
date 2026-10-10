@@ -44,6 +44,7 @@ def peer_world(monkeypatch, tmp_path):
     monkeypatch.setattr(Path, "home", lambda: home)
     monkeypatch.setenv("THREADWEAVE_REQUIRE_AUTH", "1")
     auth_mod.reset()
+    auth_mod.reset_peer_rate_limits()
     yield home
     # Restore the module default BY HAND. At this point the env var and the
     # patched Path.home are still in place (monkeypatch undoes them after
@@ -64,6 +65,7 @@ def peer_world_expired(monkeypatch, tmp_path):
     monkeypatch.setattr(Path, "home", lambda: home)
     monkeypatch.setenv("THREADWEAVE_REQUIRE_AUTH", "1")
     auth_mod.reset()
+    auth_mod.reset_peer_rate_limits()
     yield home
     # Restore the module default BY HAND. At this point the env var and the
     # patched Path.home are still in place (monkeypatch undoes them after
@@ -388,3 +390,19 @@ def test_mcp_middleware_refuses_a_peer_tool_and_replays_the_body(peer_world):
     allowed = asyncio.run(middleware.dispatch(_mcp_request(_jsonrpc("search_memory")), call_next))
     assert allowed.status_code == 200
     assert json.loads(seen["body"])["params"]["name"] == "search_memory"
+
+
+def test_revocation_reaches_a_running_server_without_a_restart(peer_world, api):
+    """The key file is re-read when it changes, so a revoke is immediate.
+
+    Found by the P2 acceptance run: the running server had loaded keys.json
+    once at startup, so a revoked key kept working until a restart and the
+    claim "revocation ends access on the next request" was false.
+    """
+    keys_file = Path(peer_world) / ".threadweave" / "keys.json"
+    assert _search(api, "postgres").status_code == 200
+    assert peer_mod.revoke_peer_key(PEER_ID, str(keys_file)) == 1
+    # Deliberately no auth_mod.reset() here: the server keeps running.
+    resp = _search(api, "postgres")
+    assert resp.status_code == 403
+    assert "invalid api key" in resp.json()["error"].lower()
