@@ -23,7 +23,7 @@ Four surfaces can move content out of the on-prem host. They are not equal.
 |---|---|---|---|---|---|
 | MCP server (`mcp_server.py`) | pull | the agent, per query | the caller's own API key | yes, confidentiality-filtered for that key | yes, like a person's read |
 | Copilot/Graph connector (`connectors/graph`) | **push** | a daemon, every 300 s | a daemon key, `role=readwrite`, no claims | it *fails* on anything the key cannot read, then pushes an empty stub | only the denials |
-| Peer key read (peer fields on `KeyInfo`) | pull | the partner's own agent, per query | a read-only key issued to that partner by an admin | yes: one wing, a capped result count, single-entry reads only | yes: `peer_read` and `peer_search`, the peer named, never the content |
+| Peer key read (peer fields on `KeyInfo`), over a mutual-TLS link | pull | the partner's own agent, per query | a read-only key issued to that partner by an admin, plus that partner's client certificate | yes: one wing, a capped result count, a per-peer rate limit, single-entry reads only | yes: `peer_read` and `peer_search`, the peer named, never the content |
 | Capture notification (`notify.py`) | push | a daemon, per capture | service | title/topic only, never the body | not recorded as a publication |
 
 The MCP server is the model to follow: explicit, per-caller, filtered and audited. The other

@@ -100,8 +100,16 @@ def check_peer(
     *,
     limit: int = DEFAULT_MAX_RESULTS,
     timeout: float = 15.0,
+    ca: str = "",
+    cert: str = "",
+    cert_key: str = "",
 ) -> dict:
-    """Ask a peer instance one question and report what came back."""
+    """Ask a peer instance one question and report what came back.
+
+    ``ca``, ``cert`` and ``cert_key`` present a client certificate, which is
+    what a P2 link requires: the server refuses a client that has no
+    certificate before it ever reads the key.
+    """
     body = _json.dumps({"query": query, "limit": int(limit)}).encode("utf-8")
     request = urllib.request.Request(
         url.rstrip("/") + "/api/v1/search",
@@ -109,8 +117,13 @@ def check_peer(
         headers={"Content-Type": "application/json", "X-API-Key": key or ""},
         method="POST",
     )
+    context = None
+    if ca:
+        from threadweave.peer_tls import client_ssl_context
+
+        context = client_ssl_context(ca, cert or None, cert_key or None)
     try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
+        with urllib.request.urlopen(request, timeout=timeout, context=context) as response:
             payload = _json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
         return {"ok": False, "status": exc.code, "error": exc.read().decode("utf-8", "replace")[:200]}
