@@ -18,7 +18,7 @@ ThreadWeave is a self-hosted organizational memory system. It reads the email, c
 - **Keeps the decisions, drops the noise.** A two-tier detector scores every message, so the palace collects answers, decisions and runbooks rather than "thanks, sounds good".
 - **Files it like a palace.** Wings are teams, rooms are topics, and each drawer holds one capture with its source, date and author. Related knowledge is linked, so one team's solution surfaces in another team's problem.
 - **Answers with the receipt.** Every result cites the message or document behind it, with a deep link back to the original.
-- **Fails closed on privacy.** Seven confidentiality levels detected at ingest and enforced at read, PII stripped before storage, per-person opt-out, audited deletion. See [docs/privacy.md](docs/privacy.md).
+- **Fails closed on privacy.** Seven confidentiality levels detected at ingest and enforced at read, identifiers redacted at ingest with typed placeholders instead of the message being dropped, per-person opt-out, audited deletion. See [docs/privacy.md](docs/privacy.md).
 
 ## Try it in one command, no tenant required
 

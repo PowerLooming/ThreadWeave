@@ -1,9 +1,15 @@
 # The AI publication boundary
 
-Status: design. Nothing implemented here yet. Written because the shipped Copilot/Graph
-connector contradicts `docs/privacy.md` ("It never leaves to a third party, and it never
-comes back") by pushing captured content into the M365 Copilot index from inside the capture
-path, unsupervised, every five minutes.
+Status: partly shipped. The Copilot/Graph connector removal is done, no publisher is left in
+the daemon registry, and `tests/test_daemons.py::test_the_copilot_graph_daemon_is_gone` pins
+that. `docs/privacy.md` now names the two surfaces that can carry content outward and scopes
+its one-way sentence to storage, which is R7 below. The `publish/` package and the rest of the
+enforcement list are still to build.
+
+The page exists because the Copilot/Graph connector that shipped at the time contradicted
+`docs/privacy.md` by pushing captured content into the M365 Copilot index from inside the
+capture path, unsupervised, every five minutes. The table under "What exists today" records
+the state at that decision, including the connector that has since been removed.
 
 ## The principle
 
@@ -17,7 +23,9 @@ deliberate act, enumerated in the contract.**
 
 ## What exists today
 
-Three surfaces can move content out of the on-prem host. They are not equal.
+Three surfaces could move content out of the on-prem host at the time of the decision, and they
+were never equal. Two of them still ship: the MCP server and the capture notification. The
+middle row is the connector that was removed.
 
 | surface | direction | who initiates | identity | filtered | audited |
 |---|---|---|---|---|---|
