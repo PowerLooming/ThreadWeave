@@ -17,7 +17,7 @@ class TestHealth:
         assert response.status_code == 200
         data = response.json()
         assert data["status"] == "healthy"
-        assert data["version"] == "0.4.21"
+        assert data["version"] == "0.4.22"
         assert "entries_stored" in data
 
 
