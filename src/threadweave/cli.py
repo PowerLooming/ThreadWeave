@@ -138,14 +138,43 @@ def cmd_serve(args):
         app_logger.addHandler(handler)
     app_logger.setLevel(logging.INFO)
 
-    print(f"ThreadWeave API starting on http://{args.host}:{args.port}")
+    # A peer link is mutual TLS over a private network: the server refuses a
+    # client that presents no certificate before it ever reads a key. The
+    # certificate paths are checked here, because a server that starts and
+    # then refuses every partner is harder to diagnose than one that does not
+    # start.
+    from threadweave import peer_tls
+
+    tls_kwargs: dict = {}
+    scheme = "http"
+    require_client = not getattr(args, "tls_no_client_cert", False)
+    if getattr(args, "tls", False) or getattr(args, "tls_cert", None):
+        try:
+            tls_kwargs = peer_tls.server_ssl_kwargs(
+                cert=getattr(args, "tls_cert", None),
+                key=getattr(args, "tls_key", None),
+                client_ca=getattr(args, "tls_client_ca", None),
+                require_client_cert=require_client,
+            )
+        except (FileNotFoundError, RuntimeError) as exc:
+            print(f"serve: {exc}")
+            raise SystemExit(2)
+        scheme = "https"
+
+    print(f"ThreadWeave API starting on {scheme}://{args.host}:{args.port}")
     print(f"Profile: {profile}")
-    print(f"Docs: http://{args.host}:{args.port}/docs")
+    if scheme == "https":
+        print(
+            "Peer link: mutual TLS, client certificates "
+            + ("required" if require_client else "not required (not for a peer link)")
+        )
+    print(f"Docs: {scheme}://{args.host}:{args.port}/docs")
     uvicorn.run(
         "threadweave.api:app",
         host=args.host,
         port=args.port,
         reload=args.reload,
+        **tls_kwargs,
     )
 
 
@@ -899,11 +928,186 @@ def cmd_demo(args):
         print()
 
 
+def cmd_peer(args):
+    """Issue, list and revoke peer keys, and check one against an instance."""
+    from threadweave import peer as peer_mod
+
+    sub = getattr(args, "peer_command", None)
+    if sub == "issue":
+        try:
+            raw, record = peer_mod.issue_peer_key(
+                args.peer_id,
+                args.wing,
+                tenant_id=args.tenant or "default",
+                contact=args.contact or "",
+                issued_by=args.issued_by or "",
+                days=args.days,
+                max_results=args.max_results,
+                path=args.keys_file,
+            )
+        except ValueError as exc:
+            print(f"error: {exc}")
+            return 1
+        print("Peer key issued. It is shown once, so copy it now.\n")
+        print(f"  peer         {record['peer_id']}")
+        print(f"  wing         {record['wing']}  (tenant {record['tenant_id']})")
+        print(f"  expiry       {record['expires_at']}")
+        print(f"  max results  {record['max_results']} per query")
+        print(f"  issued by    {record['issued_by'] or 'unrecorded'}")
+        print(f"\n  key          {raw}\n")
+        print("The peer may only search and read single entries. See docs/ai-publication-boundary.md.")
+        return 0
+    if sub == "list":
+        peers = peer_mod.list_peers(args.keys_file)
+        if not peers:
+            print("No peer keys on this host.")
+            return 0
+        for rec in peers:
+            state = "revoked" if rec.get("revoked") else "active"
+            print(
+                f"{rec['peer_id']:<20} {state:<8} wing={str(rec.get('wing', '')):<22} "
+                f"expires={str(rec.get('expires_at', ''))[:10]} "
+                f"max={rec.get('max_results', 0):<4} contact={rec.get('peer_contact', '')}"
+            )
+        return 0
+    if sub == "revoke":
+        count = peer_mod.revoke_peer_key(args.peer_id, args.keys_file)
+        if count:
+            print(f"Revoked {count} key(s) for peer {args.peer_id}. Access ends on the next request.")
+            return 0
+        print(f"No active key for peer {args.peer_id}.")
+        return 1
+    if sub == "tls":
+        from threadweave import peer_tls
+
+        action = getattr(args, "tls_command", None)
+        if action == "init":
+            hosts = list(dict.fromkeys(args.host or []))
+            peers = list(dict.fromkeys(args.peer or []))
+            try:
+                written = peer_tls.init_authority(hosts, peers, args.dir, force=args.force)
+            except (FileExistsError, RuntimeError, ValueError) as exc:
+                print(f"error: {exc}")
+                return 1
+            print(f"Peer-link material created in {written['dir']}\n")
+            print(f"  ca.pem     sha256 {written['ca_fingerprint']}")
+            print(
+                f"  server.pem sha256 {written['server_fingerprint']}"
+                f"  hosts {', '.join(written['hosts'])}"
+            )
+            for peer_id, material in written["clients"].items():
+                print(
+                    f"  client-{peer_id}.pem sha256 {material['fingerprint']}"
+                    f"  expires {material['expires']}"
+                )
+            print("\nSend ca.pem to both sides and one client certificate plus key to each partner.")
+            print("ca.key never leaves this machine: it can issue a certificate for any peer.")
+            print("\nThen serve over the private network:")
+            print("  threadweave serve --host <private address> --port 8443 --tls")
+            return 0
+        if action == "status":
+            try:
+                report = peer_tls.status(args.dir)
+            except RuntimeError as exc:
+                print(f"error: {exc}")
+                return 1
+            if not report.get("ca"):
+                print(f"No peer-link material in {report['dir']}")
+                return 1
+            print(f"peer-link material in {report['dir']}")
+            print(f"  CA     {report['ca']['fingerprint']}  expires {report['ca']['expires']}")
+            server = report.get("server")
+            if server:
+                print(
+                    f"  server {server['fingerprint']}  expires {server['expires']}"
+                    f"  hosts {', '.join(server['hosts'])}"
+                )
+            for client in report["clients"]:
+                key = "key present" if client["has_key"] else "KEY MISSING"
+                name = client["path"].rsplit("/", 1)[-1].rsplit("\\", 1)[-1]
+                print(
+                    f"  {name}  {client['fingerprint']}"
+                    f"  expires {client['expires']}  {key}"
+                )
+            return 0
+        print("usage: threadweave peer tls {init,status}")
+        return 2
+    if sub == "check":
+        result = peer_mod.check_peer(
+            args.url,
+            args.key,
+            args.query,
+            limit=args.limit,
+            ca=args.ca,
+            cert=args.cert,
+            cert_key=args.cert_key,
+        )
+        if not result.get("ok"):
+            print(f"check failed: {result.get('status', '')} {result.get('error', '')}".strip())
+            return 1
+        print(f"peer answered with {result['count']} result(s)")
+        for item in result.get("results", [])[:5]:
+            print(f"  - {str(item.get('content', ''))[:80]}")
+        return 0
+    print("usage: threadweave peer {issue,list,revoke,check}")
+    return 2
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="ThreadWeave — Organizational Memory System",
     )
     sub = parser.add_subparsers(dest="command")
+
+    # peer keys, for sharing across organisations
+    p_peer = sub.add_parser("peer", help="Peer keys for sharing across organisations")
+    peer_sub = p_peer.add_subparsers(dest="peer_command")
+
+    p_peer_issue = peer_sub.add_parser("issue", help="Issue a read-only key for another organisation")
+    p_peer_issue.add_argument("peer_id", help="Short name for the partner, e.g. nordvik")
+    p_peer_issue.add_argument("--wing", required=True, help="The one wing the partner may read")
+    p_peer_issue.add_argument("--tenant", default="default")
+    p_peer_issue.add_argument("--contact", default="", help="A named person for the audit trail")
+    p_peer_issue.add_argument("--issued-by", default="", help="Who authorised it")
+    p_peer_issue.add_argument("--days", type=int, default=90)
+    p_peer_issue.add_argument("--max-results", type=int, default=25)
+    p_peer_issue.add_argument("--keys-file", default=None)
+
+    p_peer_list = peer_sub.add_parser("list", help="List peer keys, without their values")
+    p_peer_list.add_argument("--keys-file", default=None)
+
+    p_peer_revoke = peer_sub.add_parser("revoke", help="Revoke every key for a peer")
+    p_peer_revoke.add_argument("peer_id")
+    p_peer_revoke.add_argument("--keys-file", default=None)
+
+    p_peer_check = peer_sub.add_parser("check", help="Ask a peer instance one question")
+    p_peer_check.add_argument("url")
+    p_peer_check.add_argument("--key", required=True, help="The key the peer issued to you")
+    p_peer_check.add_argument("--query", required=True)
+    p_peer_check.add_argument("--limit", type=int, default=5)
+    p_peer_check.add_argument("--ca", default="", help="CA file to trust, for a mutual-TLS link")
+    p_peer_check.add_argument("--cert", default="", help="This side's client certificate")
+    p_peer_check.add_argument("--cert-key", default="", help="This side's client key")
+
+    p_peer_tls = peer_sub.add_parser("tls", help="Mutual-TLS material for a private peer link")
+    tls_sub = p_peer_tls.add_subparsers(dest="tls_command")
+
+    p_tls_init = tls_sub.add_parser(
+        "init", help="Create the CA, the server certificate and one client certificate per partner"
+    )
+    p_tls_init.add_argument(
+        "--host", action="append", required=True,
+        help="A name or address this instance answers to; repeat for each",
+    )
+    p_tls_init.add_argument(
+        "--peer", action="append", default=[],
+        help="A partner id that gets a client certificate; repeat for each",
+    )
+    p_tls_init.add_argument("--dir", default=None, help="Where to write the material")
+    p_tls_init.add_argument("--force", action="store_true", help="Replace existing material")
+
+    p_tls_status = tls_sub.add_parser("status", help="Show the material that exists and when it expires")
+    p_tls_status.add_argument("--dir", default=None)
 
     # detect
     p_detect = sub.add_parser("detect", help="Analyze text for knowledge potential")
@@ -957,12 +1161,26 @@ def build_parser() -> argparse.ArgumentParser:
     p_serve.add_argument("--port", type=int, default=8000)
     p_serve.add_argument("--reload", action="store_true")
     p_serve.add_argument(
+        "--tls",
+        action="store_true",
+        help="Serve over HTTPS with the peer-link certificates and require a client certificate",
+    )
+    p_serve.add_argument("--tls-cert", default=None, help="Server certificate (default: the peer-link directory)")
+    p_serve.add_argument("--tls-key", default=None, help="Server private key")
+    p_serve.add_argument("--tls-client-ca", default=None, help="CA that signs the partners' client certificates")
+    p_serve.add_argument(
+        "--tls-no-client-cert",
+        action="store_true",
+        help="Do not require a client certificate (not for a peer link)",
+    )
+    p_serve.add_argument(
         "--profile", choices=["org", "personal"], default=None,
         help="Runtime profile (overrides THREADWEAVE_PROFILE): "
              "'personal' runs single-user, owner-scoped mode.")
 
-    # mcp — agent tools (MCP over Streamable HTTP) for Copilot Studio,
-    # M365 Copilot federated connectors and any other MCP client
+    # mcp — agent tools (MCP over Streamable HTTP) for MCP clients the
+    # customer runs on their own host or network; cloud assistant routes are
+    # closed by decision (docs/ai-publication-boundary.md)
     p_mcp = sub.add_parser(
         "mcp", help="Start the MCP server (agent tools over Streamable HTTP)")
     p_mcp.add_argument("--host", default="127.0.0.1")
@@ -1281,6 +1499,10 @@ def main() -> None:
             cmd_gws_onboard(args)
         else:
             p_gws.print_help()
+    elif args.command == "peer":
+        code = cmd_peer(args)
+        if code:
+            raise SystemExit(code)
     elif args.command == "email":
         if args.email_command == "watch":
             cmd_email_watch(args)

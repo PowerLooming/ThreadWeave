@@ -141,14 +141,13 @@ The M365 connectors run as continuous daemons that pull content one-way into on-
 # Run in the foreground (development):
 uv run python -m threadweave.cli email watch --mailbox Admin@your-tenant.com --interval 300
 uv run python -m threadweave.cli sharepoint watch --interval 300 --site "Mark 8" --onenote
-uv run python -m threadweave.cli graph daemon
 
 # Or manage them as OS services (start at login, survive reboots):
 uv run python -m threadweave.cli daemon config email-watch \
   --set THREADWEAVE_EMAIL_MAILBOX=Admin@your-tenant.com
 uv run python -m threadweave.cli daemon config teams-bot \
   --set MICROSOFT_APP_ID=... MICROSOFT_APP_PASSWORD=...
-uv run python -m threadweave.cli daemon install email-watch   # all four
+uv run python -m threadweave.cli daemon install email-watch   # or: sharepoint-watch, teams-bot, teams-watch, org-sync
 uv run python -m threadweave.cli daemon status all
 uv run python -m threadweave.cli daemon uninstall email-watch
 ```
@@ -224,7 +223,7 @@ The suite covers the connectors, the detection and decision layers, the confiden
 - [Privacy Model](docs/privacy.md) — on-prem one-way contract, opt-out, right to delete, access control
 - [Personal Profile](docs/personal-profile.md) — the single-user deployment: one mailbox, one owner, delegated access, no client secret and no admin grants
 - [Distribution](docs/distribution.md) — how orgs get the app (manual upload, scripted publish, Teams Store), verified marketplace costs
-- [Enterprise Adoption Checklist](docs/enterprise-adoption.md) — tracked gates from the IT-manager review: permissions, licensing, vendor readiness, observability, data lifecycle
+- [MCP Server](docs/mcp-server.md) — the tool surface for an AI agent on your own network: the nine tools, authentication, and why every cloud assistant route is closed
 - [Typed Decision Layer](docs/decision-layer.md) — the ingest judgments asked as typed questions, the three on-prem provider backends (local NLI encoder, Laya, ollama), phrasing rules, calibration, and the measurements behind them
 - [Pre-push Gate](docs/pre-push-gate.md) — local hygiene hook before publishing: secrets, identifiers, files that must not leave
 - [Technical Specification](docs/technical-spec.md)
@@ -326,7 +325,7 @@ Translation and multilingual detection stay local — no data ever leaves the on
 - ✅ **OpenDocument support** — odt/ods/odp (LibreOffice native) extracted with stdlib only
 - ✅ **Visio + video/audio** — .vsdx diagram text extraction; on-prem video/audio transcription (ffmpeg + faster-whisper, CPU)
 - ✅ **Personal profile** — the same installation as a single-user deployment: one mailbox, one owner, delegated device-code mailbox access with no client secret and no application permission, captures filed under the `personal` tenant, and no RSC or admin grants. See [docs/personal-profile.md](docs/personal-profile.md)
-- ✅ **925 tests** — full suite green (11 skipped)
+- ✅ **964 tests** — full suite green, verified on a clean checkout (12 skipped; 965 passing with the optional decision runtime)
 
 ## What's Next
 
