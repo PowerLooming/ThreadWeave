@@ -6,6 +6,8 @@ uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.4.25] — 2026-10-10
+
 ### Fixed
 
 - **The pre-push gate now runs from a fresh worktree, and says which python it
