@@ -67,7 +67,10 @@ uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   integrations (Slack reaction, Teams command, email BCC, browser extension)
   that no code implements. The email and SharePoint connector docstrings no
   longer offer a webhook mode: no daemon and no route uses one, so the shipped
-  capture path is pull only.
+  capture path is pull only. The MCP page also stops claiming that an agent read
+  is audited "like a human read" without saying how far that goes: the audit
+  records confidential-and-above reads, denials and deletions, which is what
+  `confidentiality.log_access` does.
 
 ## [0.4.19] — 2026-10-02
 

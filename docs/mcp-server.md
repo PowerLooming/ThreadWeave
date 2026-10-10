@@ -24,9 +24,11 @@ connectors and the bots without it.
 Every tool call is an HTTP request to the ThreadWeave API carrying the
 caller's own API key. Tenant scoping, confidentiality ACLs, the gossip gate,
 sensitivity detection, the opt-out registry and the audit trail therefore
-stay in the layer that already owns them, and an agent read is audited
-exactly like a human read. Nothing about capture is reimplemented here, so an
-agent cannot bypass a rule that a person is subject to.
+stay in the layer that already owns them, and an agent read is audited on the
+same rule as a human read: confidential-and-above reads, denials and deletions
+are recorded, and a public or internal read is not. Nothing about capture is
+reimplemented here, so an agent cannot bypass a rule that a person is subject
+to.
 
 ## Tools
 
