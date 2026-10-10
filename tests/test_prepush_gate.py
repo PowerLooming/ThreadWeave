@@ -402,10 +402,63 @@ def test_branch_deletion_is_skipped(repo):
     assert proc.returncode == 0
 
 
-def tmp_refs(repo: pathlib.Path, local: str, remote: str, remote_sha: str, local_sha: str | None = None):
-    sha = local_sha or subprocess.run(
+def test_head_local_ref_is_parsed_and_scanned(repo):
+    """``git push origin HEAD:<branch>`` sends a local ref of literally ``HEAD``.
+
+    The commit being pushed is the second field, so the local ref is a label, not
+    a decision. Rejecting the literal emptied the ref list, which is the exit 2
+    "could not run" path, and the hook allows the push unscanned on exit 2.
+    """
+    commit(repo, "src/one.py", "x = 1\n")
+    base = head_sha(repo)
+    commit(repo, "src/two.py", "y = 2\n")
+
+    refs = tmp_refs(repo, "HEAD", "refs/heads/topic", base)
+    proc = run_gate(repo, "--refs-file", str(refs))
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    stats = json.loads(proc.stdout)["stats"][0]
+    assert stats["mode"] == "diff"
+    assert stats["files"] == 1  # src/two.py, the only file this push adds
+
+
+def test_head_local_ref_still_blocks_a_private_term(repo, private_file):
+    """The HEAD push has to be scanned, not merely parsed."""
+    private = private_file("[block]\nnordvik\n")
+    commit(repo, "docs/legacy.md", "clean\n")
+    base = head_sha(repo)
+    commit(repo, "docs/pilot.md", "Pilot tenant is nordvik.\n")
+
+    refs = tmp_refs(repo, "HEAD", "refs/heads/topic", base)
+    proc = run_gate(repo, "--refs-file", str(refs), private=private)
+
+    assert proc.returncode == 1
+    assert "private-block-1" in [f["rule_id"] for f in findings_of(proc, "block")]
+
+
+def test_the_other_local_ref_shapes_git_prints_are_parsed(repo, private_file):
+    """A ``<sha>:<branch>`` push sends the object name, and a ``<rev>:<branch>``
+    push sends the revision as typed. Both emptied the ref list like HEAD did."""
+    private = private_file("[block]\nnordvik\n")
+    commit(repo, "docs/legacy.md", "clean\n")
+    base = head_sha(repo)
+    commit(repo, "docs/pilot.md", "Pilot tenant is nordvik.\n")
+    sha = head_sha(repo)
+
+    for local in (sha, sha[:9], "HEAD~1"):
+        refs = tmp_refs(repo, local, "refs/heads/topic", base)
+        proc = run_gate(repo, "--refs-file", str(refs), private=private)
+        assert proc.returncode == 1, f"{local}: {proc.stdout}{proc.stderr}"
+
+
+def head_sha(repo: pathlib.Path) -> str:
+    return subprocess.run(
         ["git", "rev-parse", "HEAD"], cwd=str(repo), capture_output=True, text=True
     ).stdout.strip()
+
+
+def tmp_refs(repo: pathlib.Path, local: str, remote: str, remote_sha: str, local_sha: str | None = None):
+    sha = local_sha or head_sha(repo)
     path = repo / ".." / "refs.txt"
     path = path.resolve()
     path.write_text(f"{local} {sha} {remote} {remote_sha}\n", encoding="utf-8")
@@ -488,6 +541,34 @@ def test_unparsable_refs_file_is_not_reported_as_a_clean_scan(repo):
     assert "could not read the push refs" in proc.stderr
 
 
+def test_unparsable_stdin_refs_stay_exit_two(repo):
+    """Prose on stdin is still not a push, now that every shape git prints is.
+
+    Accepting the HEAD literal must not turn "anything with four words" into a
+    target: a line still needs a refs/ remote ref and two object names.
+    """
+    env = dict(os.environ)
+    env["THREADWEAVE_PREPUSH_PRIVATE"] = str(repo / "absent.txt")
+    proc = subprocess.run(
+        [
+            sys.executable,
+            str(GATE),
+            "--repo",
+            str(repo),
+            "--rules",
+            str(RULES),
+            "--stdin-refs",
+        ],
+        input="this is not a ref line\n",
+        capture_output=True,
+        text=True,
+        env=env,
+        cwd=str(repo),
+    )
+    assert proc.returncode == 2, proc.stdout + proc.stderr
+    assert "could not read the push refs" in proc.stderr
+
+
 def test_hook_script_is_present_and_executable():
     hook = REPO_ROOT / ".githooks" / "pre-push"
     assert hook.is_file()
@@ -505,6 +586,28 @@ def test_redact_policy():
     assert prepush.redact("someone@realcompany.no") == "someone@realcompany.no"
     assert prepush.redact("sk-proj-abcdefghijklmnopqrstuvwxyz") == "sk-pro…(34 chars)"
     assert prepush.redact("x" * 40, keep_full=True) == "x" * 40
+
+
+def test_is_push_source_names_every_shape_git_prints(repo):
+    """The local ref field is a label for the report, not a scan decision.
+
+    Each shape below was captured from a real pre-push hook; a shape missing from
+    this list empties the ref list and the hook then allows the push unscanned.
+    """
+    commit(repo, "src/extra.py", "z = 3\n")  # so HEAD~1 resolves
+    sha = head_sha(repo)
+    assert prepush.is_push_source("refs/heads/main", str(repo))
+    assert prepush.is_push_source("refs/tags/v1", str(repo))
+    assert prepush.is_push_source("refs/remotes/origin/main", str(repo))
+    assert prepush.is_push_source("(delete)", str(repo))  # branch or tag deletion
+    assert prepush.is_push_source("HEAD", str(repo))  # git push origin HEAD:branch
+    assert prepush.is_push_source(sha, str(repo))  # git push origin <sha>:branch
+    assert prepush.is_push_source(sha[:9], str(repo))  # ... written abbreviated
+    assert prepush.is_push_source("HEAD~1", str(repo))  # ... written as a rev
+    # Not a push source: prose, a rev that resolves to nothing, or an option.
+    assert not prepush.is_push_source("this", str(repo))
+    assert not prepush.is_push_source("HEAD~9", str(repo))
+    assert not prepush.is_push_source("--all", str(repo))
 
 
 def test_parse_added_lines_tracks_numbers():

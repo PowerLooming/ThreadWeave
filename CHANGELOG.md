@@ -8,6 +8,17 @@ uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **The pre-push gate stops failing open on `git push origin HEAD:<branch>`.**
+  git hands the hook a local ref of literally `HEAD` for that push, and `HEAD` is
+  not a `refs/` name, so the gate skipped the only ref line it was given, reported
+  "could not read the push refs ... nothing was scanned" and exited 2, which the
+  hook treats as fail-open: the push landed unscanned, indistinguishable from one
+  that passed. The parser now names every local ref shape git really prints, taken
+  from a pre-push hook captured against a scratch remote: a `refs/...` name, the
+  `(delete)` and `HEAD` literals, the object name of a `<sha>:<branch>` push (also
+  abbreviated), and a revision expression such as `HEAD~1`. The local ref is only a
+  label for the report, since the commit under review is the second field. An empty
+  or unparsable ref list still exits 2, and prose still is not a push.
 - **The MCP server's own docstrings stop advertising the closed cloud
   assistant hosts.** The module docstring listed Copilot Studio, the M365
   Copilot federated connector and GitHub Copilot as the clients this server

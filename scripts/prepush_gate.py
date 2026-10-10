@@ -50,9 +50,20 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 ZERO_SHA = "0" * 40
-# A ref line from git is "refs/... <sha> refs/... <sha>". Anything else on stdin
-# is not a ref line, and treating it as one would scan nothing and report success.
+# A ref line from git is "<local ref> <sha> <remote ref> <sha>". Anything else on
+# stdin is not a ref line, and treating it as one would scan nothing and report
+# success. The remote ref is always a ref name; the local ref is whatever was
+# pushed, including git's verbatim literals, so it is checked separately in
+# is_push_source() rather than by this shape.
 _SHA_RE = re.compile(r"^[0-9a-f]{40}$|^[0-9a-f]{64}$")
+# git prints these two verbatim as the local ref, so both are part of the format
+# rather than malformed lines: "(delete)" for a branch or tag deletion, "HEAD"
+# for a push written as `git push origin HEAD:<branch>`. Captured from a real
+# pre-push hook against a scratch remote.
+_LOCAL_REF_LITERALS = frozenset({"(delete)", "HEAD"})
+# The local ref of a `<sha>:<branch>` push is the object name, which git prints
+# abbreviated when that is how it was written (`git push origin 62626e7:...`).
+_OBJECT_NAME_RE = re.compile(r"^[0-9a-fA-F]{4,64}$")
 DEFAULT_RULES_PATH = "scripts/prepush_rules.toml"
 PRIVATE_ENV = "THREADWEAVE_PREPUSH_PRIVATE"
 
@@ -188,6 +199,45 @@ def git(
     if binary:
         return proc.stdout
     return proc.stdout.decode("utf-8", "replace")
+
+
+def is_push_source(local_ref: str, repo: Optional[str]) -> bool:
+    """Whether a ref line's local ref field names something git can push.
+
+    The local ref is a label, not a decision: what a push publishes is
+    ``local_sha``, and the local ref name is never used to resolve the scan. It
+    is whatever the push was written as, and real pre-push hook output (probed
+    against a scratch remote) prints:
+
+    - a full ref name: ``refs/heads/main``, ``refs/tags/v1``,
+      ``refs/remotes/origin/main``
+    - ``(delete)`` for a deletion
+    - ``HEAD`` for ``git push origin HEAD:<branch>``
+    - the object name for ``git push origin <sha>:<branch>``, abbreviated when
+      the command was
+    - the revision expression as typed for ``git push origin HEAD~1:<branch>``
+
+    Every one of those has to be recognised. Rejecting a shape git really prints
+    empties the ref list, which is the exit 2 "could not run" path, which the hook
+    treats as fail-open: the push lands with nothing scanned, and a push that was
+    never scanned is indistinguishable from one that passed.
+
+    Prose is still rejected, and a line only gets this far once it has a
+    ``refs/`` remote ref and two object names, so a token that resolves to no
+    commit cannot be a ref line.
+    """
+    if local_ref.startswith("refs/") or local_ref in _LOCAL_REF_LITERALS:
+        return True
+    if _OBJECT_NAME_RE.match(local_ref):
+        return True
+    if local_ref.startswith("-"):
+        # Not a rev, and not something to hand to rev-parse as an option.
+        return False
+    resolved = git(
+        ["rev-parse", "--verify", "--quiet", "--end-of-options", f"{local_ref}^{{commit}}"],
+        repo=repo,
+    )
+    return bool(resolved.strip())
 
 
 def commits_in_range(repo: Optional[str], base: Optional[str], head: str) -> List[str]:
@@ -863,13 +913,15 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             if len(parts) < 4:
                 continue
             local_ref, local_sha, remote_ref, remote_sha = parts[:4]
-            # git sends "(delete)" as the local ref for a branch deletion, so that
-            # literal is part of the format rather than a malformed line.
-            if not (
-                local_ref.startswith("refs/") or local_ref == "(delete)"
-            ) or not remote_ref.startswith("refs/"):
+            if not remote_ref.startswith("refs/"):
                 continue
             if not _SHA_RE.match(local_sha) or not _SHA_RE.match(remote_sha):
+                continue
+            # git sends the local ref verbatim as whatever the push was written
+            # as, so its shape must not decide whether this push is scanned: a
+            # shape this parser does not know empties the list, which is the exit
+            # 2 fail-open path. is_push_source() names every shape git prints.
+            if not is_push_source(local_ref, repo_root):
                 continue
             ref_lines += 1
             remote = remote_ref.split("/", 1)[0] if "/" in remote_ref else "origin"
