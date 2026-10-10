@@ -71,6 +71,19 @@ uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   is audited "like a human read" without saying how far that goes: the audit
   records confidential-and-above reads, denials and deletions, which is what
   `confidentiality.log_access` does.
+- **`docs/technical-spec.md` now describes what the repository ships.** The page
+  carried a 0.3.0 header, a REST table with `GET /api/v1/search` where the API
+  answers `POST /api/v1/search`, a claim that all 35 MemPalace MCP tools are
+  available unchanged beside five `threadweave_*` tools that no module defines, a
+  Kubernetes deployment with three pods and an SSO ingress next to a compose file
+  that starts one API and an optional Ollama, SSO in the access control section, a
+  save-flow confirmation step that no code has, and an open-questions section on
+  business model and first vertical. It is rewritten against the tree: the capture
+  paths that ship and the five daemons, the real order of the ingest pipeline, the
+  entry record and the drawer metadata as they are stored, the nine MCP tools, the
+  compose and native install shapes, the confidentiality and PII behaviour as
+  implemented, and a closing list of what the repository does not ship (SSO,
+  Kubernetes manifests, a publisher, a webhook receiver).
 
 ## [0.4.19] — 2026-10-02
 
