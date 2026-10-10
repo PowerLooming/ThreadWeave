@@ -1,11 +1,12 @@
 # MCP server — ThreadWeave as agent tools
 
 ThreadWeave exposes its memory over the Model Context Protocol (Streamable
-HTTP), so an AI agent can search the organization's decisions, read the
-provenance behind them, list open commitments, classify text before capture,
-and write down what it concluded. Any MCP client can use it: Copilot Studio
-agents, Microsoft 365 Copilot through a federated connector, GitHub Copilot,
-Claude Code, or your own client.
+HTTP), so an AI agent you run on your own network can search the
+organization's decisions, read the provenance behind them, list open
+commitments, classify text before capture, and write down what it concluded.
+The client is yours: an agent process on the same host, a client elsewhere on
+your internal network, Claude Code, or your own code. Cloud assistant hosts are
+closed by decision, and a later section says why.
 
 Two commands run the whole thing:
 
@@ -57,63 +58,49 @@ The same key store as the REST API, same opt-in gate:
   per user where the host can hold per-user credentials.
 
 Note the current limit: identity is the key, not a per-user Entra token.
-A shared agent key sees what that key is cleared for. Per-user identity
-(Entra OAuth, on-behalf-of) is the next step for the M365 Copilot federated
-connector path.
+A shared agent key sees what that key is cleared for, and per-user identity
+(Entra OAuth, on-behalf-of) is not implemented.
 
-## Connect a Copilot Studio agent
+## Point a client at the server
 
-1. In Copilot Studio, open your agent, then **Tools** > **Add a tool** >
-   **New tool** > **Model Context Protocol**.
-2. Fill in **Server name** (`ThreadWeave`), **Server description** (this is
-   what the orchestrator matches on, so say "organizational memory: decisions,
-   commitments and who knows what"), and **Server URL**
-   (`https://<your-host>/mcp`).
-3. Authentication: **API key**, type **Header**, header name `X-API-Key`.
-4. **Create**, add the connection, and the agent now sees the nine tools.
-5. Publish the agent. Power Platform data policies apply to MCP servers
-   (connectivity goes through Power Platform connectors), so an admin has to
-   allow the endpoint.
+An MCP client needs three things and nothing else: the URL
+(`http://<host>:8100/mcp`), the Streamable HTTP transport, and the caller's key
+in the `X-API-Key` header. Client configuration formats differ, so follow your
+client's own MCP settings page; the server side is identical for all of them.
+The SDK speaks Streamable HTTP only, so a client that insists on SSE cannot
+connect.
 
-Only the Streamable HTTP transport is supported by Copilot Studio; SSE was
-dropped in August 2025, which is what this server speaks.
+## Cloud assistants: closed by decision
 
-## Microsoft 365 Copilot (federated connector)
+The MCP server is for agents you run on your own network. Every route that
+would put this memory in front of a cloud assistant is closed, and the closure
+is a decision rather than a gap:
 
-Microsoft 365 Copilot connectors have two models. Synced connectors index
-content into Microsoft Graph; **federated connectors** fetch over MCP in real
-time and index nothing. For ThreadWeave the federated model is the one that
-matches the on-prem contract: the content stays in the source.
+- The synced Microsoft 365 Copilot (Graph) connector used to live in
+  `connectors/graph`, driven by `threadweave graph ...`. It pushed captured
+  entries into the tenant's search index from a daemon inside the capture path,
+  which contradicts the one-way promise in [privacy.md](privacy.md), and it
+  cannot be tested without a Copilot licence. The connector and its CLI verbs
+  are removed.
+- The federated MCP connector is closed for the same reason the whole boundary
+  exists. A cloud assistant cannot call a private endpoint, so reaching this
+  server would mean exposing it through a broker, and a federated connector
+  still grounds its answers in the tenant's cloud.
+- A Copilot Studio agent and a Power Platform custom connector are cloud hosts
+  as well, so they are closed with the rest.
 
-- Federated connectors are federated per user: user credentials, not admin
-  credentials, so each user connects their own identity.
-- Read works today; write, update and delete actions are rolling out from
-  early October 2026.
-- The connector is governed in the Microsoft 365 admin center
-  (**Copilot connectors** > **Your connections**), and an internal server can
-  be registered for centralized governance through the Bring Your Own (BYO)
-  MCP server path (preview) using the Agent 365 CLI, after which admins
-  approve it in **Agents** > **Tools**.
+What remains is the interface on this page: pull, the caller's own key,
+filtered for that caller, audited like a read. Rule:
+[ai-publication-boundary.md](ai-publication-boundary.md). Any future outbound
+surface has to be a deliberate, operator-invoked publication rather than a
+daemon.
 
-The synced Graph connector that used to live in `connectors/graph`, driven by
-`threadweave graph ...`, has been removed. It pushed captured entries into the
-tenant's search index from a daemon inside the capture path, which contradicts
-the one-way promise in [privacy.md](privacy.md), and it cannot be tested without
-a Copilot licence. The federated model above is the path that remains: nothing is
-indexed, and the assistant asks instead. Any future outbound surface has to be a
-deliberate, per-caller publication rather than a daemon, as
-[ai-publication-boundary.md](ai-publication-boundary.md) sets out.
+## Reaching the server from your internal network
 
-## Reaching an on-prem server
-
-Copilot cannot call a private endpoint; the MCP URL must be reachable over
-HTTPS from the service. Keep the inbound path narrow:
-
-- Put a broker in front: Azure API Management with the on-prem backend over
-  a private route, or the Agent 365 Tooling Gateway (BYO MCP server).
-- Publish under a hostname the server accepts. The SDK's DNS-rebinding guard
-  admits loopback only, so a published endpoint answers **421 Invalid Host
-  header** until the name is allowlisted.
+The MCP server binds loopback by default, and the SDK's DNS-rebinding guard
+admits loopback host names only. A server reached under any other name answers
+`421 Invalid Host header` until the name is allowlisted, so set the allowlist
+to the name your own agents use on the internal network:
 
 ```bash
 export THREADWEAVE_MCP_ALLOWED_HOSTS="mcp.example.com,mcp.example.com:443"

@@ -54,6 +54,20 @@ uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   200-character slice, so results and the citations built from them read as
   broken text ("lagging on indexin"). Previews now cut on the last word
   boundary and mark the cut with an ellipsis.
+- **The public docs match the publication boundary and the daemon set that
+  ships.** `docs/mcp-server.md` presented the M365 Copilot federated connector
+  and the BYO MCP broker route as "the path that remains", which reads as a
+  roadmap item and contradicts the closure in
+  `docs/ai-publication-boundary.md`; every cloud assistant route is now stated
+  as closed, with the reason, and the page describes the MCP server for agents
+  on the customer's own network only. The README no longer documents the removed
+  `uv run python -m threadweave.cli graph daemon`, lists the five daemons the
+  registry actually holds, and links only documents that exist in the
+  repository. `docs/technical-spec.md` no longer advertises four capture
+  integrations (Slack reaction, Teams command, email BCC, browser extension)
+  that no code implements. The email and SharePoint connector docstrings no
+  longer offer a webhook mode: no daemon and no route uses one, so the shipped
+  capture path is pull only.
 
 ## [0.4.19] — 2026-10-02
 

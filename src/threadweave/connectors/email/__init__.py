@@ -9,8 +9,7 @@ for organizational knowledge in email threads.
 Modes:
     shared_mailbox  - Monitor knowledge@firma.no (forward/CC target)
     personal        - Monitor specific user mailboxes
-    webhook         - Graph API change notifications (push)
-    polling         - Periodic delta queries (fallback)
+    polling         - Periodic delta queries (the shipped capture path)
 
 Authentication:
     Client credentials (app-only) via Azure AD app registration.

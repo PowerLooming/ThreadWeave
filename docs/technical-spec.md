@@ -140,15 +140,6 @@ All 35 MemPalace MCP tools are available unchanged. ThreadWeave adds:
 | `threadweave_org_query` | Query org model at point in time |
 | `threadweave_stale_check` | Flag potentially outdated knowledge |
 
-### 3.3 Webhook Integrations
-
-| Integration | Trigger | Action |
-|-------------|---------|--------|
-| Slack | `:threadweave:` reaction | Detect → offer save |
-| Teams | `/threadweave` command | Save current message |
-| Email | BCC to `save@threadweave.company.com` | Detect → auto-save if high confidence |
-| Browser ext | Highlight text → right-click | Detect → offer save |
-
 ---
 
 ## 4. Integration Points with MemPalace
