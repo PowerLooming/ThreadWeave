@@ -157,6 +157,105 @@ def test_delegated_watcher_needs_no_client_credentials(monkeypatch):
     assert w.delegated_account() == ""
 
 
+# ---- real transport URL construction ----
+#
+# RecordingWatcher above replaces _delegated_request wholesale, so nothing in
+# this file used to execute the real body. A trim of the GRAPH_API_BASE import
+# then left the delegated path raising NameError while the suite stayed green.
+# These two tests call the real bodies and pin the Graph v1.0 base URL.
+
+
+class RecordingHttp:
+    """Stand-in for httpx.AsyncClient that records the request it is given."""
+
+    last_url = None
+    last_method = None
+    last_headers = None
+
+    def __init__(self, *args, **kwargs):
+        pass
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *args):
+        return False
+
+    async def request(self, method, url, params=None, headers=None, json=None):
+        RecordingHttp.last_url = url
+        RecordingHttp.last_method = method
+        RecordingHttp.last_headers = headers
+        return RecordingResponse()
+
+    async def get(self, url, headers=None):
+        RecordingHttp.last_url = url
+        RecordingHttp.last_method = "GET"
+        RecordingHttp.last_headers = headers
+        return RecordingResponse()
+
+
+class RecordingResponse:
+    content = b"attachment-bytes"
+
+    def raise_for_status(self):
+        pass
+
+    def json(self):
+        return {}
+
+
+class StubAuth:
+    def get_token(self, interactive=False):
+        return "tok-delegated"
+
+
+def _watcher(*, delegated, graph=None, auth=None) -> MailWatcher:
+    w = MailWatcher.__new__(MailWatcher)
+    w.delegated = delegated
+    w.graph = graph
+    w._delegated_auth = auth
+    return w
+
+
+@pytest.mark.asyncio
+async def test_delegated_request_builds_a_graph_v1_url(monkeypatch):
+    import httpx
+
+    RecordingHttp.last_url = None
+    RecordingHttp.last_method = None
+    monkeypatch.setattr(httpx, "AsyncClient", RecordingHttp)
+
+    w = _watcher(delegated=True, auth=StubAuth())
+    await w._delegated_request("GET", "/me/mailFolders/inbox/messages")
+
+    assert RecordingHttp.last_method == "GET"
+    assert RecordingHttp.last_url == (
+        "https://graph.microsoft.com/v1.0/me/mailFolders/inbox/messages"
+    )
+    assert RecordingHttp.last_headers == {"Authorization": "Bearer tok-delegated"}
+
+
+@pytest.mark.asyncio
+async def test_download_attachment_builds_a_graph_v1_url(monkeypatch):
+    import httpx
+
+    RecordingHttp.last_url = None
+    monkeypatch.setattr(httpx, "AsyncClient", RecordingHttp)
+
+    class StubGraph:
+        async def _get_token(self):
+            return "tok-app"
+
+    w = _watcher(delegated=False, graph=StubGraph())
+    content = await w.download_attachment("knowledge@example.com", "m1", "a1")
+
+    assert RecordingHttp.last_url == (
+        "https://graph.microsoft.com/v1.0/users/knowledge@example.com/messages/"
+        "m1/attachments/a1/$value"
+    )
+    assert content == b"attachment-bytes"
+
+
 # ---- mode resolution ----
 
 

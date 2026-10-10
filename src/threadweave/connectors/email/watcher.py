@@ -26,7 +26,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
-from threadweave.connectors.sharepoint.watcher import GraphClient
+from threadweave.connectors.sharepoint.watcher import GraphClient, GRAPH_API_BASE
 
 logger = logging.getLogger(__name__)
 
