@@ -278,6 +278,13 @@ class APIKeyMiddleware(BaseHTTPMiddleware):
         if not AUTH_ENABLED:
             return await call_next(request)
 
+        # The static shell and the API docs carry no content, and every byte of
+        # data comes from /api/... behind the key. Without this the dashboard is
+        # unusable in a browser with auth on, because a browser cannot attach an
+        # X-API-Key header to the page request itself.
+        if not request.url.path.startswith("/api/"):
+            return await call_next(request)
+
         api_key = (
             request.headers.get("X-API-Key")
             or request.headers.get("Authorization", "")
