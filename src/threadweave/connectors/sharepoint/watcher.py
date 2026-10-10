@@ -1,32 +1,32 @@
 # SPDX-License-Identifier: MIT
 # Copyright (C) 2026 ThreadWeave contributors
 """
-SharePoint Watcher — Microsoft Graph API client + webhook subscriptions.
+SharePoint Watcher: Microsoft Graph API client for document capture.
 
 Handles:
     - Azure AD authentication (client credentials)
-    - Webhook subscription lifecycle (create, renew, delete)
-    - Document discovery via delta queries
     - Site and drive enumeration
+    - Change discovery via delta queries
+    - File download
+
+Capture is pull only. The watch daemon polls Graph's delta endpoint on a
+schedule, so this module never receives anything: it exposes no inbound
+endpoint for content, there is no webhook subscription or notification
+receiver, no tunnel and no third-party relay. Every call here is an
+outbound HTTPS request from the on-prem host to Graph.
 
 Usage:
-    watcher = WebhookManager(tenant_id="...", client_id="...", client_secret="...")
-    await watcher.create_subscription(
-        site_id="...",
-        list_id="documents",
-        notification_url="https://threadweave.example.com/api/v1/webhooks/graph",
-    )
+    client = GraphClient(tenant_id="...", client_id="...", client_secret="...")
+    sites = await client.list_sites()
+    items, next_token = await client.get_changes(site_id, drive_id)
 """
 
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import os
-from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
-from typing import Optional
+from dataclasses import dataclass
 
 try:
     import msal
@@ -44,13 +44,6 @@ logger = logging.getLogger(__name__)
 
 # Microsoft Graph API base
 GRAPH_API_BASE = "https://graph.microsoft.com/v1.0"
-
-# Webhook max lifetime (Microsoft enforces 3 days max for most resources)
-MAX_SUBSCRIPTION_DAYS = 3
-
-# Renew when < 1 day remaining
-RENEW_THRESHOLD_HOURS = 24
-
 
 # ---- Data Classes ----
 
@@ -70,28 +63,6 @@ class DriveInfo:
     name: str
     web_url: str
     site_id: str = ""
-
-
-@dataclass
-class Subscription:
-    """A Microsoft Graph change notification subscription."""
-    subscription_id: str
-    resource: str  # e.g. /sites/{id}/lists/{id}
-    notification_url: str
-    expiration: datetime
-    client_state: str = ""  # Secret for validation
-
-
-@dataclass
-class ChangeNotification:
-    """A received change notification from Microsoft Graph."""
-    subscription_id: str
-    resource: str
-    change_type: str  # created, updated, deleted
-    site_id: str
-    list_id: str
-    item_id: str
-    client_state: str = ""
 
 
 # ---- Graph API Client ----
@@ -308,265 +279,3 @@ class GraphClient:
         next_token = data.get("@odata.deltaLink")
 
         return items, next_token
-
-
-# ---- Webhook Manager ----
-
-class WebhookManager:
-    """
-    Manages Microsoft Graph change notification subscriptions.
-
-    Subscriptions have a maximum lifetime enforced by Microsoft
-    (currently 3 days for most resources). This manager handles
-    creation, renewal, and cleanup.
-
-    ThreadWeave webhook flow:
-        1. Register subscription for a SharePoint list
-        2. Microsoft sends POST to our notification_url on changes
-        3. ThreadWeave validates the notification (client_state)
-        4. ThreadWeave fetches changed items and mines them
-        5. Subscription is renewed before expiration
-    """
-
-    def __init__(
-        self,
-        tenant_id: str | None = None,
-        client_id: str | None = None,
-        client_secret: str | None = None,
-    ):
-        self.graph = GraphClient(
-            tenant_id=tenant_id,
-            client_id=client_id,
-            client_secret=client_secret,
-        )
-        self._subscriptions: dict[str, Subscription] = {}
-
-    # ---- Subscription Lifecycle ----
-
-    async def create_subscription(
-        self,
-        site_id: str,
-        list_id: str = "documents",
-        notification_url: str = "",
-        client_state: str = "",
-    ) -> Subscription:
-        """
-        Create a change notification subscription for a SharePoint list.
-
-        Args:
-            site_id: SharePoint site ID (GUID format: tenant.sharepoint.com,guid)
-            list_id: List/library ID or well-known name (e.g. 'documents')
-            notification_url: HTTPS endpoint that receives notifications
-            client_state: Secret for validating incoming notifications
-        """
-        resource = f"/sites/{site_id}/lists/{list_id}"
-
-        expiration = datetime.now(timezone.utc) + timedelta(
-            days=MAX_SUBSCRIPTION_DAYS
-        )
-
-        body = {
-            "changeType": "created,updated",
-            "notificationUrl": notification_url,
-            "resource": resource,
-            "expirationDateTime": expiration.isoformat(),
-            "clientState": client_state,
-        }
-
-        try:
-            data = await self.graph._request(
-                "POST", "/subscriptions", json_body=body
-            )
-        except Exception as e:
-            logger.error("Failed to create subscription for %s: %s", resource, e)
-            raise
-
-        sub = Subscription(
-            subscription_id=data["id"],
-            resource=data["resource"],
-            notification_url=data["notificationUrl"],
-            expiration=datetime.fromisoformat(
-                data["expirationDateTime"].replace("Z", "+00:00")
-            ),
-            client_state=client_state,
-        )
-
-        self._subscriptions[sub.subscription_id] = sub
-        logger.info(
-            "Subscription created: %s -> %s (expires %s)",
-            sub.subscription_id, resource, sub.expiration.isoformat()
-        )
-        return sub
-
-    async def renew_subscription(self, subscription_id: str) -> Subscription:
-        """Extend an existing subscription's expiration."""
-        expiration = datetime.now(timezone.utc) + timedelta(
-            days=MAX_SUBSCRIPTION_DAYS
-        )
-
-        body = {"expirationDateTime": expiration.isoformat()}
-
-        data = await self.graph._request(
-            "PATCH", f"/subscriptions/{subscription_id}", json_body=body
-        )
-
-        sub = self._subscriptions.get(subscription_id)
-        if sub:
-            sub.expiration = datetime.fromisoformat(
-                data["expirationDateTime"].replace("Z", "+00:00")
-            )
-
-        logger.info("Subscription %s renewed until %s", subscription_id, expiration)
-        return sub
-
-    async def delete_subscription(self, subscription_id: str):
-        """Delete a subscription."""
-        await self.graph._request("DELETE", f"/subscriptions/{subscription_id}")
-        self._subscriptions.pop(subscription_id, None)
-        logger.info("Subscription %s deleted", subscription_id)
-
-    async def list_subscriptions(self) -> list[Subscription]:
-        """List all active subscriptions."""
-        data = await self.graph._request("GET", "/subscriptions")
-
-        subs = []
-        for item in data.get("value", []):
-            subs.append(Subscription(
-                subscription_id=item["id"],
-                resource=item["resource"],
-                notification_url=item["notificationUrl"],
-                expiration=datetime.fromisoformat(
-                    item["expirationDateTime"].replace("Z", "+00:00")
-                ),
-                client_state=item.get("clientState", ""),
-            ))
-        return subs
-
-    async def renew_expiring(self) -> int:
-        """Renew all subscriptions expiring soon. Returns count renewed."""
-        count = 0
-        threshold = datetime.now(timezone.utc) + timedelta(
-            hours=RENEW_THRESHOLD_HOURS
-        )
-
-        for sub in await self.list_subscriptions():
-            if sub.expiration < threshold:
-                try:
-                    await self.renew_subscription(sub.subscription_id)
-                    count += 1
-                except Exception as e:
-                    logger.error(
-                        "Failed to renew %s: %s", sub.subscription_id, e
-                    )
-
-        return count
-
-    # ---- Notification Handling ----
-
-    @staticmethod
-    def parse_notifications(payload: dict) -> list[ChangeNotification]:
-        """
-        Parse Microsoft Graph notification payload.
-
-        Validates client_state if provided.
-
-        Example payload:
-        {
-            "value": [{
-                "subscriptionId": "...",
-                "resource": "sites/{id}/lists/{id}",
-                "changeType": "created",
-                "clientState": "secret",
-                "resourceData": {
-                    "id": "item-guid",
-                    "@odata.type": "#Microsoft.Graph.driveItem"
-                }
-            }]
-        }
-        """
-        notifications = []
-        for item in payload.get("value", []):
-            resource_data = item.get("resourceData", {})
-            resource = item.get("resource", "")
-
-            # Extract site_id and list_id from resource path
-            parts = resource.strip("/").split("/")
-            site_id = parts[1] if len(parts) > 1 else ""
-            list_id = parts[3] if len(parts) > 3 else ""
-
-            notifications.append(ChangeNotification(
-                subscription_id=item.get("subscriptionId", ""),
-                resource=resource,
-                change_type=item.get("changeType", ""),
-                site_id=site_id,
-                list_id=list_id,
-                item_id=resource_data.get("id", ""),
-                client_state=item.get("clientState", ""),
-            ))
-
-        return notifications
-
-    def validate_notification(
-        self, notification: ChangeNotification, expected_state: str = ""
-    ) -> bool:
-        """Validate a notification's client_state matches."""
-        if expected_state and notification.client_state != expected_state:
-            logger.warning("Invalid client_state in notification")
-            return False
-        return True
-
-
-# ---- Auto-discovery ----
-
-async def discover_and_watch(
-    watcher: WebhookManager,
-    notification_url: str,
-    client_state: str = "",
-    drive_filter: list[str] | None = None,
-) -> list[Subscription]:
-    """
-    Discover all accessible SharePoint document libraries and subscribe.
-
-    Args:
-        watcher: Configured WebhookManager
-        notification_url: HTTPS webhook endpoint
-        client_state: Validation secret
-        drive_filter: Optional list of library names to watch (all if None)
-
-    Returns:
-        List of created subscriptions
-    """
-    subscriptions = []
-
-    sites = await watcher.graph.list_sites()
-    logger.info("Discovered %d SharePoint sites", len(sites))
-
-    for site in sites:
-        logger.info("Scanning site: %s", site.display_name)
-        try:
-            drives = await watcher.graph.list_drives(site.site_id)
-        except Exception as e:
-            logger.warning("Failed to list drives for %s: %s", site.display_name, e)
-            continue
-
-        for drive in drives:
-            if drive_filter and drive.name not in drive_filter:
-                continue
-
-            logger.info("  Found library: %s", drive.name)
-            try:
-                sub = await watcher.create_subscription(
-                    site_id=site.site_id,
-                    list_id=drive.drive_id,
-                    notification_url=notification_url,
-                    client_state=client_state,
-                )
-                subscriptions.append(sub)
-            except Exception as e:
-                logger.warning(
-                    "Failed to subscribe to %s/%s: %s",
-                    site.display_name, drive.name, e,
-                )
-
-    logger.info("Created %d subscriptions", len(subscriptions))
-    return subscriptions

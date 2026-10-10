@@ -23,6 +23,16 @@ uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   docstring's audit sentence is narrowed to what `confidentiality.log_access`
   records: confidential-and-above reads, denials and deletions.
 
+## [0.4.23] — 2026-10-10
+
+
+
+## [0.4.22] — 2026-10-10
+
+
+
+## [0.4.21] — 2026-10-10
+
 ## [0.4.20] — 2026-10-02
 
 ### Added
@@ -36,6 +46,23 @@ uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   org` runs the same palace under the confidentiality gates so the filtering is
   visible, and both the database and the palace path are forced rather than
   inherited, so a demo can never read from or write to a real palace.
+
+### Removed
+
+- **The dormant Graph push path is gone from the SharePoint and email
+  connectors.** `threadweave.connectors.sharepoint.WebhookManager` (with its
+  `Subscription` and `ChangeNotification` dataclasses and the
+  `discover_and_watch` helper), `MailWatcher.create_mail_subscription` and
+  `DocumentProcessor.process_notification` were never constructed by a daemon
+  and had no route in the API, so no shipped configuration could create a
+  Graph change-notification subscription or receive one. They read as an
+  inbound endpoint for tenant content, which contradicts
+  `docs/ai-publication-boundary.md`. The capture path is the delta poll in
+  `connectors/sharepoint/daemon.py` and nothing else; code that imported
+  `threadweave.connectors.sharepoint.WebhookManager` has to drop it. A test
+  in `tests/test_capture_path_is_pull_only.py` now fails if a subscription
+  registration or a notification receiver is added back, or if the word
+  webhook appears anywhere outside a sentence that denies one.
 
 ### Fixed
 
@@ -73,6 +100,36 @@ uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   200-character slice, so results and the citations built from them read as
   broken text ("lagging on indexin"). Previews now cut on the last word
   boundary and mark the cut with an ellipsis.
+- **The public docs match the publication boundary and the daemon set that
+  ships.** `docs/mcp-server.md` presented the M365 Copilot federated connector
+  and the BYO MCP broker route as "the path that remains", which reads as a
+  roadmap item and contradicts the closure in
+  `docs/ai-publication-boundary.md`; every cloud assistant route is now stated
+  as closed, with the reason, and the page describes the MCP server for agents
+  on the customer's own network only. The README no longer documents the removed
+  `uv run python -m threadweave.cli graph daemon`, lists the five daemons the
+  registry actually holds, and links only documents that exist in the
+  repository. `docs/technical-spec.md` no longer advertises four capture
+  integrations (Slack reaction, Teams command, email BCC, browser extension)
+  that no code implements. The email and SharePoint connector docstrings no
+  longer offer a webhook mode: no daemon and no route uses one, so the shipped
+  capture path is pull only. The MCP page also stops claiming that an agent read
+  is audited "like a human read" without saying how far that goes: the audit
+  records confidential-and-above reads, denials and deletions, which is what
+  `confidentiality.log_access` does.
+- **`docs/technical-spec.md` now describes what the repository ships.** The page
+  carried a 0.3.0 header, a REST table with `GET /api/v1/search` where the API
+  answers `POST /api/v1/search`, a claim that all 35 MemPalace MCP tools are
+  available unchanged beside five `threadweave_*` tools that no module defines, a
+  Kubernetes deployment with three pods and an SSO ingress next to a compose file
+  that starts one API and an optional Ollama, SSO in the access control section, a
+  save-flow confirmation step that no code has, and an open-questions section on
+  business model and first vertical. It is rewritten against the tree: the capture
+  paths that ship and the five daemons, the real order of the ingest pipeline, the
+  entry record and the drawer metadata as they are stored, the nine MCP tools, the
+  compose and native install shapes, the confidentiality and PII behaviour as
+  implemented, and a closing list of what the repository does not ship (SSO,
+  Kubernetes manifests, a publisher, a webhook receiver).
 
 ## [0.4.19] — 2026-10-02
 

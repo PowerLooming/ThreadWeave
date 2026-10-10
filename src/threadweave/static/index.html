@@ -59,6 +59,7 @@ button:disabled{opacity:.4;cursor:not-allowed}
   <a href="#" data-page="save">💾 Save</a>
   <a href="#" data-page="entries">📋 Entries</a>
   <a href="#" data-page="graph">🔗 Graph</a>
+  <a href="#" data-page="peers">🤝 Peers</a>
   <div class="status-bar" id="status-bar">Connecting…</div>
 </nav>
 
@@ -137,15 +138,47 @@ button:disabled{opacity:.4;cursor:not-allowed}
     </div>
     <div style="display:flex;gap:1rem;margin-top:.5rem;font-size:.75rem;color:var(--muted)">
       <span>🟦 Person</span><span>🟩 Team</span><span>🟨 Domain</span>
-      <span style="margin-left:1rem">── Hallway</span><span>╌╌ Tunnel</span>
+      <span style="margin-left:1rem">── Hallway</span><span>╌╌ Tunnel</span><span style="margin-left:1rem">┈┈ Bridge</span><span>🟪 Partner</span>
     </div>
   </div>
+  <!-- Peers -->
+  <div id="page-peers" class="page">
+    <h2 style="margin-top:0">Peers</h2>
+    <p style="color:var(--muted);max-width:70ch">
+      A peer key lets another organisation search and read single entries in one wing. Nothing is
+      copied, every read is audited, and revocation ends access on the next request. The graph draws
+      one bridge edge per active key. Issuing and revoking require an admin key.
+    </p>
+    <div class="card" style="padding:1rem;margin-bottom:1rem">
+      <h3 style="margin-top:0">Issue a key</h3>
+      <div style="display:flex;gap:.5rem;flex-wrap:wrap;align-items:flex-end">
+        <label style="font-size:.8rem">Admin key<br><input id="admin-key" type="password" placeholder="sk-..." style="width:16rem"></label>
+        <label style="font-size:.8rem">Partner id<br><input id="peer-id" placeholder="nordvik"></label>
+        <label style="font-size:.8rem">Wing<br><input id="peer-wing" placeholder="engineering"></label>
+        <label style="font-size:.8rem">Contact<br><input id="peer-contact" placeholder="security@partner.example"></label>
+        <label style="font-size:.8rem">Days<br><input id="peer-days" type="number" value="90" style="width:6rem"></label>
+        <label style="font-size:.8rem">Max results<br><input id="peer-max" type="number" value="25" style="width:6rem"></label>
+        <button onclick="issuePeer()">Issue key</button>
+      </div>
+      <div id="peer-issued" style="display:none;margin-top:.75rem;padding:.75rem;border:1px solid var(--green);border-radius:.5rem">
+        <div><strong>Copy this now: it is shown once and never again.</strong></div>
+        <code id="peer-key" style="word-break:break-all"></code>
+      </div>
+      <div id="peer-error" style="display:none;margin-top:.5rem;color:#f87171"></div>
+    </div>
+    <div class="card" style="padding:1rem">
+      <h3 style="margin-top:0">Who may reach what</h3>
+      <table id="peers-table" style="width:100%;border-collapse:collapse;font-size:.85rem"></table>
+      <p id="peers-meta" style="color:var(--muted);font-size:.8rem;margin-top:.75rem"></p>
+    </div>
+  </div>
+
 </main>
 
 <script src="https://d3js.org/d3.v7.min.js"></script>
 
 <script>
-const A='http://localhost:8000/api/v1';
+const A=(location.origin&&location.origin!=='null'?location.origin:'http://localhost:8000')+'/api/v1';
 let pollTimer;
 
 // Navigation
@@ -160,6 +193,7 @@ function switchPage(p){
   if(p==='dashboard') fetchDashboard();
   if(p==='entries') fetchEntries();
   if(p==='graph') fetchGraph();
+  if(p==='peers') fetchPeers();
 }
 
 // API helper
@@ -304,6 +338,77 @@ async function fetchGraph(){
   }
 }
 
+// ── Peers: the owner's side of the peer link ──
+const storedAdminKey=()=>{try{return sessionStorage.getItem('tw-admin-key')||''}catch(e){return ''}};
+function peerHeaders(){
+  const el=document.getElementById('admin-key');
+  const k=(el&&el.value.trim())||storedAdminKey();
+  if(el&&el.value.trim()){try{sessionStorage.setItem('tw-admin-key',el.value.trim())}catch(e){}}
+  const h={'Content-Type':'application/json'};
+  if(k) h['X-API-Key']=k;
+  return h;
+}
+function esc(s){return String(s===undefined||s===null?'':s).replace(/[<>&"]/g,c=>({'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;'}[c]))}
+async function fetchPeers(){
+  const t=document.getElementById('peers-table');
+  const meta=document.getElementById('peers-meta');
+  const key=document.getElementById('admin-key');
+  if(key&&!key.value) key.value=storedAdminKey();
+  try{
+    const d=await api('/peers',{headers:peerHeaders()});
+    if(!d.peers.length){
+      t.innerHTML='<tr><td style="color:var(--muted);padding:.5rem">No peer keys on this host.</td></tr>';
+    }else{
+      t.innerHTML='<tr style="text-align:left;color:var(--muted)">'
+        +['partner','wing','expires','cap','what they read','last read',''].map(x=>'<th style="padding:.35rem">'+x+'</th>').join('')+'</tr>'
+        +d.peers.map(p=>'<tr>'
+          +'<td style="padding:.35rem"><strong>'+esc(p.peer_id)+'</strong><br><span style="color:var(--muted);font-size:.75rem">'+esc(p.contact||'')+'</span></td>'
+          +'<td style="padding:.35rem">'+esc(p.wing)+'</td>'
+          +'<td style="padding:.35rem">'+esc((p.expires_at||'').slice(0,10))+'</td>'
+          +'<td style="padding:.35rem">'+p.max_results+'</td>'
+          +'<td style="padding:.35rem">'+(p.activity.reads||0)+' reads / '+(p.activity.searches||0)+' searches'
+            +(p.activity.denied?(' / '+p.activity.denied+' refused'):'')+'</td>'
+          +'<td style="padding:.35rem">'+esc((p.activity.last_read||'-').slice(0,19).replace('T',' '))+'</td>'
+          +'<td style="padding:.35rem">'+(p.revoked?'<span style="color:var(--muted)">revoked</span>'
+            :'<button onclick="revokePeer(\''+esc(p.peer_id)+'\')">Revoke</button>')+'</td>'
+          +'</tr>').join('');
+    }
+    meta.textContent='Allowlist: '+d.allowlist.join('   ')+'   |   rate limit: '+d.limit_per_minute+'/minute per partner';
+  }catch(e){
+    t.innerHTML='<tr><td style="color:#f87171;padding:.5rem">Could not read peers: '+esc(e.message)+'</td></tr>';
+  }
+}
+async function issuePeer(){
+  const err=document.getElementById('peer-error');
+  err.style.display='none';
+  const body={
+    peer_id:document.getElementById('peer-id').value.trim(),
+    wing:document.getElementById('peer-wing').value.trim(),
+    contact:document.getElementById('peer-contact').value.trim(),
+    days:parseInt(document.getElementById('peer-days').value||'90',10),
+    max_results:parseInt(document.getElementById('peer-max').value||'25',10),
+  };
+  try{
+    const d=await api('/peers',{method:'POST',headers:peerHeaders(),body:JSON.stringify(body)});
+    document.getElementById('peer-key').textContent=d.key;
+    document.getElementById('peer-issued').style.display='block';
+    fetchPeers();
+  }catch(e){
+    err.textContent='Could not issue: '+e.message;
+    err.style.display='block';
+  }
+}
+async function revokePeer(id){
+  try{
+    await api('/peers/'+encodeURIComponent(id)+'/revoke',{method:'POST',headers:peerHeaders()});
+    fetchPeers();
+  }catch(e){
+    const err=document.getElementById('peer-error');
+    err.textContent='Could not revoke: '+e.message;
+    err.style.display='block';
+  }
+}
+
 function renderGraph(data){
   const svg=d3.select('#graph-svg');
   svg.selectAll('*').remove();
@@ -314,9 +419,9 @@ function renderGraph(data){
 
   // Color scale — entry nodes (captured knowledge) get violet,
   // distinct from people (blue), teams (green), domains (amber)
-  const nodeColor=d=>{switch(d.type){case'person':return'#3b82f6';case'team':return'#22c55e';case'domain':return'#f59e0b';case'entry':return'#a78bfa';default:return'#64748b'}};
-  const edgeColor=d=>d.type==='tunnel'?'#f59e0b':'#0ea5e9';
-  const edgeDash=d=>d.type==='tunnel'?'6,3':null;
+  const nodeColor=d=>{switch(d.type){case'person':return'#3b82f6';case'team':return'#22c55e';case'domain':return'#f59e0b';case'entry':return'#a78bfa';case'peer':return'#e879f9';default:return'#64748b'}};
+  const edgeColor=d=>d.type==='bridge'?'#e879f9':d.type==='tunnel'?'#f59e0b':'#0ea5e9';
+  const edgeDash=d=>d.type==='bridge'?'2,4':d.type==='tunnel'?'6,3':null;
 
   // Force simulation
   const sim=d3.forceSimulation(data.nodes)
