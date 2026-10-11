@@ -31,9 +31,15 @@ stop work.
 `2` is also what an unreadable ref list produces. Under `--stdin-refs` an empty
 or unparsable list means the gate never saw what the push would publish, and
 reporting that as `0` would be the one outcome worse than a false block: a push
-that was never scanned would look exactly like a push that passed. A line that is
-not a ref line (not `refs/... <sha> refs/... <sha>`, with `(delete)` allowed as
-the local ref of a branch deletion) is not turned into a target either.
+that was never scanned would look exactly like a push that passed. A line is a
+ref line when it carries a `refs/...` remote ref and two object names, and its
+local ref has to be a shape git really prints: a `refs/...` name, the `(delete)`
+literal for a deletion, the `HEAD` literal for `git push origin HEAD:<branch>`, an
+object name for a `<sha>:<branch>` push, or a revision expression such as `HEAD~1`.
+Anything else is ignored rather than turned into a target. The local ref name is a
+label for the report, never a decision: the commit under review is the second
+field. That is why a shape this parser did not recognise ended as `2` with nothing
+scanned, which is the exit code the hook allows a push on.
 
 ## Two layers, on purpose
 
