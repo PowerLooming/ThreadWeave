@@ -68,6 +68,33 @@ jobs:
             echo "manual=true" >> "$GITHUB_OUTPUT"
           fi
 
+      - name: Refuse to publish an empty release
+        # The v0.4.26 incident: a branch cut before a version bump merges
+        # cleanly, its [Unreleased] entry lands inside an already released
+        # section, and the bump below files an empty [Unreleased] as the new
+        # release's content. The guard runs BEFORE the bump commit, so a refusal
+        # leaves master, the version literals and the tags untouched: the fix is
+        # a changelog push, and this workflow runs again on it (has_code is
+        # measured against the last tag, not the last commit).
+        if: steps.code.outputs.has_code == 'true'
+        run: |
+          # Plain shell variables rather than a bash array: the step runs on the
+          # runner's bash, and a value that is empty must simply contribute no
+          # argument. Both values are a version and a tag, neither of which can
+          # contain whitespace.
+          BASE=""
+          if [ -n "${{ steps.code.outputs.latest }}" ]; then
+            BASE="--base-rev ${{ steps.code.outputs.latest }}"
+          fi
+          SECTION=""
+          if [ "${{ steps.manual.outputs.manual }}" = "true" ]; then
+            # A hand-written bump publishes its own dated section, not
+            # [Unreleased]; an empty one must not ship either.
+            SECTION="--version ${{ steps.version.outputs.version }}"
+          fi
+          set -x
+          python3 scripts/changelog_release.py check --changelog CHANGELOG.md $BASE $SECTION
+
       - name: Auto-increment patch version
         id: bumped
         if: steps.code.outputs.has_code == 'true' && steps.manual.outputs.manual == 'false'
@@ -75,6 +102,7 @@ jobs:
           python - <<'EOF'
           import datetime
           import re
+          import sys
 
           path = "pyproject.toml"
           text = open(path, encoding="utf-8").read()
@@ -114,29 +142,23 @@ jobs:
               raise SystemExit(f"expected 1 version assertion in test_api.py, found {n}")
           open(test_path, "w", encoding="utf-8").write(test_text)
 
+          # The [Unreleased] section becomes the new release's content, through
+          # the same module the guard above used, so the section that was
+          # approved is the section that is filed.
+          sys.path.insert(0, "scripts")
+          import changelog_release
+
           changelog_path = "CHANGELOG.md"
           changelog = open(changelog_path, encoding="utf-8").read()
-          marker = "## [Unreleased]"
-          if marker not in changelog:
-              raise SystemExit("CHANGELOG.md has no [Unreleased] section")
-          head, rest = changelog.split(marker, 1)
-          # Everything between Unreleased and the next release heading
-          # becomes the new release's content; Unreleased starts empty.
-          match = re.search(r"\n## \[", rest)
-          if match:
-              unreleased_content = rest[: match.start()].rstrip("\n")
-              tail = rest[match.start() :]
-          else:
-              unreleased_content = rest.rstrip("\n")
-              tail = ""
-          release_heading = (
-              f"## [Unreleased]\n\n"
-              f"## [{version}] — {datetime.date.today().isoformat()}\n\n"
-              f"{unreleased_content.strip()}\n\n"
+          new_changelog = changelog_release.migrate(
+              changelog, version, datetime.date.today().isoformat()
           )
-          open(changelog_path, "w", encoding="utf-8").write(
-              head + release_heading + tail.lstrip("\n")
-          )
+          # newline="\n" so a Windows checkout files the changelog with the same
+          # LF endings .gitattributes requires, rather than CRLF.
+          with open(
+              changelog_path, "w", encoding="utf-8", newline="\n"
+          ) as handle:
+              handle.write(new_changelog)
           EOF
           VERSION=$(grep -m1 '^version = ' pyproject.toml | sed 's/^version = "\(.*\)"/\1/' | tr -d '\r')
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
