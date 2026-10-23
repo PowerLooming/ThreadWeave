@@ -130,7 +130,7 @@ will ask:
 
 - Entries are kept until they are deleted. There is no automatic expiry and no
   per-tenant or per-source retention setting. A scheduled purge is not shipped
-  yet; it is tracked as an open item in the adoption checklist.
+  yet.
 - The audit log is kept indefinitely. Its rows are content-free.
 - Notification rows stay until delivered, or until they are marked skipped
   after `THREADWEAVE_NOTIFY_MAX_ATTEMPTS`.

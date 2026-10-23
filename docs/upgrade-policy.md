@@ -19,7 +19,10 @@ tagged `vX.Y.Z`, and the latest tag is what the README badge shows.
 | major, `0.x` to `1.0` | a break: a renamed environment variable, a removed CLI verb or endpoint, or a store change that needs action | read the release notes before upgrading; the change and the migration are named there |
 
 `tests/test_version_consistency.py` checks that `pyproject.toml`, the API health
-version, the changelog and the git tag agree, and fails when they do not. The
+version, the changelog and the git tag agree. It fails when a version has
+drifted from its tag, with one exception: a version bumped in the current commit
+with no tag yet passes, because the release workflow creates the tag on push and
+a hand-run test would otherwise fail on every in-flight bump. The
 release workflow keeps them in step rather than relying on that check: the bump
 rewrites `pyproject.toml`, the two version literals in `src/threadweave/api.py`,
 the assertion in `tests/test_api.py` and the changelog section in one commit. No

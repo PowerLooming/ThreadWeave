@@ -66,9 +66,10 @@ and it is not implied by this page.
   decision rather than a backlog item, and the reasoning and the test that pins
   it are in [ai-publication-boundary.md](ai-publication-boundary.md). Requests
   for one will be answered with a no.
-- Custom connectors for your systems. The connector interface is documented if
-  you want to build one, but the maintainer does not do bespoke development
-  under this support route.
+- Custom connectors for your systems. The interface is `BaseConnector` in
+  `src/threadweave/connectors/base.py`, and the docstring at the top of that
+  file says what a connector has to do. Build against it if you want to; the
+  maintainer does not do bespoke development under this support route.
 
 ## Related
 
