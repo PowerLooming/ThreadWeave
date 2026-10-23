@@ -160,6 +160,12 @@ State files (`~/.threadweave/`) let daemons resume safely: SharePoint delta toke
 
 Capture without disclosure is surveillance, so ThreadWeave ships a privacy layer: per-person **opt-out** (checked at ingest and in every daemon before extraction), **right to delete** (audited per-entry deletion), Teams commands `opt out` / `opt in` / `delete <topic>` / `status`, and a full audit trail. See **[docs/privacy.md](docs/privacy.md)**.
 
+## Support
+
+Questions, how-to and deployment doubts go to [GitHub Discussions](https://github.com/PowerLooming/ThreadWeave/discussions), where the answer stays searchable. A defect with a reproduction goes to [issues](https://github.com/PowerLooming/ThreadWeave/issues/new?template=bug_report.yml). A vulnerability goes by email, privately, following [SECURITY.md](SECURITY.md), never as a public issue.
+
+Response expectations, what support covers and what it does not: [docs/support.md](docs/support.md). For a procurement or data protection review, [docs/data-handling.md](docs/data-handling.md) states what data flows where, that there are no subprocessors, the retention defaults and how deletion works, and [docs/upgrade-policy.md](docs/upgrade-policy.md) covers versioning, upgrading and what happens when a connector's vendor API breaks.
+
 ## API Endpoints
 
 | Endpoint | Description |
@@ -220,6 +226,9 @@ The suite covers the connectors, the detection and decision layers, the confiden
 ## Documentation
 
 - [M365 Connector Setup](docs/m365-connectors.md) — Azure app registrations, email/SharePoint/OneNote daemons, troubleshooting
+- [Support](docs/support.md) — where to ask, what response to expect, and what is not covered
+- [Data Handling](docs/data-handling.md) — what data flows where, subprocessors, retention defaults, deletion
+- [Upgrade and Deprecation Policy](docs/upgrade-policy.md) — version numbers, upgrading, and what happens when a connector's vendor API breaks
 - [Privacy Model](docs/privacy.md) — on-prem one-way contract, opt-out, right to delete, access control
 - [Personal Profile](docs/personal-profile.md) — the single-user deployment: one mailbox, one owner, delegated access, no client secret and no admin grants
 - [Distribution](docs/distribution.md) — how orgs get the app (manual upload, scripted publish, Teams Store), verified marketplace costs
