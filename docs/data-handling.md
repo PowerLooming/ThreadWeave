@@ -97,11 +97,19 @@ search index was removed, and `tests/test_daemons.py::test_the_copilot_graph_dae
 pins its absence. The full position, including the reader-facing surfaces and
 their audit rules, is in [ai-publication-boundary.md](ai-publication-boundary.md).
 
-Authentication is opt-in. `THREADWEAVE_REQUIRE_AUTH` turns it on and
-`THREADWEAVE_API_KEYS` or `~/.threadweave/keys.json` supplies the keys with
-their roles and tenant scope. An instance reached by anything other than the
-local host needs authentication enabled, and the API bound to the interface the
-operator intends.
+Authentication is opt-in. `THREADWEAVE_REQUIRE_AUTH` turns it on, and keys come
+either from `THREADWEAVE_API_KEYS` or from `~/.threadweave/keys.json`. The two
+routes do not carry the same information:
+
+- `THREADWEAVE_API_KEYS` takes entries in `tenant:key` form and gives each key
+  the `readwrite` role for that tenant, with no wing and no person identity
+  (`_load_from_env` in `src/threadweave/auth.py`).
+- `~/.threadweave/keys.json` carries `role`, `wing`, `person_id` and the peer
+  fields per key. A key with the `admin`, `legal` or `hr_admin` role, and any key
+  that should act as a named person, has to be written there.
+
+An instance reached by anything other than the local host needs authentication
+enabled, and the API bound to the interface the operator intends.
 
 ## Subprocessors
 
@@ -151,8 +159,9 @@ Deletes are explicit, authorised and audited.
   `delete <topic>`, which removes that author's entries matching a topic.
   There is no CLI verb for deleting entries and no soft delete.
 - Rights: the entry's author, a same-wing member for public and internal
-  entries, or a key with the `admin`, `legal` or `hr_admin` role. A refused
-  attempt is audited too.
+  entries, or a key with the `admin`, `legal` or `hr_admin` role. Such a key is
+  written in `~/.threadweave/keys.json`, because `THREADWEAVE_API_KEYS` grants
+  `readwrite` only. A refused attempt is audited too.
 - What a delete removes: the entry from the in-memory store, the entry store and
   the palace index, so it stops appearing in search results. The audit row keeps
   the entry id, wing and sensitivity, and never the content
