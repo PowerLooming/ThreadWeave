@@ -151,8 +151,8 @@ Deletes are explicit, authorised and audited.
   `delete <topic>`, which removes that author's entries matching a topic.
   There is no CLI verb for deleting entries and no soft delete.
 - Rights: the entry's author, a same-wing member for public and internal
-  entries, or a key with the admin, legal or hr role. A refused attempt is
-  audited too.
+  entries, or a key with the `admin`, `legal` or `hr_admin` role. A refused
+  attempt is audited too.
 - What a delete removes: the entry from the in-memory store, the entry store and
   the palace index, so it stops appearing in search results. The audit row keeps
   the entry id, wing and sensitivity, and never the content

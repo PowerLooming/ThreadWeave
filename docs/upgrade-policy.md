@@ -19,8 +19,8 @@ tagged `vX.Y.Z`, and the latest tag is what the README badge shows.
 | major, `0.x` to `1.0` | a break: a renamed environment variable, a removed CLI verb or endpoint, or a store change that needs action | read the release notes before upgrading; the change and the migration are named there |
 
 `tests/test_version_consistency.py` fails the build when `pyproject.toml`, the
-API health version and the changelog disagree, so a release cannot ship with a
-version that lies about the tree.
+API health version and the changelog disagree, and when the version has no git
+tag, so a release cannot ship with a version that lies about the tree.
 
 ## How a release is cut
 
