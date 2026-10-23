@@ -18,9 +18,13 @@ tagged `vX.Y.Z`, and the latest tag is what the README badge shows.
 | minor, `0.4.x` to `0.5.0` | a new capability, connector or option | upgrade; existing configuration and API calls keep working |
 | major, `0.x` to `1.0` | a break: a renamed environment variable, a removed CLI verb or endpoint, or a store change that needs action | read the release notes before upgrading; the change and the migration are named there |
 
-`tests/test_version_consistency.py` fails the build when `pyproject.toml`, the
-API health version and the changelog disagree, and when the version has no git
-tag, so a release cannot ship with a version that lies about the tree.
+`tests/test_version_consistency.py` checks that `pyproject.toml`, the API health
+version, the changelog and the git tag agree, and fails when they do not. The
+release workflow keeps them in step rather than relying on that check: the bump
+rewrites `pyproject.toml`, the two version literals in `src/threadweave/api.py`,
+the assertion in `tests/test_api.py` and the changelog section in one commit. No
+CI job runs the suite, so run `pytest` yourself before you tag by hand; a version
+that lies about the tree cannot come out of the automated path.
 
 ## How a release is cut
 
@@ -33,8 +37,9 @@ push to master:
 - a docs-only push, meaning only `docs/`, `README`, `CHANGELOG`, `.github/` or
   any `.md` file, produces no release
 
-So every code change that reaches master produces a release and a changelog
-entry. There is no separate "supported release" to wait for.
+So every code change that reaches master produces a release, and whatever was
+waiting under `## [Unreleased]` becomes that release's changelog section. There
+is no separate "supported release" to wait for.
 
 ## Upgrading
 
