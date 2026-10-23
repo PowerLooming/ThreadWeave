@@ -226,6 +226,7 @@ The suite covers the connectors, the detection and decision layers, the confiden
 - [MCP Server](docs/mcp-server.md) — the tool surface for an AI agent on your own network: the nine tools, authentication, and why every cloud assistant route is closed
 - [Typed Decision Layer](docs/decision-layer.md) — the ingest judgments asked as typed questions, the three on-prem provider backends (local NLI encoder, Laya, ollama), phrasing rules, calibration, and the measurements behind them
 - [Pre-push Gate](docs/pre-push-gate.md) — local hygiene hook before publishing: secrets, identifiers, files that must not leave
+- [Capture Quality](docs/capture-quality.md) — the weekly ten-minute precision measurement, its rubric, and the number it reports
 - [Technical Specification](docs/technical-spec.md)
 
 ## Release process
