@@ -18,6 +18,9 @@ from datetime import datetime, timezone, timedelta
 
 from threadweave.detector import detect, is_worth_saving
 from threadweave.daemons import DAEMONS, daemons_for_profile  # noqa: E402
+from threadweave.permissions import REGISTRATIONS  # noqa: E402
+
+REGISTRATION_KEYS = tuple(REGISTRATIONS)
 
 
 def cmd_detect(args):
@@ -482,6 +485,78 @@ def cmd_daemon_config(args):
           "~/.threadweave/daemons/ config")
 
 
+def cmd_daemon_permissions(args) -> int:
+    """List the Graph permissions the tenant has actually granted.
+
+    Reads the ``roles`` claim out of a token the registration itself can
+    obtain, so the audit needs no directory permission of its own. Exit
+    codes: 0 every declared requirement is granted, 1 an audit ran and
+    something required is missing, 2 nothing could be audited because a
+    registration is not configured, 3 the tenant refused a token or nobody
+    is signed in for delegated access.
+    """
+    from threadweave import permissions as perm
+
+    daemon = getattr(args, "daemon", "all") or "all"
+    target = None if daemon == "all" else daemon
+    env = perm.effective_env(target)
+    selected = None if target is None else {target}
+
+    wanted = list(perm.REGISTRATIONS)
+    explicit = getattr(args, "registration", "all") or "all"
+    if explicit != "all":
+        wanted = [explicit]
+
+    def is_configured(reg) -> bool:
+        return any(
+            (env.get(var) or "").strip()
+            for var in (reg.tenant_env, reg.id_env, reg.secret_env)
+        )
+
+    registrations = [perm.REGISTRATIONS[key] for key in wanted]
+    if explicit == "all":
+        registrations = [reg for reg in registrations if is_configured(reg)]
+
+    audits = []
+    if registrations:
+        for reg in registrations:
+            audits.append(perm.audit_registration(reg, env))
+
+    delegated = None
+    want_delegated = getattr(args, "delegated", False)
+    if want_delegated or not audits:
+        delegated = perm.audit_delegated(env)
+        if not want_delegated and delegated.status == "refused":
+            # No app registration and nobody signed in: there is nothing to
+            # audit, and saying so is the honest answer.
+            print("No app registration is configured (set AZURE_TENANT_ID, "
+                  "AZURE_CLIENT_ID, AZURE_CLIENT_SECRET or MICROSOFT_APP_ID "
+                  "and MICROSOFT_APP_PASSWORD), and no delegated sign-in "
+                  "exists either.", file=sys.stderr)
+            print(f"Delegated: {delegated.error}", file=sys.stderr)
+            print("Sign in as the mailbox owner with: threadweave email login",
+                  file=sys.stderr)
+            return 2
+
+    if getattr(args, "as_json", False):
+        _, rows = perm.render_report(audits, delegated, selected)
+        print(perm.audit_to_json(audits, rows, delegated))
+    else:
+        text, rows = perm.render_report(audits, delegated, selected)
+        print(text)
+
+    statuses = [a.status for a in audits]
+    if delegated is not None:
+        statuses.append(delegated.status)
+    audited = any(s in ("ok", "no-roles", "no-scopes") for s in statuses)
+    if not audited:
+        return 2 if all(s == "unconfigured" for s in statuses) else 3
+    if any(not row.ok for row in rows):
+        return 1
+    return 0
+
+
+
 # ── SharePoint Commands ────────────────────────────────────────────
 
 def cmd_sharepoint_watch(args):
@@ -552,7 +627,7 @@ def cmd_email_watch(args):
               file=sys.stderr)
         sys.exit(1)
 
-    watcher = MailWatcher(delegated=delegated)
+    watcher = MailWatcher(delegated=delegated, mark_read=args.mark_read)
     if delegated:
         # Fail fast: a missing or unconsented token must stop the start, not
         # surface once per poll in a daemon that otherwise looks healthy.
@@ -1423,6 +1498,26 @@ def build_parser() -> argparse.ArgumentParser:
     p_d_config.add_argument("--show", action="store_true",
                             help="Show current values (secrets masked)")
 
+    p_d_perm = daemon_sub.add_parser(
+        "permissions",
+        help="Audit the Graph permissions actually granted (--audit)")
+    p_d_perm.add_argument("--audit", action="store_true",
+                          help="List granted app roles from Graph (the "
+                               "default when the subcommand is used)")
+    p_d_perm.add_argument("--delegated", action="store_true",
+                          help="Audit the signed-in owner's delegated scopes "
+                               "instead of an app registration")
+    p_d_perm.add_argument(
+        "--registration", choices=["all"] + list(REGISTRATION_KEYS),
+        default="all",
+        help="Which app registration to audit (default: every configured one)")
+    p_d_perm.add_argument(
+        "--daemon", choices=["all"] + list(daemons_for_profile()),
+        default="all",
+        help="Only report coverage for this daemon (default: all)")
+    p_d_perm.add_argument("--json", action="store_true", dest="as_json",
+                          help="Machine-readable output for an evidence pack")
+
     return parser
 
 
@@ -1462,6 +1557,10 @@ def main() -> None:
             cmd_daemon_status(args)
         elif args.daemon_command == "config":
             cmd_daemon_config(args)
+        elif args.daemon_command == "permissions":
+            code = cmd_daemon_permissions(args)
+            if code:
+                raise SystemExit(code)
         else:
             p_daemon.print_help()
     elif args.command == "tasks":
