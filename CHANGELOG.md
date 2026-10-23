@@ -6,6 +6,8 @@ uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.4.27] — 2026-10-23
+
 ### Added
 
 - **Pilot wing isolation is proved, and the isolation test fails when the filter
