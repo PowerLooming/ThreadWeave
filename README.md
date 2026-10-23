@@ -220,6 +220,7 @@ The suite covers the connectors, the detection and decision layers, the confiden
 ## Documentation
 
 - [M365 Connector Setup](docs/m365-connectors.md) — Azure app registrations, email/SharePoint/OneNote daemons, troubleshooting
+- [Permissions and Least Privilege](docs/permissions.md) — every registration, every Graph permission, which daemon uses which, the tighter alternative, and `threadweave daemon permissions --audit`
 - [Privacy Model](docs/privacy.md) — on-prem one-way contract, opt-out, right to delete, access control
 - [Personal Profile](docs/personal-profile.md) — the single-user deployment: one mailbox, one owner, delegated access, no client secret and no admin grants
 - [Distribution](docs/distribution.md) — how orgs get the app (manual upload, scripted publish, Teams Store), verified marketplace costs

@@ -104,6 +104,7 @@ class MailWatcher:
         client_id: str | None = None,
         client_secret: str | None = None,
         delegated: bool = False,
+        mark_read: bool = False,
     ):
         """``delegated=True`` reads the signed-in owner's own mailbox.
 
@@ -111,13 +112,17 @@ class MailWatcher:
         from the owner, no application permission and no configured mailbox.
         The app-only GraphClient is not built in that mode, so no client
         secret is needed either.
+
+        ``mark_read`` only matters in delegated mode: it asks the owner's
+        sign-in for Mail.ReadWrite as well, because marking a message read is
+        a write. Without it the delegated token stays read-only.
         """
         self.delegated = delegated
         self._delegated_auth = None
         if delegated:
             from threadweave.connectors.email.delegated import DelegatedMailAuth
 
-            self._delegated_auth = DelegatedMailAuth()
+            self._delegated_auth = DelegatedMailAuth(read_write=mark_read)
             self.graph = None
         else:
             self.graph = GraphClient(
@@ -148,6 +153,19 @@ class MailWatcher:
             )
             resp.raise_for_status()
             return resp.json() if resp.content else {}
+
+    async def _delegated_bytes(self, method: str, path: str) -> bytes:
+        """As the owner, for endpoints that return a file rather than JSON."""
+        import httpx
+
+        token = self._delegated_auth.get_token()
+        headers = {"Authorization": f"Bearer {token}"}
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            resp = await client.request(
+                method, f"{GRAPH_API_BASE}{path}", headers=headers,
+            )
+            resp.raise_for_status()
+            return resp.content
 
     # ---- Mailbox Operations ----
 
@@ -344,6 +362,13 @@ class MailWatcher:
         self, mailbox: str, message_id: str, attachment_id: str
     ) -> bytes:
         """Download attachment content."""
+        if self.delegated:
+            # /me, the owner's own message. Going through the app-only path
+            # here would need the secret this mode exists to avoid.
+            return await self._delegated_bytes(
+                "GET",
+                f"/me/messages/{message_id}/attachments/{attachment_id}/$value",
+            )
         # Graph API serves attachment content via $value
         token = await self.graph._get_token()
         url = (

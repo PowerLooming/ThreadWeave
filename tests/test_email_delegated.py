@@ -256,6 +256,62 @@ async def test_download_attachment_builds_a_graph_v1_url(monkeypatch):
     assert content == b"attachment-bytes"
 
 
+@pytest.mark.asyncio
+async def test_delegated_download_attachment_reads_me_with_the_owner_token(monkeypatch):
+    """An attachment in delegated mode must stay on /me.
+
+    download_attachment used to call ``self.graph._get_token()``
+    unconditionally, and in delegated mode ``self.graph`` is None: the first
+    message with an attachment raised AttributeError, so "runs entirely on
+    delegated credentials" was true only for messages without files. The
+    app-only route is also the one that needs the client secret this mode
+    exists to avoid.
+    """
+    import httpx
+
+    RecordingHttp.last_url = None
+    RecordingHttp.last_method = None
+    RecordingHttp.last_headers = None
+    monkeypatch.setattr(httpx, "AsyncClient", RecordingHttp)
+
+    w = _watcher(delegated=True, auth=StubAuth())
+    content = await w.download_attachment("ignored@example.com", "m1", "a1")
+
+    assert RecordingHttp.last_method == "GET"
+    assert RecordingHttp.last_url == (
+        "https://graph.microsoft.com/v1.0/me/messages/m1/attachments/a1/$value"
+    )
+    assert RecordingHttp.last_headers == {"Authorization": "Bearer tok-delegated"}
+    assert content == b"attachment-bytes"
+
+
+# ---- what the sign-in asks for ----
+
+
+def test_sign_in_asks_for_read_only_unless_mark_read_is_on(monkeypatch):
+    """Marking processed mail read is a write, so the write scope is opt-in.
+
+    A tenant that runs email-watch without --mark-read must never be prompted
+    to consent to Mail.ReadWrite on the owner's mailbox.
+    """
+    from threadweave.connectors.email.delegated import (
+        MAIL_READ_WRITE_SCOPES,
+        MAIL_SCOPES,
+    )
+
+    monkeypatch.setattr(
+        delegated_mod.msal, "PublicClientApplication", lambda **kw: FakeMsalApp()
+    )
+
+    read_only = MailWatcher(delegated=True)
+    assert read_only._delegated_auth.scopes == MAIL_SCOPES
+    assert "Mail.ReadWrite" not in read_only._delegated_auth.scopes
+
+    marking = MailWatcher(delegated=True, mark_read=True)
+    assert marking._delegated_auth.scopes == MAIL_READ_WRITE_SCOPES
+    assert "Mail.ReadWrite" in marking._delegated_auth.scopes
+
+
 # ---- mode resolution ----
 
 
