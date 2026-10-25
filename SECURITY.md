@@ -17,9 +17,18 @@ Email **hello@threadweave.net** with the subject line `security`, and include:
 Please do not open a public GitHub issue for a vulnerability. If you want
 to encrypt the report, ask for a key in a first email without details.
 
-We acknowledge within three working days, give you an assessment within
-ten, and keep you informed until it is fixed. With your permission we
-credit you in the release notes.
+**What to expect.** We acknowledge within three working days and give you an
+assessment within ten, in working days. After that you hear from us when there
+is something to say: when the fix is ready, when a release carrying it is out,
+and if the assessment changes. With your permission we credit you in the release
+notes. If you hear nothing within five working days of your report, reply to the
+same thread: a silent inbox means the mail went astray, not that the report was
+ignored. If the address itself fails, open a Discussions post saying only that
+you have a security report and need a private route, with no details.
+
+This is a one-person project, so those numbers are what can be held to, not an
+SLA. There is no bug bounty. What a good report gets is a fix, a release note and
+credit if you want it.
 
 ## Supported versions
 
@@ -30,6 +39,10 @@ on `master`; there are no maintained older branches.
 |---|---|
 | latest release | yes |
 | anything older | no, please upgrade |
+
+There is no LTS branch and no backport programme. What a version number means,
+what an upgrade involves and how much notice a removal gets are in
+[docs/upgrade-policy.md](docs/upgrade-policy.md).
 
 ## In scope
 
@@ -60,3 +73,8 @@ audited per-entry deletion, and a one-way flow where content moves from
 the source system into the on-prem store and never back out. See
 [docs/privacy.md](docs/privacy.md) and
 [docs/ai-publication-boundary.md](docs/ai-publication-boundary.md).
+
+For a procurement or data protection review, [docs/data-handling.md](docs/data-handling.md)
+states what data flows where, that there are no subprocessors, the retention
+defaults and how deletion works. How to reach the project for anything that is
+not a vulnerability is in [docs/support.md](docs/support.md).

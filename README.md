@@ -160,6 +160,12 @@ State files (`~/.threadweave/`) let daemons resume safely: SharePoint delta toke
 
 Capture without disclosure is surveillance, so ThreadWeave ships a privacy layer: per-person **opt-out** (checked at ingest and in every daemon before extraction), **right to delete** (audited per-entry deletion), Teams commands `opt out` / `opt in` / `delete <topic>` / `status`, and a full audit trail. See **[docs/privacy.md](docs/privacy.md)**.
 
+## Support
+
+Questions, how-to and deployment doubts go to [GitHub Discussions](https://github.com/PowerLooming/ThreadWeave/discussions), where the answer stays searchable. A defect with a reproduction goes to [issues](https://github.com/PowerLooming/ThreadWeave/issues/new?template=bug_report.yml). A vulnerability goes by email, privately, following [SECURITY.md](SECURITY.md), never as a public issue.
+
+Response expectations, what support covers and what it does not: [docs/support.md](docs/support.md). For a procurement or data protection review, [docs/data-handling.md](docs/data-handling.md) states what data flows where, that there are no subprocessors, the retention defaults and how deletion works, and [docs/upgrade-policy.md](docs/upgrade-policy.md) covers versioning, upgrading and what happens when a connector's vendor API breaks.
+
 ## API Endpoints
 
 | Endpoint | Description |
@@ -210,10 +216,10 @@ Capture without disclosure is surveillance, so ThreadWeave ships a privacy layer
 ## Tests
 
 ```bash
-uv run pytest -q      # 964 passed, 12 skipped on a clean checkout
+uv run pytest -q      # 1079 passed, 12 skipped on a clean checkout
 ```
 
-With the optional decision runtime installed (`uv pip install -e ".[decisions]"`) the encoder availability test runs instead of skipping, which makes it 965 passed, 11 skipped. Every count here is from a verified run, not an estimate.
+With the optional decision runtime installed (`uv pip install -e ".[decisions]"`) the encoder availability test runs instead of skipping, which makes it 1080 passed, 11 skipped. Every count here is from a verified run, not an estimate.
 
 The suite covers the connectors, the detection and decision layers, the confidentiality and PII gates, the opt-out registry, the audit log, the API, the MCP server and the CLI. It runs against temporary stores (`tests/conftest.py` redirects the audit log, the entry store and the notification queue), so it never touches a running installation's data.
 
@@ -221,12 +227,16 @@ The suite covers the connectors, the detection and decision layers, the confiden
 
 - [M365 Connector Setup](docs/m365-connectors.md) — Azure app registrations, email/SharePoint/OneNote daemons, troubleshooting
 - [Permissions and Least Privilege](docs/permissions.md) — every registration, every Graph permission, which daemon uses which, the tighter alternative, and `threadweave daemon permissions --audit`
+- [Support](docs/support.md) — where to ask, what response to expect, and what is not covered
+- [Data Handling](docs/data-handling.md) — what data flows where, subprocessors, retention defaults, deletion
+- [Upgrade and Deprecation Policy](docs/upgrade-policy.md) — version numbers, upgrading, and what happens when a connector's vendor API breaks
 - [Privacy Model](docs/privacy.md) — on-prem one-way contract, opt-out, right to delete, access control
 - [Personal Profile](docs/personal-profile.md) — the single-user deployment: one mailbox, one owner, delegated access, no client secret and no admin grants
 - [Distribution](docs/distribution.md) — how orgs get the app (manual upload, scripted publish, Teams Store), verified marketplace costs
 - [MCP Server](docs/mcp-server.md) — the tool surface for an AI agent on your own network: the nine tools, authentication, and why every cloud assistant route is closed
 - [Typed Decision Layer](docs/decision-layer.md) — the ingest judgments asked as typed questions, the three on-prem provider backends (local NLI encoder, Laya, ollama), phrasing rules, calibration, and the measurements behind them
 - [Pre-push Gate](docs/pre-push-gate.md) — local hygiene hook before publishing: secrets, identifiers, files that must not leave
+- [Capture Quality](docs/capture-quality.md) — the weekly ten-minute precision measurement, its rubric, and the number it reports
 - [Technical Specification](docs/technical-spec.md)
 
 ## Release process

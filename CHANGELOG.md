@@ -29,6 +29,37 @@ uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   path would have demanded the secret the mode exists to avoid), and
   `--mark-read` asks for `Mail.ReadWrite` only when it is actually enabled.
 
+## [0.4.27] — 2026-10-23
+
+### Added
+
+- **Pilot wing isolation is proved, and the isolation test fails when the filter
+  is weakened.** `tests/test_pilot_wing_isolation.py` treats the first pilot
+  condition as one sentence (an entry stored in one wing is never returned to a
+  caller whose key is scoped to another) and pins each place a cross-wing hit
+  could arrive: the keyword search path, the request body, the MemPalace hybrid
+  path, a direct read by entry id, and the symmetric case of two winged callers.
+  Every test also asserts that the caller's own wing still comes back, so a
+  filter that returns nothing fails rather than passes. One more test pins the
+  comparison itself rather than its presence: `PILOT` and `pilot-archive` are
+  other wings, so a filter loosened to a case-insensitive or prefix match turns
+  the module red. Five mutations were run against `src/threadweave/api.py` and
+  all five turn it red: the keyword path, the hybrid path, the direct read by
+  id, a case-insensitive comparison and a prefix comparison. A sixth, removing
+  only the merged-set gate, stays green, which is the point of having it: the
+  inner filters still hold, and that is also why the path mutations remove every
+  layer covering the path they attack.
+- **Capture-quality measurement for the pilot, as a sheet a person can mark up.**
+  `scripts/capture_quality_sample.py` prints, for one closed date range, the
+  entries captured per wing and a deterministic sample of them at five per wing,
+  each with a blank `[ ]` box, the detector's own label for comparison, and a
+  tally to fill in. It makes no model calls and never scores its own output,
+  because the detector's labels are what the measurement is checking.
+  `docs/capture-quality.md` is the ten-minute weekly protocol: the rubric for
+  K (knowledge), N (noise) and ? (cannot tell), the cheap miss sample that covers
+  decisions never captured at all, the record row to keep, and the single number
+  reported, precision = K / (K + N) per wing per week.
+
 ## [0.4.26] — 2026-10-11
 
 ### Fixed
