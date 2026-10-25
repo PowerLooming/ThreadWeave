@@ -6,6 +6,8 @@ uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.4.28] — 2026-10-25
+
 ### Added
 
 - **The permission story a security reviewer reads first
