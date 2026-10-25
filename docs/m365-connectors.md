@@ -19,6 +19,11 @@ Connect ThreadWeave to Exchange Online and SharePoint via Microsoft Graph.
 > daemon.
 
 > **Already ingesting email?** If you just want to read your own inbox, use `ingest_graph_mail.py` instead — it uses device-code OAuth (browser sign-in, MFA supported) and needs no Azure app registration. The connectors below are for organization-wide, automated ingestion.
+>
+> **Which grant does what, and the tighter option:** [permissions.md](permissions.md) holds the full matrix and the audit command
+> (`threadweave daemon permissions --audit`, which lists what the tenant has
+> actually granted). Read it before choosing between app-only and delegated
+> mail access.
 
 ## Prerequisites
 

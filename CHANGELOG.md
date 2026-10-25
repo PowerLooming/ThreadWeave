@@ -6,6 +6,29 @@ uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **The permission story a security reviewer reads first
+  (`docs/permissions.md`, `threadweave daemon permissions --audit`).** Every
+  registration, every Graph permission it holds, the daemon and the exact
+  endpoints behind it, and the least-privilege alternative, in one page plus
+  one command. The audit obtains a token with the registration's own
+  credentials and reports the `roles` claim the tenant actually granted, so
+  it needs no directory permission of its own and cannot mistake a refused
+  token for a missing grant. It also names the blast radius of what is
+  granted, flags grants no ThreadWeave connector asks for, and exits non-zero
+  when a daemon's declared requirement is absent. `--json` for an evidence
+  pack, `--registration reader|bot` to audit one app, `--daemon` to limit
+  coverage, `--delegated` to audit the signed-in owner instead. The matrix is
+  declared in `permissions.py` and two tests keep it and the page in step.
+- **Email capture on delegated credentials, with no app-only grant.**
+  `threadweave email login` (device code) plus
+  `THREADWEAVE_MAIL_AUTH=delegated` runs email-watch as the mailbox owner, so
+  no registration needs tenant-wide `Mail.Read` and no client secret is
+  needed. Attachments now download through `/me` in that mode (the app-only
+  path would have demanded the secret the mode exists to avoid), and
+  `--mark-read` asks for `Mail.ReadWrite` only when it is actually enabled.
+
 ## [0.4.27] — 2026-10-23
 
 ### Added

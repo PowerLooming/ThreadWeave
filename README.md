@@ -216,16 +216,17 @@ Response expectations, what support covers and what it does not: [docs/support.m
 ## Tests
 
 ```bash
-uv run pytest -q      # 964 passed, 12 skipped on a clean checkout
+uv run pytest -q      # 1079 passed, 12 skipped on a clean checkout
 ```
 
-With the optional decision runtime installed (`uv pip install -e ".[decisions]"`) the encoder availability test runs instead of skipping, which makes it 965 passed, 11 skipped. Every count here is from a verified run, not an estimate.
+With the optional decision runtime installed (`uv pip install -e ".[decisions]"`) the encoder availability test runs instead of skipping, which makes it 1080 passed, 11 skipped. Every count here is from a verified run, not an estimate.
 
 The suite covers the connectors, the detection and decision layers, the confidentiality and PII gates, the opt-out registry, the audit log, the API, the MCP server and the CLI. It runs against temporary stores (`tests/conftest.py` redirects the audit log, the entry store and the notification queue), so it never touches a running installation's data.
 
 ## Documentation
 
 - [M365 Connector Setup](docs/m365-connectors.md) — Azure app registrations, email/SharePoint/OneNote daemons, troubleshooting
+- [Permissions and Least Privilege](docs/permissions.md) — every registration, every Graph permission, which daemon uses which, the tighter alternative, and `threadweave daemon permissions --audit`
 - [Support](docs/support.md) — where to ask, what response to expect, and what is not covered
 - [Data Handling](docs/data-handling.md) — what data flows where, subprocessors, retention defaults, deletion
 - [Upgrade and Deprecation Policy](docs/upgrade-policy.md) — version numbers, upgrading, and what happens when a connector's vendor API breaks

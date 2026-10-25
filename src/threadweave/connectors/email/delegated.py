@@ -31,6 +31,10 @@ logger = logging.getLogger(__name__)
 # overridable for tenants that registered their own device-code app.
 DEFAULT_CLIENT_ID = "04b07795-8ddb-461a-bbee-02f9e1bf7b46"
 MAIL_SCOPES = ["Mail.Read"]
+# Marking processed mail as read is a write, which needs its own scope. Kept
+# opt-in: the default sign-in asks for read only, so a tenant that runs the
+# daemon without --mark-read never consents to a write on the owner's mailbox.
+MAIL_READ_WRITE_SCOPES = ["Mail.Read", "Mail.ReadWrite"]
 DEFAULT_CACHE = "~/.threadweave/msal_cache.json"
 
 
@@ -42,7 +46,11 @@ class DelegatedMailAuth:
         client_id: Optional[str] = None,
         tenant_id: Optional[str] = None,
         cache_file: Optional[str] = None,
+        read_write: bool = False,
     ):
+        # read_write=True asks for Mail.ReadWrite as well, which is only
+        # needed to mark processed messages as read.
+        self.scopes = MAIL_READ_WRITE_SCOPES if read_write else MAIL_SCOPES
         # THREADWEAVE_MAIL_TENANT_ID is what the standalone harvester uses;
         # AZURE_TENANT_ID is what the app-only connectors use. Accept both so
         # one .env serves either mode, and fall back to "common" (multi-tenant).
@@ -131,8 +139,10 @@ class DelegatedMailAuth:
         return f"Device flow failed: {error or flow}"
 
     def get_token(self, interactive: bool = False) -> str:
-        """Return a delegated Mail.Read token for the signed-in owner.
+        """Return a delegated token for the signed-in owner.
 
+        The scope is Mail.Read, or Mail.Read plus Mail.ReadWrite when the
+        auth object was built with ``read_write=True`` (mark-as-read).
         Silent refresh first. Without a cached account this raises unless
         ``interactive`` is set, because a daemon must never block waiting for
         a sign-in that nobody is watching.
@@ -140,7 +150,7 @@ class DelegatedMailAuth:
         accounts = self._app.get_accounts()
         result = None
         if accounts:
-            result = self._app.acquire_token_silent(MAIL_SCOPES, account=accounts[0])
+            result = self._app.acquire_token_silent(self.scopes, account=accounts[0])
         if result and "access_token" in result:
             self._save_cache()
             return result["access_token"]
@@ -152,7 +162,7 @@ class DelegatedMailAuth:
                 "then refreshes silently."
             )
 
-        flow = self._app.initiate_device_flow(scopes=MAIL_SCOPES)
+        flow = self._app.initiate_device_flow(scopes=self.scopes)
         if "user_code" not in flow:
             raise RuntimeError(self._device_flow_hint(flow))
 
